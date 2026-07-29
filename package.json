@@ -1,0 +1,28 @@
+{
+  "name": "aureline",
+  "version": "1.0.0",
+  "description": "Autonomous Textile Design Intelligence Platform. A next-generation AI platform that autonomously creates, refines, engineers, and prepares textile designs for production",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/godwinaustenlabs/aureline.git"
+  },
+  "keywords": [],
+  "author": "Godwin Austen Labs",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/godwinaustenlabs/aureline/issues"
+  },
+  "homepage": "https://github.com/godwinaustenlabs/aureline#readme"
+}
