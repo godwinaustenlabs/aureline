@@ -1,2 +1,8 @@
 node_modules/
 .vscode/
+.agents/
+.claude/
+.scratch/
+
+CLAUDE.md
+AGENTS.md
