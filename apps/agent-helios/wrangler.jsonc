@@ -23,6 +23,51 @@
 			}
 		]
 	},
+
+	"ai": {
+		"binding": "AI"
+	},
+
+	"r2_buckets": [
+		{
+			"binding": "PATTERNS",
+			"bucket_name": "helios-bucket",
+			"preview_bucket_name": "helios-bucket-preview"
+		}
+	],
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "helios-d1",
+			"database_id": "fa6c2552-c844-4c9b-8730-8e3108aa4cc8",
+			"migrations_dir": "../../infrastructure/d1/migrations"
+		}
+	],
+
+	/**
+	 * Runtime-tunable config — ticket 08 (retry count).
+	 * Values here can be changed with `wrangler kv key put` without redeploying
+	 * the worker. The matching entries in `vars` below are the committed
+	 * fallbacks used when a key is absent from KV.
+	 * https://developers.cloudflare.com/kv/
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "CONFIG",
+			"id": "bc982c0d712a49b4827520477c33fab5",
+			"preview_id": "7bab9541d7ed4ab5a5f76d81c9c0fe32"
+		}
+	],
+
+	"vars": {
+		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
+		"IMAGE_MODEL": "@cf/black-forest-labs/flux-1-schnell",
+		"RETENTION_LIMIT": "5",
+		// fallback default — the live value is CONFIG:max_retries in KV
+		"MAX_RETRIES": "2"
+	},
+
 	"observability": {
 		"enabled": true
 	},
@@ -32,28 +77,17 @@
 	]
 
 	/**
+	 * Static Assets — ticket 09 (playground). Left commented until we decide
+	 * whether the playground is served from this worker (same-origin, no CORS)
+	 * or lives in its own `apps/playground` project.
+	 * https://developers.cloudflare.com/workers/static-assets/binding/
+	 */
+	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
+	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */
 	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
 	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
