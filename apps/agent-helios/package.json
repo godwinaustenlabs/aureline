@@ -6,16 +6,19 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "db:generate": "drizzle-kit generate"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "drizzle-kit": "^0.31.10",
     "typescript": "^5.5.2",
     "wrangler": "^4.114.0"
   },
   "dependencies": {
     "@aureline/shared-types": "^1.0.0",
     "agents": "^0.19.0",
+    "drizzle-orm": "^0.45.2"
     "zod": "^4.1.13"
   }
 }
