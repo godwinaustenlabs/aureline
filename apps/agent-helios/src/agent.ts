@@ -1,4 +1,5 @@
 import { Agent } from "agents";
+import { getDb } from "./db/client";
 import { HeliosRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
 import { firstIssueMessage } from "./utils";
@@ -24,7 +25,8 @@ export class HeliosAgent extends Agent<Env> {
 			return error(firstIssueMessage(parsed.error), 400);
 		}
 
-		const result = await runPipeline(this, parsed.data);
+		const db = getDb(this.ctx.storage);
+        const result = await runPipeline(db, parsed.data);
 		return json(result);
 	}
 }
