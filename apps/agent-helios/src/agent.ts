@@ -1,5 +1,7 @@
 import { Agent } from "agents";
 import { getDb } from "./db/client";
+import { migrate } from "drizzle-orm/durable-sqlite/migrator";
+import migrations from "../drizzle/migrations";
 import { HeliosRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
 import { firstIssueMessage } from "./utils";
@@ -12,6 +14,13 @@ import { firstIssueMessage } from "./utils";
  * a session/project, not to a single pipeline invocation (ADR-0005).
  */
 export class HeliosAgent extends Agent<Env> {
+	/** Applies pending Drizzle migrations against this instance's own DO-local
+	 * SQLite storage. Runs once per Durable Object wake-up (safe to call on
+	 * every onStart — drizzle tracks what's already applied). */
+	async onStart() {
+		await migrate(getDb(this.ctx.storage), migrations);
+	}
+
 	async onRequest(request: Request) {
 		if (request.method !== "POST") {
 			return error("POST required", 405);
@@ -26,7 +35,7 @@ export class HeliosAgent extends Agent<Env> {
 		}
 
 		const db = getDb(this.ctx.storage);
-        const result = await runPipeline(db, parsed.data);
+		const result = await runPipeline(db, parsed.data);
 		return json(result);
 	}
 }
