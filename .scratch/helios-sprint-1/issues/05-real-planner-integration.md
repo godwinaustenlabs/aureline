@@ -8,12 +8,11 @@
 
 **Team:** Single-Agent Structure Team
 
-- [ ] `tools.ts` contains the `HeliosParams` schema definition, plus a thin call into `shared-utils`' `getTextualModelOutput` helper — **Arham Zahid** (owns `tools.ts`)
+- [ ] `tools.ts` imports `HeliosParamsSchema` from `@aureline/shared-types` and passes it straight to `getTextualModelOutput`, plus the thin call itself. **Do not define the schema here.** The original wording said `tools.ts` "contains the `HeliosParams` schema definition", which made sense when the helper took raw JSON Schema and someone had to hand-write one. It takes the Zod schema now and derives the JSON Schema itself, so a second copy would only drift — and `HeliosParamsSchema` is the contract `pipeline.ts`, `imageGenerator.ts` and both prompt files already run on — **Arham Zahid** (owns `tools.ts`)
 - [ ] Confirm the AI Gateway auth setup before the first live call. There is no `apps/agent-helios/.dev.vars` in the repo; if the `helios` gateway has authentication on, the token goes in `.dev.vars` locally and `wrangler secret put` for deploy, never in `wrangler.jsonc` `vars` — **Hashir Rauf** (LLM/AI integration)
 - [ ] `services/planner.ts` calls GPT-OSS-120B via Cloudflare Workers AI, using structured output (JSON schema), not tool-calling — **Hashir Rauf**
 - [ ] The model id comes from `env.PLANNER_MODEL`, not a string literal in `planner.ts` — **Hashir Rauf**
 - [ ] The planner call passes `{ gateway: { id: env.AI_GATEWAY_ID, metadata: { p_invoc_id } } }` to `getTextualModelOutput`, and after the first real call the request is visible in the AI Gateway dashboard log with token counts and cost (ADR-0006) — **Hashir Rauf**
-- [ ] Uses whatever prompt/schema exists at integration time (ticket 04's draft if ready, otherwise a rough placeholder) — not blocked on ticket 04's completion — **M. Subhan** (hands off ticket-04 prompt/schema — non-development)
 - [ ] `services/pipeline.ts`'s planner stage is swapped from the ticket-01 stub to this real implementation — **Arham Zahid** (owns `services/pipeline.ts`)
 - [ ] `TEXT_MODEL_METADATA_STUB` is retired. `pipeline.ts` hardcodes `{ model: "gpt-oss-120b", provider: "openai", temperature: 1 }`; real values must come from the call that actually ran, or the audit row records a model that was never used — **Arham Zahid**
 - [ ] Token counts and `cost_usd` are written to the text row. Workers AI returns `usage.neurons`; per ticket 03, `cost_usd = neurons / 1000 * 0.011` with the rate in `vars`. Carry the raw `neurons` count in `model_metadata` too, so it can be backfilled — **Arham Zahid**
