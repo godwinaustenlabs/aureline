@@ -8,8 +8,13 @@ import {
 import { planConcept } from "./planner";
 import { generateImage } from "./imageGenerator";
 import { describeError } from "../utils";
-import { and, eq } from "drizzle-orm";
-import { heliosRuns } from "../db/schema";
+import {
+	startTextRun,
+	completeTextRun,
+	startImageRun,
+	completeImageRun,
+	failRunningRuns,
+} from "../repository/do.repository";
 
 type Stage = "planner" | "validate" | "image";
 /** Placeholder shape until ticket 05 (GPT-OSS-120B) reports real usage. */
@@ -45,16 +50,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<Hel
 	let stage: Stage = "planner";
 	let params: HeliosParams | null = null;
 
-	// A `running` text row, inserted before the planner call so a crash
-	// mid-call still leaves an inspectable audit trail.
-	await db.insert(heliosRuns).values({
-		pInvocId: p_invoc_id,
-		modality: "text",
-		status: "running",
-		userPrompt: req.concept,
-		plannerParams: {},
-		modelMetadata: TEXT_MODEL_METADATA_STUB,
-	});
+	await startTextRun(db, p_invoc_id, req.concept, TEXT_MODEL_METADATA_STUB);
 
 	try {
 		const raw = await planConcept(req.concept);
@@ -62,29 +58,14 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<Hel
 		stage = "validate";
 		params = HeliosParamsSchema.parse(raw);
 
-		// Planner succeeded — settle the text row with real params, then open
-		// the image row (duplicating planner_params per ADR-0001).
-		await db
-			.update(heliosRuns)
-			.set({ status: "completed", plannerParams: params, completedAt: new Date() })
-			.where(and(eq(heliosRuns.pInvocId, p_invoc_id), eq(heliosRuns.modality, "text")));
-
-		await db.insert(heliosRuns).values({
-			pInvocId: p_invoc_id,
-			modality: "image",
-			status: "running",
-			userPrompt: req.concept,
-			plannerParams: params,
-			modelMetadata: IMAGE_MODEL_METADATA_STUB,
-		});
+		// Planner succeeded — settle the text row, then open the image row.
+		await completeTextRun(db, p_invoc_id, params);
+		await startImageRun(db, p_invoc_id, req.concept, params, IMAGE_MODEL_METADATA_STUB);
 
 		stage = "image";
 		const image = await generateImage(params);
 
-		await db
-			.update(heliosRuns)
-			.set({ status: "completed", costUsd: image.cost_usd, completedAt: new Date() })
-			.where(and(eq(heliosRuns.pInvocId, p_invoc_id), eq(heliosRuns.modality, "image")));
+		await completeImageRun(db, p_invoc_id, image.cost_usd);
 
 		return {
 			p_invoc_id,
@@ -95,13 +76,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<Hel
 			error: null,
 		};
 	} catch (cause) {
-		// Mark whichever row is still `running` for this invocation as failed —
-		// just the text row if planner/validate blew up, or the image row if
-		// image generation did (text is already `completed` by that point).
-		await db
-			.update(heliosRuns)
-			.set({ status: "failed", completedAt: new Date() })
-			.where(and(eq(heliosRuns.pInvocId, p_invoc_id), eq(heliosRuns.status, "running")));
+		await failRunningRuns(db, p_invoc_id);
 
 		return {
 			p_invoc_id,
