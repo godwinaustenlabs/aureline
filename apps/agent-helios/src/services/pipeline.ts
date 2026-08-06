@@ -16,7 +16,7 @@ import {
 	failRunningRuns,
 } from "../repository/do.repository";
 
-type Stage = "planner" | "validate" | "image";
+type Stage = "persist" | "planner" | "validate" | "image";
 /** Placeholder shape until ticket 05 (GPT-OSS-120B) reports real usage. */
 const TEXT_MODEL_METADATA_STUB = {
 	model: "gpt-oss-120b",
@@ -37,22 +37,25 @@ const IMAGE_MODEL_METADATA_STUB = {
 /**
  * Fixed-order orchestrator: planner → validate → image generator.
  *
- * Never throws. Every path — including a stage blowing up — returns a
- * `HeliosResult`, so the HTTP layer only has to deal with settled outcomes.
- * The failing stage is prefixed onto `error` so failures stay attributable
- * without a separate field.
+ * Never throws. Every path — including a stage blowing up, or DO storage
+ * itself being unavailable — returns a `HeliosResult`, so the HTTP layer only
+ * has to deal with settled outcomes. The failing stage is prefixed onto
+ * `error` so failures stay attributable without a separate field.
  */
 export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<HeliosResult> {
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
 	const p_invoc_id = crypto.randomUUID();
 
-	let stage: Stage = "planner";
+	let stage: Stage = "persist";
 	let params: HeliosParams | null = null;
 
-	await startTextRun(db, p_invoc_id, req.concept, TEXT_MODEL_METADATA_STUB);
-
 	try {
+		// Inside the try so a storage failure is reported as a settled
+		// `failed` result rather than escaping as an opaque 500.
+		await startTextRun(db, p_invoc_id, req.concept, TEXT_MODEL_METADATA_STUB);
+
+		stage = "planner";
 		const raw = await planConcept(req.concept);
 
 		stage = "validate";
@@ -76,7 +79,14 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<Hel
 			error: null,
 		};
 	} catch (cause) {
-		await failRunningRuns(db, p_invoc_id);
+		// Cleanup is itself a DO write, so it fails too when storage is what
+		// broke — and a throw from inside a catch escapes the function. Swallow
+		// it: `cause` is the failure worth reporting, this one is a symptom.
+		try {
+			await failRunningRuns(db, p_invoc_id);
+		} catch (cleanupCause) {
+			console.error("could not mark rows failed:", describeError(cleanupCause));
+		}
 
 		return {
 			p_invoc_id,
