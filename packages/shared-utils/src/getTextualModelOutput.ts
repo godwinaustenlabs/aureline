@@ -1,11 +1,9 @@
-import Ajv, { type Schema } from "ajv";
+import { z, type ZodType } from "zod";
 import {
   buildAiRunOptions,
   type AiRunOptions,
   type GatewayConfig,
 } from "./aiGateway";
-
-const ajv = new Ajv();
 
 /** Default attempts, matching `MAX_RETRIES` in agent-helios' wrangler.jsonc. */
 const DEFAULT_MAX_RETRIES = 2;
@@ -124,31 +122,42 @@ function excerpt(response: unknown): string {
 
 /**
  * Calls a model with a prompt and returns output validated against
- * the given JSON schema. Retries on schema drift (invalid output).
+ * the given Zod schema. Retries on schema drift (invalid output).
  * Throws an error if all retries are exhausted without valid output,
  * so the pipeline can catch it upstream.
  *
- * Sends the schema to the model as `text.format`, so the output is
+ * Takes a Zod schema rather than raw JSON Schema for two reasons. Zod
+ * validates by walking the value, where Ajv compiles a validator with
+ * `new Function` — which Cloudflare Workers forbid outright, so the Ajv
+ * version could not run in the runtime it ships to. And the repo's contracts
+ * are already Zod (`@aureline/shared-types`), so callers pass the schema they
+ * have instead of maintaining a second copy by hand. The JSON Schema sent to
+ * the model is derived with `z.toJSONSchema`.
+ *
+ * Sends that derived schema to the model as `text.format`, so the output is
  * schema-guided rather than merely schema-checked. This is the Responses API
  * request shape (`instructions` + `input`), which is what `gpt-oss-120b`
  * expects — chat-completions models that want `messages` + `response_format`
  * are deliberately not supported. See
  * docs/adr/0007-responses-api-only-for-structured-output.md.
  */
-export async function getTextualModelOutput<T = unknown>(
-  schema: Schema,
+export async function getTextualModelOutput<T extends ZodType>(
+  schema: T,
   prompt: string,
   model: string,
   ai: AiRunner,
   options: GetTextualModelOutputOptions = {}
-): Promise<T> {
+): Promise<z.infer<T>> {
   const {
     instructions,
     schemaName = "output",
     maxRetries = DEFAULT_MAX_RETRIES,
     gateway,
   } = options;
-  const validate = ajv.compile(schema);
+
+  // `$schema` is metadata about the dialect, not part of the shape, and
+  // providers reject unknown keys inside a json_schema format block.
+  const { $schema: _dialect, ...jsonSchema } = z.toJSONSchema(schema);
 
   // Both built once, outside the loop: every attempt is the same call routed
   // the same way, so the gateway sees one consistent request shape.
@@ -158,7 +167,7 @@ export async function getTextualModelOutput<T = unknown>(
       format: {
         type: "json_schema",
         name: schemaName,
-        schema,
+        schema: jsonSchema,
         strict: true,
       },
     },
@@ -179,11 +188,12 @@ export async function getTextualModelOutput<T = unknown>(
 
       const parsed = extractStructuredOutput(response);
 
-      if (validate(parsed)) {
-        return parsed as T;
+      const result = schema.safeParse(parsed);
+      if (result.success) {
+        return result.data;
       }
 
-      lastError = validate.errors;
+      lastError = result.error.issues;
     } catch (err) {
       lastError = err;
     }

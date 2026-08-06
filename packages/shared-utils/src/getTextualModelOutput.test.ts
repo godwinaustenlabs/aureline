@@ -1,15 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { getTextualModelOutput, type AiRunner } from "./getTextualModelOutput";
 
-const personSchema = {
-  type: "object",
-  properties: {
-    name: { type: "string" },
-    age: { type: "number" },
-  },
-  required: ["name", "age"],
-  additionalProperties: false,
-};
+const personSchema = z.object({
+  name: z.string(),
+  age: z.number(),
+});
+
+/**
+ * The JSON Schema the helper derives from the Zod schema and sends to the
+ * model, minus the `$schema` dialect key it strips.
+ */
+const { $schema: _dialect, ...personJsonSchema } = z.toJSONSchema(personSchema);
 
 /** The Responses API request body the helper is expected to send. */
 function expectedBody(overrides: Record<string, unknown> = {}) {
@@ -19,7 +21,7 @@ function expectedBody(overrides: Record<string, unknown> = {}) {
       format: {
         type: "json_schema",
         name: "output",
-        schema: personSchema,
+        schema: personJsonSchema,
         strict: true,
       },
     },
