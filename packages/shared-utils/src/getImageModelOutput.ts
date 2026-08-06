@@ -1,9 +1,31 @@
+import {
+  buildAiRunOptions,
+  DEFAULT_IMAGE_CACHE_TTL,
+  type AiRunOptions,
+  type GatewayConfig,
+} from "./aiGateway";
+
 /**
  * Minimal interface for the image-model-calling client this helper needs.
  * In Cloudflare Workers, this is typically `env.AI`.
  */
 export interface ImageAiRunner {
-  run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
+  run: (
+    model: string,
+    input: Record<string, unknown>,
+    options?: AiRunOptions
+  ) => Promise<unknown>;
+}
+
+/** Non-model options for an image generation call. */
+export interface GetImageModelOutputOptions {
+  /**
+   * Route the call through AI Gateway. When an id is set, responses are
+   * cached for DEFAULT_IMAGE_CACHE_TTL seconds unless the caller overrides
+   * `cacheTtl` or sets `skipCache`. Note that the cache key covers the model
+   * inputs, so varying `seed` produces a fresh generation.
+   */
+  gateway?: GatewayConfig;
 }
 
 /** Result of a successful image generation call. */
@@ -23,9 +45,14 @@ export async function getImageModelOutput(
   prompt: string,
   model: string,
   ai: ImageAiRunner,
-  input: Record<string, unknown> = {}
+  input: Record<string, unknown> = {},
+  options: GetImageModelOutputOptions = {}
 ): Promise<ImageModelOutput> {
-  const response = (await ai.run(model, { prompt, ...input })) as {
+  const runOptions = buildAiRunOptions(options.gateway, {
+    cacheTtl: DEFAULT_IMAGE_CACHE_TTL,
+  });
+
+  const response = (await ai.run(model, { prompt, ...input }, runOptions)) as {
     image?: string;
   };
 

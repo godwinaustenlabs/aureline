@@ -2,6 +2,3 @@ node_modules/
 .vscode/
 .agents/
 .claude/
-
-*.md
-!README.md
