@@ -66,4 +66,65 @@ describe("getTextualModelOutput", () => {
 
     expect(mockAi.run).toHaveBeenCalledTimes(2);
   });
+
+  it("calls the model directly when no gateway is configured", async () => {
+    const mockAi: AiRunner = {
+      run: vi.fn().mockResolvedValue(JSON.stringify({ name: "Ava", age: 30 })),
+    };
+
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      mockAi
+    );
+
+    expect(mockAi.run).toHaveBeenCalledWith(
+      "some-model",
+      { prompt: "Generate a person" },
+      undefined
+    );
+  });
+
+  it("routes through the gateway without caching when an id is configured", async () => {
+    const mockAi: AiRunner = {
+      run: vi.fn().mockResolvedValue(JSON.stringify({ name: "Ava", age: 30 })),
+    };
+
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      mockAi,
+      { gateway: { id: "helios" } }
+    );
+
+    expect(mockAi.run).toHaveBeenCalledWith(
+      "some-model",
+      { prompt: "Generate a person" },
+      { gateway: { id: "helios" } }
+    );
+  });
+
+  it("sends identical gateway options on every retry", async () => {
+    const mockAi: AiRunner = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce(JSON.stringify({ name: "Ava" }))
+        .mockResolvedValueOnce(JSON.stringify({ name: "Ava", age: 30 })),
+    };
+
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      mockAi,
+      { gateway: { id: "helios" } }
+    );
+
+    const calls = vi.mocked(mockAi.run).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][2]).toEqual(calls[1][2]);
+    expect(calls[0][2]).toEqual({ gateway: { id: "helios" } });
+  });
 });
