@@ -1,4 +1,9 @@
 import Ajv, { type Schema } from "ajv";
+import {
+  buildAiRunOptions,
+  type AiRunOptions,
+  type GatewayConfig,
+} from "./aiGateway";
 
 const ajv = new Ajv();
 
@@ -9,6 +14,13 @@ const ajv = new Ajv();
 export interface GetTextualModelOutputOptions {
   /** Maximum number of attempts before giving up (default: 3) */
   maxRetries?: number;
+  /**
+   * Route the call through AI Gateway. Omit the id (or leave it empty) to
+   * call Workers AI directly. No cacheTtl is applied by default: every retry
+   * must reach the model for real, otherwise the retry loop would replay a
+   * cached invalid response.
+   */
+  gateway?: GatewayConfig;
 }
 
 /**
@@ -16,7 +28,11 @@ export interface GetTextualModelOutputOptions {
  * In Cloudflare Workers, this is typically `env.AI`.
  */
 export interface AiRunner {
-  run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
+  run: (
+    model: string,
+    input: Record<string, unknown>,
+    options?: AiRunOptions
+  ) => Promise<unknown>;
 }
 
 /**
@@ -32,14 +48,18 @@ export async function getTextualModelOutput<T = unknown>(
   ai: AiRunner,
   options: GetTextualModelOutputOptions = {}
 ): Promise<T> {
-  const { maxRetries = 3 } = options;
+  const { maxRetries = 3, gateway } = options;
   const validate = ajv.compile(schema);
+
+  // Built once, outside the loop: every attempt is the same call routed the
+  // same way, so the gateway sees one consistent request shape.
+  const runOptions = buildAiRunOptions(gateway);
 
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await ai.run(model, { prompt });
+      const response = await ai.run(model, { prompt }, runOptions);
 
       const parsed: unknown =
         typeof response === "string" ? JSON.parse(response) : response;

@@ -63,6 +63,10 @@
 	"vars": {
 		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
 		"IMAGE_MODEL": "@cf/black-forest-labs/flux-1-schnell",
+		// AI Gateway name, created in the dashboard under AI > AI Gateway.
+		// Empty string means direct Workers AI with no logging or caching.
+		// See docs/adr/0006-ai-gateway-for-all-model-calls.md
+		"AI_GATEWAY_ID": "helios",
 		"RETENTION_LIMIT": "5",
 		// fallback default — the live value is CONFIG:max_retries in KV
 		"MAX_RETRIES": "2"
