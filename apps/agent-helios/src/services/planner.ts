@@ -26,5 +26,14 @@ export async function planConcept(concept: string, env: Env, p_invoc_id: string)
 		}
 	);
 
+	// `buildAiRunOptions` returns undefined when the gateway id is empty, so a
+	// dropped or misspelled AI_GATEWAY_ID quietly calls Workers AI directly:
+	// no error, no gateway log entry, no metadata. `aiGatewayLogId` is null
+	// until a routed call sets it, which makes it the only available signal
+	// that the call actually went through the Gateway.
+	if (!env.AI.aiGatewayLogId) {
+		console.warn(`planner: call for ${p_invoc_id} did not route through AI Gateway`);
+	}
+
 	return result;
 }
