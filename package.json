@@ -24,5 +24,8 @@
   "bugs": {
     "url": "https://github.com/godwinaustenlabs/aureline/issues"
   },
-  "homepage": "https://github.com/godwinaustenlabs/aureline#readme"
+  "homepage": "https://github.com/godwinaustenlabs/aureline#readme",
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.3"
+  }
 }

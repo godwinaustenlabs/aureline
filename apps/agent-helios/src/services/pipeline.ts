@@ -7,7 +7,7 @@ import {
 } from "@aureline/shared-types";
 import { planConcept } from "./planner";
 import { generateImage } from "./imageGenerator";
-import { describeError } from "../utils";
+import { describeError, extractNeuronCost } from "../utils";
 import {
 	startTextRun,
 	completeTextRun,
@@ -54,8 +54,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
 
-		const rawNeurons = (planned.usage as { neurons?: number })?.neurons;
-		const neurons = rawNeurons ? rawNeurons : null;
+		const neurons = extractNeuronCost(planned.usage);
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row, then open the image row.
