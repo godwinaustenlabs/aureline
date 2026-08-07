@@ -54,7 +54,8 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
 
-		const neurons = (planned.usage as { neurons?: number })?.neurons ?? null;
+		const rawNeurons = (planned.usage as { neurons?: number })?.neurons;
+		const neurons = rawNeurons ? rawNeurons : null;
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row, then open the image row.
