@@ -141,13 +141,19 @@ function excerpt(response: unknown): string {
  * are deliberately not supported. See
  * docs/adr/0007-responses-api-only-for-structured-output.md.
  */
+export interface TextualModelOutput<T> {
+  data: T;
+  usage: unknown;
+  model: string;
+}
+
 export async function getTextualModelOutput<T extends ZodType>(
   schema: T,
   prompt: string,
   model: string,
   ai: AiRunner,
   options: GetTextualModelOutputOptions = {}
-): Promise<z.infer<T>> {
+): Promise<TextualModelOutput<z.infer<T>>> {
   const {
     instructions,
     schemaName = "output",
@@ -190,7 +196,8 @@ export async function getTextualModelOutput<T extends ZodType>(
 
       const result = schema.safeParse(parsed);
       if (result.success) {
-        return result.data;
+        const usage = (response as { usage?: unknown })?.usage;
+        return { data: result.data, usage, model };
       }
 
       lastError = result.error.issues;

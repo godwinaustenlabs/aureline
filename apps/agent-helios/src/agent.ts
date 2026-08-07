@@ -35,7 +35,7 @@ export class HeliosAgent extends Agent<Env> {
 		}
 
 		const db = getDb(this.ctx.storage);
-		const result = await runPipeline(db, parsed.data);
+		const result = await runPipeline(db, parsed.data, this.env);
 		return json(result);
 	}
 }

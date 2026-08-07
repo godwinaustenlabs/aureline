@@ -17,13 +17,6 @@ import {
 } from "../repository/do.repository";
 
 type Stage = "persist" | "planner" | "validate" | "image";
-/** Placeholder shape until ticket 05 (GPT-OSS-120B) reports real usage. */
-const TEXT_MODEL_METADATA_STUB = {
-	model: "gpt-oss-120b",
-	provider: "openai",
-	temperature: 1,
-};
-
 /** Placeholder shape until ticket 06 (Flux Schnell) reports real usage. */
 const IMAGE_MODEL_METADATA_STUB = {
 	model: "flux.1-schnell",
@@ -42,7 +35,7 @@ const IMAGE_MODEL_METADATA_STUB = {
  * has to deal with settled outcomes. The failing stage is prefixed onto
  * `error` so failures stay attributable without a separate field.
  */
-export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<HeliosResult> {
+export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): Promise<HeliosResult> {
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
 	const p_invoc_id = crypto.randomUUID();
@@ -53,16 +46,19 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest): Promise<Hel
 	try {
 		// Inside the try so a storage failure is reported as a settled
 		// `failed` result rather than escaping as an opaque 500.
-		await startTextRun(db, p_invoc_id, req.concept, TEXT_MODEL_METADATA_STUB);
+		await startTextRun(db, p_invoc_id, req.concept, { model: env.PLANNER_MODEL });
 
 		stage = "planner";
-		const raw = await planConcept(req.concept);
+		const planned = await planConcept(req.concept, env, p_invoc_id);
 
 		stage = "validate";
-		params = HeliosParamsSchema.parse(raw);
+		params = HeliosParamsSchema.parse(planned.data);
+
+		const neurons = (planned.usage as { neurons?: number })?.neurons ?? null;
+		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row, then open the image row.
-		await completeTextRun(db, p_invoc_id, params);
+		await completeTextRun(db, p_invoc_id, params, textModelMetadata, neurons);
 		await startImageRun(db, p_invoc_id, req.concept, params, IMAGE_MODEL_METADATA_STUB);
 
 		stage = "image";
