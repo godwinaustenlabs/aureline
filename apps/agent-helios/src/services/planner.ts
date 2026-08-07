@@ -1,5 +1,5 @@
-import type { HeliosParams } from "@aureline/shared-types";
 import { buildPlannerSystemPrompt, buildPlannerUserPrompt } from "../prompts";
+import { callPlannerModel } from "../tools";
 
 /**
  * Textual planner stage: turns a free-text concept into Helios pattern parameters.
@@ -8,25 +8,23 @@ import { buildPlannerSystemPrompt, buildPlannerUserPrompt } from "../prompts";
  * cannot guarantee the shape of what comes back — it is the pipeline's validate
  * stage that turns this into a trusted `HeliosParams`.
  *
- * STUB — ticket 05 replaces this body with a real GPT-OSS-120B structured-output
- * call via Workers AI. The signature is already final; callers do not change.
+ * Calls GPT-OSS-120B (or whatever env.PLANNER_MODEL points to) through AI
+ * Gateway via callPlannerModel/getTextualModelOutput, using structured output.
  */
-export async function planConcept(concept: string): Promise<unknown> {
+export async function planConcept(concept: string, env: Env, p_invoc_id: string) {
 	const systemPrompt = buildPlannerSystemPrompt();
 	const userPrompt = buildPlannerUserPrompt(concept);
 
-	console.log("planner system prompt:", systemPrompt);
-	console.log("planner user prompt:", userPrompt);
-	
-	const canned: HeliosParams = {
-		motif_type: "floral",
-		repeat_type: "half-drop",
-		scale: "medium",
-		density: "balanced",
-		line_weight: "medium",
-		texture_technique: "hatching",
-		contrast_level: "high",
-		style: "traditional",
-	};
-	return canned;
+	const result = await callPlannerModel(
+		systemPrompt,
+		userPrompt,
+		env.PLANNER_MODEL,
+		env.AI,
+		{
+			gateway: { id: env.AI_GATEWAY_ID, metadata: { p_invoc_id } },
+			maxRetries: Number(env.MAX_RETRIES),
+		}
+	);
+
+	return result;
 }

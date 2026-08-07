@@ -35,14 +35,22 @@ export async function startTextRun(
 
 /** Settles the text row with the params the planner actually produced. */
 export async function completeTextRun(
-	db: HeliosDb,
-	pInvocId: string,
-	params: HeliosParams,
+        db: HeliosDb,
+        pInvocId: string,
+        params: HeliosParams,
+        modelMetadata: ModelMetadata,
+        costUsd: number | null,
 ): Promise<void> {
-	await db
-		.update(heliosRuns)
-		.set({ status: "completed", plannerParams: params, completedAt: new Date() })
-		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
+        await db
+                .update(heliosRuns)
+                .set({
+                        status: "completed",
+                        plannerParams: params,
+                        modelMetadata,
+                        costUsd,
+                        completedAt: new Date(),
+                })
+                .where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
 }
 
 /**

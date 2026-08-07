@@ -8,6 +8,11 @@ import {
 /** Default attempts, matching `MAX_RETRIES` in agent-helios' wrangler.jsonc. */
 const DEFAULT_MAX_RETRIES = 2;
 
+/** Default cap on completion tokens. Chat Completions defaults to 256, which
+ * the model can burn entirely on reasoning before writing the answer,
+ * truncating the JSON mid-object. Set well above observed reasoning + output. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+
 /** How much of an unusable response to quote back in the thrown error. */
 const RESPONSE_EXCERPT_LENGTH = 200;
 
@@ -17,13 +22,11 @@ const RESPONSE_EXCERPT_LENGTH = 200;
  */
 export interface GetTextualModelOutputOptions {
   /**
-   * System prompt, sent as the Responses API's `instructions` field — separate
-   * from the user input in `prompt`. Responses-API models treat the two
-   * differently: instructions are stable across requests, input is not.
-   * Omitted entirely when not provided, rather than sent as undefined.
+   * System prompt, sent as the `system` message in the Chat Completions
+   * request. Omitted entirely when not provided, rather than sent as undefined.
    */
   instructions?: string;
-  /** Name attached to the schema in `text.format`. Defaults to "output". */
+  /** Name attached to the schema in `response_format`. Defaults to "output". */
   schemaName?: string;
   /**
    * Maximum number of attempts before giving up (default: 2).
@@ -32,6 +35,13 @@ export interface GetTextualModelOutputOptions {
    * standalone use, not a policy. Every attempt is a billed model call.
    */
   maxRetries?: number;
+  /**
+   * Cap on completion tokens (default: 2048). Chat Completions models spend
+   * part of this budget on reasoning before the visible answer, so this must
+   * be well above the expected JSON output size or the response truncates
+   * mid-object.
+   */
+  maxOutputTokens?: number;
   /**
    * Route the call through AI Gateway. Omit the id (or leave it empty) to
    * call Workers AI directly. No cacheTtl is applied by default: every retry
@@ -56,10 +66,9 @@ export interface AiRunner {
 /**
  * Pulls the model's actual answer out of whatever envelope it arrived in.
  *
- * Order matters. The Responses-API check has to come first: those replies are
- * objects, so they would otherwise fall through to the "already an object"
- * case and be validated as-is — which is the envelope-never-opened bug this
- * function exists to fix.
+ * Order matters. The Chat Completions check (`choices`) and Responses API
+ * check (`output`) both come before the generic object case, since either
+ * would otherwise be validated as-is without opening the envelope.
  *
  * Anything unrecognised is handed back untouched so Ajv produces the error,
  * rather than this throwing a shape error of its own.
@@ -73,7 +82,15 @@ function extractStructuredOutput(response: unknown): unknown {
     return response;
   }
 
-  // Responses API (gpt-oss-120b): find the `message` item rather than taking
+  // Chat Completions shape: { choices: [{ message: { content } }] }.
+  const { choices } = response as { choices?: unknown };
+  if (Array.isArray(choices)) {
+    const first = choices[0] as { message?: { content?: unknown } } | undefined;
+    const text = first?.message?.content;
+    return typeof text === "string" ? JSON.parse(text) : response;
+  }
+
+  // Responses API (legacy path): find the `message` item rather than taking
   // output[0] — a `reasoning` item precedes it.
   const { output } = response as { output?: unknown };
   if (Array.isArray(output)) {
@@ -120,6 +137,15 @@ function excerpt(response: unknown): string {
     : asText;
 }
 
+/** Usage as actually reported by the model. Zero-valued usage means the
+ * provider did not report real numbers for this call shape, so it is not
+ * trustworthy cost data — callers should treat it as absent, not as zero. */
+export interface TextualModelOutput<T> {
+  data: T;
+  usage: unknown;
+  model: string;
+}
+
 /**
  * Calls a model with a prompt and returns output validated against
  * the given Zod schema. Retries on schema drift (invalid output).
@@ -134,12 +160,11 @@ function excerpt(response: unknown): string {
  * have instead of maintaining a second copy by hand. The JSON Schema sent to
  * the model is derived with `z.toJSONSchema`.
  *
- * Sends that derived schema to the model as `text.format`, so the output is
- * schema-guided rather than merely schema-checked. This is the Responses API
- * request shape (`instructions` + `input`), which is what `gpt-oss-120b`
- * expects — chat-completions models that want `messages` + `response_format`
- * are deliberately not supported. See
- * docs/adr/0007-responses-api-only-for-structured-output.md.
+ * Uses the Chat Completions request shape (`messages` + `response_format`),
+ * not the Responses API shape (`input` + `text.format`). The Responses shape
+ * does not report real token/neuron usage for this model — usage always
+ * comes back zeroed, even though the call is billed. Chat Completions
+ * reports real usage, so it is the only shape that makes cost trackable.
  */
 export async function getTextualModelOutput<T extends ZodType>(
   schema: T,
@@ -147,11 +172,12 @@ export async function getTextualModelOutput<T extends ZodType>(
   model: string,
   ai: AiRunner,
   options: GetTextualModelOutputOptions = {}
-): Promise<z.infer<T>> {
+): Promise<TextualModelOutput<z.infer<T>>> {
   const {
     instructions,
     schemaName = "output",
     maxRetries = DEFAULT_MAX_RETRIES,
+    maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
     gateway,
   } = options;
 
@@ -159,22 +185,26 @@ export async function getTextualModelOutput<T extends ZodType>(
   // providers reject unknown keys inside a json_schema format block.
   const { $schema: _dialect, ...jsonSchema } = z.toJSONSchema(schema);
 
-  // Both built once, outside the loop: every attempt is the same call routed
-  // the same way, so the gateway sees one consistent request shape.
+  const messages: Record<string, unknown>[] = [];
+  if (instructions) {
+    messages.push({ role: "system", content: instructions });
+  }
+  messages.push({ role: "user", content: prompt });
+
+  // Built once, outside the loop: every attempt is the same call routed the
+  // same way, so the gateway sees one consistent request shape.
   const body: Record<string, unknown> = {
-    input: prompt,
-    text: {
-      format: {
-        type: "json_schema",
+    messages,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
         name: schemaName,
         schema: jsonSchema,
         strict: true,
       },
     },
+    max_tokens: maxOutputTokens,
   };
-  if (instructions) {
-    body.instructions = instructions;
-  }
 
   const runOptions = buildAiRunOptions(gateway);
 
@@ -190,7 +220,8 @@ export async function getTextualModelOutput<T extends ZodType>(
 
       const result = schema.safeParse(parsed);
       if (result.success) {
-        return result.data;
+        const usage = (response as { usage?: unknown })?.usage;
+        return { data: result.data, usage, model };
       }
 
       lastError = result.error.issues;

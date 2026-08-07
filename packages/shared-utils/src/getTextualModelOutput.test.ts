@@ -13,33 +13,32 @@ const personSchema = z.object({
  */
 const { $schema: _dialect, ...personJsonSchema } = z.toJSONSchema(personSchema);
 
-/** The Responses API request body the helper is expected to send. */
-function expectedBody(overrides: Record<string, unknown> = {}) {
+/** The Chat Completions request body the helper is expected to send. */
+function expectedBody(overrides: { instructions?: string } = {}) {
+  const messages: Record<string, unknown>[] = [];
+  if (overrides.instructions) {
+    messages.push({ role: "system", content: overrides.instructions });
+  }
+  messages.push({ role: "user", content: "Generate a person" });
+
   return {
-    input: "Generate a person",
-    text: {
-      format: {
-        type: "json_schema",
+    messages,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
         name: "output",
         schema: personJsonSchema,
         strict: true,
       },
     },
-    ...overrides,
+    max_tokens: 2048,
   };
 }
 
-/**
- * A gpt-oss-120b reply. The `reasoning` item comes first deliberately: taking
- * output[0] rather than searching for the message item is the mistake this
- * fixture exists to catch.
- */
-function responsesEnvelope(text: string) {
+/** A Chat Completions reply. */
+function chatCompletionsEnvelope(text: string) {
   return {
-    output: [
-      { type: "reasoning", summary: [] },
-      { type: "message", content: [{ type: "output_text", text }] },
-    ],
+    choices: [{ message: { content: text } }],
   };
 }
 
@@ -47,7 +46,7 @@ describe("getTextualModelOutput", () => {
   it("returns parsed output when it matches the schema on the first try", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(
-        JSON.stringify({ name: "Ava", age: 30 })
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
       ),
     };
 
@@ -58,7 +57,7 @@ describe("getTextualModelOutput", () => {
       mockAi
     );
 
-    expect(result).toEqual({ name: "Ava", age: 30 });
+    expect(result.data).toEqual({ name: "Ava", age: 30 });
     expect(mockAi.run).toHaveBeenCalledTimes(1);
   });
 
@@ -66,8 +65,8 @@ describe("getTextualModelOutput", () => {
     const mockAi: AiRunner = {
       run: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ name: "Ava" })) // missing "age" -> invalid
-        .mockResolvedValueOnce(JSON.stringify({ name: "Ava", age: 30 })), // valid
+        .mockResolvedValueOnce(chatCompletionsEnvelope(JSON.stringify({ name: "Ava" }))) // missing "age" -> invalid
+        .mockResolvedValueOnce(chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))), // valid
     };
 
     const result = await getTextualModelOutput(
@@ -77,13 +76,13 @@ describe("getTextualModelOutput", () => {
       mockAi
     );
 
-    expect(result).toEqual({ name: "Ava", age: 30 });
+    expect(result.data).toEqual({ name: "Ava", age: 30 });
     expect(mockAi.run).toHaveBeenCalledTimes(2);
   });
 
   it("throws an error after exhausting all retries on persistent schema drift", async () => {
     const mockAi: AiRunner = {
-      run: vi.fn().mockResolvedValue(JSON.stringify({ name: "Ava" })), // always invalid
+      run: vi.fn().mockResolvedValue(chatCompletionsEnvelope(JSON.stringify({ name: "Ava" }))), // always invalid
     };
 
     await expect(
@@ -101,7 +100,7 @@ describe("getTextualModelOutput", () => {
 
   it("calls the model directly when no gateway is configured", async () => {
     const mockAi: AiRunner = {
-      run: vi.fn().mockResolvedValue(JSON.stringify({ name: "Ava", age: 30 })),
+      run: vi.fn().mockResolvedValue(chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))),
     };
 
     await getTextualModelOutput(
@@ -120,7 +119,7 @@ describe("getTextualModelOutput", () => {
 
   it("routes through the gateway without caching when an id is configured", async () => {
     const mockAi: AiRunner = {
-      run: vi.fn().mockResolvedValue(JSON.stringify({ name: "Ava", age: 30 })),
+      run: vi.fn().mockResolvedValue(chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))),
     };
 
     await getTextualModelOutput(
@@ -142,8 +141,8 @@ describe("getTextualModelOutput", () => {
     const mockAi: AiRunner = {
       run: vi
         .fn()
-        .mockResolvedValueOnce(JSON.stringify({ name: "Ava" }))
-        .mockResolvedValueOnce(JSON.stringify({ name: "Ava", age: 30 })),
+        .mockResolvedValueOnce(chatCompletionsEnvelope(JSON.stringify({ name: "Ava" })))
+        .mockResolvedValueOnce(chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))),
     };
 
     await getTextualModelOutput(
@@ -162,12 +161,12 @@ describe("getTextualModelOutput", () => {
 });
 
 describe("getTextualModelOutput response envelopes", () => {
-  it("extracts the answer from a gpt-oss-120b Responses API reply", async () => {
+  it("extracts the answer from a Chat Completions reply", async () => {
     const mockAi: AiRunner = {
       run: vi
         .fn()
         .mockResolvedValue(
-          responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+          chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
         ),
     };
 
@@ -178,39 +177,17 @@ describe("getTextualModelOutput response envelopes", () => {
       mockAi
     );
 
-    expect(result).toEqual({ name: "Ava", age: 30 });
+    expect(result.data).toEqual({ name: "Ava", age: 30 });
     expect(mockAi.run).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries rather than crashing when the output has no message item", async () => {
-    const reasoningOnly = { output: [{ type: "reasoning", summary: [] }] };
-    const mockAi: AiRunner = {
-      run: vi
-        .fn()
-        .mockResolvedValueOnce(reasoningOnly)
-        .mockResolvedValueOnce(
-          responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
-        ),
-    };
-
-    const result = await getTextualModelOutput(
-      personSchema,
-      "Generate a person",
-      "some-model",
-      mockAi
-    );
-
-    expect(result).toEqual({ name: "Ava", age: 30 });
-    expect(mockAi.run).toHaveBeenCalledTimes(2);
   });
 
   it("treats truncated JSON in the message as a failed attempt", async () => {
     const mockAi: AiRunner = {
       run: vi
         .fn()
-        .mockResolvedValueOnce(responsesEnvelope('{"name":"Ava","ag'))
+        .mockResolvedValueOnce(chatCompletionsEnvelope('{"name":"Ava","ag'))
         .mockResolvedValueOnce(
-          responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+          chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
         ),
     };
 
@@ -221,7 +198,7 @@ describe("getTextualModelOutput response envelopes", () => {
       mockAi
     );
 
-    expect(result).toEqual({ name: "Ava", age: 30 });
+    expect(result.data).toEqual({ name: "Ava", age: 30 });
     expect(mockAi.run).toHaveBeenCalledTimes(2);
   });
 
@@ -235,13 +212,11 @@ describe("getTextualModelOutput response envelopes", () => {
       run: vi.fn().mockResolvedValue({ response: { name: "Ava", age: 30 } }),
     };
 
-    await expect(
-      getTextualModelOutput(personSchema, "Generate a person", "m", asString)
-    ).resolves.toEqual({ name: "Ava", age: 30 });
+    const resultA = await getTextualModelOutput(personSchema, "Generate a person", "m", asString);
+    expect(resultA.data).toEqual({ name: "Ava", age: 30 });
 
-    await expect(
-      getTextualModelOutput(personSchema, "Generate a person", "m", asObject)
-    ).resolves.toEqual({ name: "Ava", age: 30 });
+    const resultB = await getTextualModelOutput(personSchema, "Generate a person", "m", asObject);
+    expect(resultB.data).toEqual({ name: "Ava", age: 30 });
   });
 
   it("quotes the unusable response in the error, not just the ajv output", async () => {
@@ -256,10 +231,10 @@ describe("getTextualModelOutput response envelopes", () => {
 });
 
 describe("getTextualModelOutput request body", () => {
-  it("sends the schema to the model as text.format", async () => {
+  it("sends the schema to the model as response_format.json_schema", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(
-        responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
       ),
     };
 
@@ -274,10 +249,10 @@ describe("getTextualModelOutput request body", () => {
     expect(body).toEqual(expectedBody());
   });
 
-  it("sends instructions separately from the user input when given", async () => {
+  it("sends instructions as a system message before the user input when given", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(
-        responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
       ),
     };
 
@@ -295,10 +270,10 @@ describe("getTextualModelOutput request body", () => {
     );
   });
 
-  it("omits the instructions key entirely when none is given", async () => {
+  it("omits the system message entirely when no instructions are given", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(
-        responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
       ),
     };
 
@@ -310,13 +285,14 @@ describe("getTextualModelOutput request body", () => {
     );
 
     const [, body] = vi.mocked(mockAi.run).mock.calls[0];
-    expect(body).not.toHaveProperty("instructions");
+    const messages = (body as { messages: { role: string }[] }).messages;
+    expect(messages.every((m) => m.role !== "system")).toBe(true);
   });
 
   it("uses a caller-supplied schema name", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(
-        responsesEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
       ),
     };
 
@@ -329,16 +305,16 @@ describe("getTextualModelOutput request body", () => {
     );
 
     const [, body] = vi.mocked(mockAi.run).mock.calls[0];
-    expect((body as { text: { format: { name: string } } }).text.format.name).toBe(
-      "helios_params"
-    );
+    expect(
+      (body as { response_format: { json_schema: { name: string } } }).response_format.json_schema.name
+    ).toBe("helios_params");
   });
 
   it("defaults to 2 attempts, matching MAX_RETRIES, not 3", async () => {
     const mockAi: AiRunner = {
       run: vi
         .fn()
-        .mockResolvedValue(responsesEnvelope(JSON.stringify({ name: "Ava" }))),
+        .mockResolvedValue(chatCompletionsEnvelope(JSON.stringify({ name: "Ava" }))),
     };
 
     await expect(
@@ -346,5 +322,24 @@ describe("getTextualModelOutput request body", () => {
     ).rejects.toThrow(/2 attempt\(s\)/);
 
     expect(mockAi.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("sets max_tokens so reasoning does not truncate the JSON output", async () => {
+    const mockAi: AiRunner = {
+      run: vi.fn().mockResolvedValue(
+        chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))
+      ),
+    };
+
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      mockAi,
+      { maxOutputTokens: 4096 }
+    );
+
+    const [, body] = vi.mocked(mockAi.run).mock.calls[0];
+    expect((body as { max_tokens: number }).max_tokens).toBe(4096);
   });
 });
