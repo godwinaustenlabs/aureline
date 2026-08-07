@@ -5,8 +5,8 @@ export { getTextualModelOutput } from "./getTextualModelOutput";
 export type {
   GetTextualModelOutputOptions,
   AiRunner,
+  TextualModelOutput,
 } from "./getTextualModelOutput";
-
 export { getImageModelOutput } from "./getImageModelOutput";
 export type {
   ImageAiRunner,
