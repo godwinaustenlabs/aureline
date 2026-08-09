@@ -342,4 +342,35 @@ describe("getTextualModelOutput request body", () => {
     const [, body] = vi.mocked(mockAi.run).mock.calls[0];
     expect((body as { max_tokens: number }).max_tokens).toBe(4096);
   });
+
+  it("sends temperature only when one is configured", async () => {
+    const reply = chatCompletionsEnvelope(
+      JSON.stringify({ name: "Ava", age: 30 })
+    );
+
+    const withTemperature: AiRunner = {
+      run: vi.fn().mockResolvedValue(reply),
+    };
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      withTemperature,
+      { temperature: 0.2 }
+    );
+    const [, configured] = vi.mocked(withTemperature.run).mock.calls[0];
+    expect(configured).toHaveProperty("temperature", 0.2);
+
+    // Absent means the model keeps its own default, so the key must not be
+    // present at all rather than sent as undefined.
+    const without: AiRunner = { run: vi.fn().mockResolvedValue(reply) };
+    await getTextualModelOutput(
+      personSchema,
+      "Generate a person",
+      "some-model",
+      without
+    );
+    const [, omitted] = vi.mocked(without.run).mock.calls[0];
+    expect(omitted).not.toHaveProperty("temperature");
+  });
 });

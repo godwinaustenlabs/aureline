@@ -7,12 +7,15 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "cf-typegen": "wrangler types",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "config:pull": "for k in text_model image_model max_retries retention_limit; do v=$(wrangler kv key get --binding CONFIG --remote \"$k\") && wrangler kv key put --binding CONFIG --local \"$k\" \"$v\"; done",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
     "drizzle-kit": "^0.31.10",
     "typescript": "^5.5.2",
+    "vitest": "^4.1.10",
     "wrangler": "^4.114.0"
   },
   "dependencies": {
