@@ -69,7 +69,10 @@
 	"kv_namespaces": [
 		{
 			"binding": "CONFIG",
-			"id": "bc982c0d712a49b4827520477c33fab5"
+			// The namespace's ID, not its dashboard title ("HELIOS_CONFIG").
+			// A title here is accepted by `deploy --dry-run` and by local dev,
+			// and only fails against the real API.
+			"id": "bc982c0d712a49b4827520477c33fab5",
 			// "remote": true
 		}
 	],

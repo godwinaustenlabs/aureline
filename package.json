@@ -11,7 +11,8 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "config:pull:helios": "npm run config:pull --workspace=apps/agent-helios"
   },
   "repository": {
     "type": "git",
