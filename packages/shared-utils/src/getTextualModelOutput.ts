@@ -43,6 +43,14 @@ export interface GetTextualModelOutputOptions {
    */
   maxOutputTokens?: number;
   /**
+   * Sampling temperature. Omitted entirely when not provided, leaving the
+   * model's own default in place rather than sending `undefined`.
+   *
+   * Expected to come from runtime config alongside the model id, since the
+   * useful value depends on which model is being called.
+   */
+  temperature?: number;
+  /**
    * Route the call through AI Gateway. Omit the id (or leave it empty) to
    * call Workers AI directly. No cacheTtl is applied by default: every retry
    * must reach the model for real, otherwise the retry loop would replay a
@@ -178,6 +186,7 @@ export async function getTextualModelOutput<T extends ZodType>(
     schemaName = "output",
     maxRetries = DEFAULT_MAX_RETRIES,
     maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
+    temperature,
     gateway,
   } = options;
 
@@ -205,6 +214,12 @@ export async function getTextualModelOutput<T extends ZodType>(
     },
     max_tokens: maxOutputTokens,
   };
+
+  // Sent only when configured, so an absent value leaves the model's own
+  // default rather than pinning it to ours.
+  if (temperature !== undefined) {
+    body.temperature = temperature;
+  }
 
   const runOptions = buildAiRunOptions(gateway);
 

@@ -46,27 +46,47 @@
 	],
 
 	/**
-	 * Runtime-tunable config — ticket 08 (retry count).
-	 * Values here can be changed with `wrangler kv key put` without redeploying
-	 * the worker. The matching entries in `vars` below are the committed
-	 * fallbacks used when a key is absent from KV.
+	 * Runtime-tunable config. Read once per invocation by src/config.ts; the app
+	 * never writes. Edit the values by hand in the Cloudflare dashboard
+	 * (namespace "HELIOS_CONFIG") and they take effect within about a minute,
+	 * with no redeploy.
+	 *
+	 * Keys: text_model, image_model, max_retries, retention_limit.
+	 * The matching entries in `vars` below are the committed fallbacks used when
+	 * a key is absent or its value is invalid.
+	 *
+	 * ONE namespace, deliberately. There is no `preview_id`: a second store only
+	 * ever meant a value edited in one place silently did nothing in the other.
+	 * `wrangler dev` therefore reads a LOCAL simulated store (empty on a fresh
+	 * clone, so everything falls back to `vars`). To point local dev at the real
+	 * namespace for a session, uncomment `remote` below — that binding alone goes
+	 * remote and the rest of the worker stays local. Remember it is the same
+	 * store production reads.
+	 *
+	 * See docs/adr/0008-runtime-config-resolved-from-kv.md
 	 * https://developers.cloudflare.com/kv/
 	 */
 	"kv_namespaces": [
 		{
 			"binding": "CONFIG",
-			"id": "bc982c0d712a49b4827520477c33fab5",
-			"preview_id": "7bab9541d7ed4ab5a5f76d81c9c0fe32"
+			"id": "bc982c0d712a49b4827520477c33fab5"
+			// "remote": true
 		}
 	],
 
 	"vars": {
+		// fallback default — the live value is CONFIG:text_model in KV
 		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
+		// fallback default — the live value is CONFIG:image_model in KV
 		"IMAGE_MODEL": "@cf/black-forest-labs/flux-1-schnell",
 		// AI Gateway name, created in the dashboard under AI > AI Gateway.
 		// Empty string means direct Workers AI with no logging or caching.
-		// See docs/adr/0006-ai-gateway-for-all-model-calls.md
+		// Deliberately NOT in KV: an empty or misspelled id makes the call fall
+		// through to direct Workers AI with no error and no gateway log, so a
+		// dashboard typo would be a silent routing outage. It stays here, where
+		// it is reviewed. See docs/adr/0006-ai-gateway-for-all-model-calls.md
 		"AI_GATEWAY_ID": "helios",
+		// fallback default — the live value is CONFIG:retention_limit in KV
 		"RETENTION_LIMIT": "5",
 		// fallback default — the live value is CONFIG:max_retries in KV
 		"MAX_RETRIES": "2"

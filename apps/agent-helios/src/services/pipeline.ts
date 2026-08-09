@@ -8,6 +8,7 @@ import {
 import { planConcept } from "./planner";
 import { generateImage } from "./imageGenerator";
 import { describeError, extractNeuronCost } from "../utils";
+import { describeConfig, resolveConfig, type HeliosConfig } from "../config";
 import {
 	startTextRun,
 	completeTextRun,
@@ -17,15 +18,23 @@ import {
 } from "../repository/do.repository";
 
 type Stage = "persist" | "planner" | "validate" | "image";
-/** Placeholder shape until ticket 06 (Flux Schnell) reports real usage. */
-const IMAGE_MODEL_METADATA_STUB = {
-	model: "flux.1-schnell",
-	provider: "black forest labs",
-	width: 1024,
-	height: 1024,
-	steps: 4,
-	seed: 0,
-};
+
+/**
+ * The image row's metadata, built from the config the run will actually use
+ * rather than from literals — a hardcoded model name here would record a model
+ * that was never called once `image_model` is changed in KV.
+ *
+ * Still a placeholder in one respect: ticket 06 replaces this with the usage the
+ * real Flux Schnell call reports back.
+ */
+function imageModelMetadata(config: HeliosConfig) {
+	return {
+		model: config.imageModel.model,
+		width: config.imageModel.width ?? null,
+		height: config.imageModel.height ?? null,
+		steps: config.imageModel.steps ?? null,
+	};
+}
 
 /**
  * Fixed-order orchestrator: planner → validate → image generator.
@@ -36,6 +45,13 @@ const IMAGE_MODEL_METADATA_STUB = {
  * `error` so failures stay attributable without a separate field.
  */
 export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): Promise<HeliosResult> {
+	// Read once per invocation so every stage sees the same snapshot. Reading
+	// per-service instead would let two reads straddle a KV edit and produce a
+	// `helios_runs` row that is half old model and half new (ADR-0001). Outside
+	// the try because `resolveConfig` never throws.
+	const config = await resolveConfig(env);
+	console.log(describeConfig(config));
+
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
 	const p_invoc_id = crypto.randomUUID();
@@ -46,10 +62,10 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 	try {
 		// Inside the try so a storage failure is reported as a settled
 		// `failed` result rather than escaping as an opaque 500.
-		await startTextRun(db, p_invoc_id, req.concept, { model: env.PLANNER_MODEL });
+		await startTextRun(db, p_invoc_id, req.concept, { model: config.textModel.model });
 
 		stage = "planner";
-		const planned = await planConcept(req.concept, env, p_invoc_id);
+		const planned = await planConcept(req.concept, env, config, p_invoc_id);
 
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
@@ -59,10 +75,10 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 
 		// Planner succeeded — settle the text row, then open the image row.
 		await completeTextRun(db, p_invoc_id, params, textModelMetadata, neurons);
-		await startImageRun(db, p_invoc_id, req.concept, params, IMAGE_MODEL_METADATA_STUB);
+		await startImageRun(db, p_invoc_id, req.concept, params, imageModelMetadata(config));
 
 		stage = "image";
-		const image = await generateImage(params);
+		const image = await generateImage(params, config);
 
 		await completeImageRun(db, p_invoc_id, image.cost_usd);
 
