@@ -119,10 +119,12 @@ export interface ImagePromptOptions {
 	/**
 	 * Whether the target model exposes a negative prompt field.
 	 *
-	 * Flux Schnell does; Flux 1.1 Pro does not, but follows negative-style
-	 * instruction embedded in the main prompt. Defaults to `true` for Sprint 1's
-	 * Schnell (ADR-0004) — pass `false` for Pro, which keeps the eventual swap a
-	 * config change rather than a prompt rewrite.
+	 * Neither Flux model we use has one. Schnell's documented inputs are `prompt`
+	 * and `steps` only, and Flux 1.1 Pro follows negative-style instruction
+	 * embedded in the main prompt instead. So Sprint 1's caller passes `false`
+	 * (ADR-0004), and the flag exists for a model that has a real field. Do not
+	 * take `negative_prompt` and append it to `prompt` yourself: the list reads as
+	 * things to draw unless it carries the "Do not include:" lead-in this adds.
 	 */
 	supportsNegativePrompt?: boolean;
 }

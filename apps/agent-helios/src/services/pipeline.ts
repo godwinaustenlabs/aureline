@@ -6,7 +6,8 @@ import {
 	type HeliosResult,
 } from "@aureline/shared-types";
 import { planConcept } from "./planner";
-import { generateImage } from "./imageGenerator";
+import { generateImage, resolveSteps } from "./imageGenerator";
+import { savePatternImage } from "../repository/r2.repository";
 import { describeError, extractNeuronCost } from "../utils";
 import { describeConfig, resolveConfig, type HeliosConfig } from "../config";
 import {
@@ -30,9 +31,9 @@ type Stage = "persist" | "planner" | "validate" | "image";
 function imageModelMetadata(config: HeliosConfig) {
 	return {
 		model: config.imageModel.model,
-		width: config.imageModel.width ?? null,
-		height: config.imageModel.height ?? null,
-		steps: config.imageModel.steps ?? null,
+		// What the call will actually send, not what KV holds — the two differ
+		// whenever config carries a steps value above Flux's cap.
+		steps: resolveSteps(config),
 	};
 }
 
@@ -44,7 +45,7 @@ function imageModelMetadata(config: HeliosConfig) {
  * has to deal with settled outcomes. The failing stage is prefixed onto
  * `error` so failures stay attributable without a separate field.
  */
-export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): Promise<HeliosResult> {
+export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, origin: string): Promise<HeliosResult> {
 	// Read once per invocation so every stage sees the same snapshot. Reading
 	// per-service instead would let two reads straddle a KV edit and produce a
 	// `helios_runs` row that is half old model and half new (ADR-0001). Outside
@@ -58,6 +59,10 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 
 	let stage: Stage = "persist";
 	let params: HeliosParams | null = null;
+	// Held outside the try because the image call bills before the save and the
+	// row update run. Without this, a failure in either records a spent image as
+	// having cost nothing.
+	let imageCost: number | null = null;
 
 	try {
 		// Inside the try so a storage failure is reported as a settled
@@ -79,15 +84,18 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 
 		stage = "image";
 		const image = await generateImage(params, config, env, p_invoc_id);
+		imageCost = image.cost_usd;
 
-		await completeImageRun(db, p_invoc_id, image.cost_usd);
+		const imageR2Key = await savePatternImage(env.PATTERNS, p_invoc_id, image.image, image.contentType);
+
+		await completeImageRun(db, p_invoc_id, imageR2Key, imageCost);
 
 		return {
 			p_invoc_id,
 			status: "completed",
 			params,
-			image_url: image.image_url,
-			cost_usd: image.cost_usd,
+			image_url: `${origin}/images/${imageR2Key}`,
+			cost_usd: imageCost,
 			error: null,
 		};
 	} catch (cause) {
@@ -95,7 +103,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 		// broke — and a throw from inside a catch escapes the function. Swallow
 		// it: `cause` is the failure worth reporting, this one is a symptom.
 		try {
-			await failRunningRuns(db, p_invoc_id);
+			await failRunningRuns(db, p_invoc_id, imageCost);
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
@@ -107,7 +115,9 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 			// is kept rather than discarded, so a failure stays inspectable.
 			params,
 			image_url: null,
-			cost_usd: null,
+			// Non-null only when the image was generated and something after it
+			// broke. The money left the account either way, so it is reported.
+			cost_usd: imageCost,
 			error: `${stage}: ${describeError(cause)}`,
 		};
 	}

@@ -21,6 +21,20 @@ const MAX_PROMPT_LENGTH = 2048;
 /** Flux Schnell's `steps` input is capped at 8 (ticket 06, decision 1). */
 const MAX_STEPS = 8;
 
+/** Flux Schnell's own default when `steps` is absent. */
+const DEFAULT_STEPS = 4;
+
+/**
+ * The `steps` value actually sent to the model. The config schema allows up to
+ * 50 because it is model-agnostic; Flux Schnell caps at 8. Exported so the
+ * pipeline records what was sent rather than what was configured — a run row
+ * claiming 50 steps when the call used 8 is exactly the lying audit row
+ * ADR-0001 exists to prevent.
+ */
+export function resolveSteps(config: HeliosConfig): number {
+	return Math.min(config.imageModel.steps ?? DEFAULT_STEPS, MAX_STEPS);
+}
+
 /**
  * Image generation stage: renders a black-and-white pattern from the planner's
  * parameters via Flux Schnell (ADR-0004), strictly following them (no
@@ -41,11 +55,11 @@ export async function generateImage(
 	env: Env,
 	p_invoc_id: string
 ): Promise<GeneratedImage> {
-	const joinedPrompt = joinPrompt(params);
-	const steps = Math.min(config.imageModel.steps ?? 4, MAX_STEPS);
+	const prompt = buildFluxPrompt(params);
+	const steps = resolveSteps(config);
 
 	const { image, contentType } = await getImageModelOutput(
-		joinedPrompt,
+		prompt,
 		config.imageModel.model,
 		env.AI,
 		{
@@ -69,20 +83,22 @@ export async function generateImage(
 }
 
 /**
- * Flux Schnell has no negative-prompt field (ticket 06 decision 3), so the
- * translator's exclusions are folded into the main prompt and sent as one. Fails
- * fast if the join overruns the model's hard 2048-character cap — before any
- * billed call, so we never pay for a prompt the model will reject anyway.
+ * Flux Schnell has no negative-prompt field (ticket 06, decision 3), so the
+ * translator is asked to fold the exclusions into the main prompt as an explicit
+ * "Do not include:" clause. Appending the raw exclusion list instead would read
+ * as things to draw, which is the opposite of what it means.
+ *
+ * Fails fast if the result overruns the model's hard 2048-character cap — before
+ * any billed call, so we never pay for a prompt the model will reject anyway.
  */
-function joinPrompt(params: HeliosParams): string {
-	const { prompt, negative_prompt } = buildImagePrompt(params);
-	const joined = negative_prompt ? `${prompt} ${negative_prompt}` : prompt;
-	if (joined.length > MAX_PROMPT_LENGTH) {
+function buildFluxPrompt(params: HeliosParams): string {
+	const { prompt } = buildImagePrompt(params, { supportsNegativePrompt: false });
+	if (prompt.length > MAX_PROMPT_LENGTH) {
 		throw new Error(
-			`joined image prompt is ${joined.length} characters, exceeding Flux Schnell's ${MAX_PROMPT_LENGTH} cap`
+			`image prompt is ${prompt.length} characters, exceeding Flux Schnell's ${MAX_PROMPT_LENGTH} cap`
 		);
 	}
-	return joined;
+	return prompt;
 }
 
 /**
