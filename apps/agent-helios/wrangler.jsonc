@@ -32,7 +32,7 @@
 		{
 			"binding": "PATTERNS",
 			"bucket_name": "helios-bucket",
-			"preview_bucket_name": "helios-bucket-preview"
+			// "remote": true
 		}
 	],
 
