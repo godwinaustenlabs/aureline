@@ -74,18 +74,18 @@ export async function startImageRun(
 	});
 }
 
-/** Settles the image row with its cost. */
+/** Settles the image row with its R2 key and cost. */
 export async function completeImageRun(
 	db: HeliosDb,
 	pInvocId: string,
+	imageR2Key: string,
 	costUsd: number | null,
 ): Promise<void> {
 	await db
 		.update(heliosRuns)
-		.set({ status: "completed", costUsd, completedAt: new Date() })
+		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "image")));
 }
-
 /**
  * Marks whichever row is still `running` for this invocation as failed — just
  * the text row if planner/validate blew up, or the image row if image

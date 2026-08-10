@@ -1,4 +1,5 @@
 import { getAgentByName, routeAgentRequest } from "agents";
+import { readPatternImage } from "./repository/r2.repository";
 
 // The Durable Object class must be exported from the Worker's main module for
 // wrangler's `class_name: "HeliosAgent"` binding to resolve.
@@ -24,6 +25,20 @@ export default {
 			// Sprint 1 has a single caller, so it falls back to a shared instance.
 			const agent = await getAgentByName(env.HeliosAgent, await scopeKey(request));
 			return agent.fetch(request);
+		}
+
+		if (url.pathname.startsWith("/images/")) {
+			// Everything after "/images/" is the R2 key, e.g. "patterns/{p_invoc_id}.jpg"
+			const key = url.pathname.slice("/images/".length);
+			const object = await readPatternImage(env.PATTERNS, key);
+
+			if (!object) {
+				return new Response("Not found", { status: 404 });
+			}
+
+			return new Response(object.body, {
+				headers: { "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream" },
+			});
 		}
 
 		return (await routeAgentRequest(request, env)) ?? new Response("Not found", { status: 404 });
