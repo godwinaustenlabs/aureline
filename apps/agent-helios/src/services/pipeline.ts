@@ -78,7 +78,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env): P
 		await startImageRun(db, p_invoc_id, req.concept, params, imageModelMetadata(config));
 
 		stage = "image";
-		const image = await generateImage(params, config);
+		const image = await generateImage(params, config, env, p_invoc_id);
 
 		await completeImageRun(db, p_invoc_id, image.cost_usd);
 
