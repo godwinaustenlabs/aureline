@@ -10,7 +10,8 @@ import { heliosRuns, type NewHeliosRun } from "../db/schema";
  */
 
 /** Whatever the caller records about the model behind a row. The shape is the
- * caller's business — tickets 05/06 replace today's stubs. */
+ * caller's business: the text row carries the model and its token usage, the
+ * image row the model and the steps actually sent. */
 type ModelMetadata = NewHeliosRun["modelMetadata"];
 
 /**
@@ -90,10 +91,18 @@ export async function completeImageRun(
  * Marks whichever row is still `running` for this invocation as failed — just
  * the text row if planner/validate blew up, or the image row if image
  * generation did (text is already `completed` by that point).
+ *
+ * `costUsd` is written only when the caller has one, which happens when the
+ * model call already billed and a later step broke. Left absent otherwise so a
+ * planner-stage failure does not overwrite a cost with null.
  */
-export async function failRunningRuns(db: HeliosDb, pInvocId: string): Promise<void> {
+export async function failRunningRuns(
+	db: HeliosDb,
+	pInvocId: string,
+	costUsd: number | null = null,
+): Promise<void> {
 	await db
 		.update(heliosRuns)
-		.set({ status: "failed", completedAt: new Date() })
+		.set({ status: "failed", completedAt: new Date(), ...(costUsd !== null && { costUsd }) })
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
 }

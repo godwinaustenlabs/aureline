@@ -59,19 +59,23 @@ function fakeEnv(overrides: {
 }
 
 describe("generateImage", () => {
-	it("sends the joined prompt, config model, steps, width and height to the model", async () => {
+	it("sends the folded prompt, config model, steps, width and height to the model", async () => {
 		const { env, run } = fakeEnv();
 
 		await generateImage(PARAMS, CONFIG, env, "p-123");
 
-		// The model receives the translator's prompt AND its negative exclusions,
-		// stuck into one string (Flux Schnell has no negative field).
-		const { prompt, negative_prompt } = buildImagePrompt(PARAMS);
-		const joined = `${prompt} ${negative_prompt}`;
+		// Flux Schnell has no negative field, so the exclusions arrive inside the
+		// main prompt behind a "Do not include:" lead-in rather than appended raw,
+		// which would read as things to draw.
+		const { prompt, negative_prompt } = buildImagePrompt(PARAMS, {
+			supportsNegativePrompt: false,
+		});
+		expect(negative_prompt).toBeNull();
+		expect(prompt).toMatch(/Do not include: .+\.$/);
 
 		expect(run).toHaveBeenCalledTimes(1);
 		const [, input, options] = run.mock.calls[0];
-		expect(input.prompt).toBe(joined);
+		expect(input.prompt).toBe(prompt);
 		expect(input.steps).toBe(4);
 		expect(input.width).toBe(1024);
 		expect(input.height).toBe(1024);
