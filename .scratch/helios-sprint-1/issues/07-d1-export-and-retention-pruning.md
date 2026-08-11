@@ -109,20 +109,20 @@ Two things worth knowing anyway:
 ## Work
 
 - [x] D1 database is provisioned. `helios-d1`, id `fa6c2552-c844-4c9b-8730-8e3108aa4cc8`, bound as `DB` in `wrangler.jsonc` — **Hashir Rauf**
-- [ ] Add `drizzle.d1.config.ts` next to the existing `drizzle.config.ts`. Same `schema.ts`, but no `driver` and `out: "../../infrastructure/d1/migrations"`. The existing config is locked to `durable-sqlite` and cannot emit both, which is why there are two. One source of truth for the schema, two outputs — **Hashir Rauf** (data-layer conventions)
-- [ ] Generate the D1 migration and commit it. `wrangler.jsonc:44` already points `migrations_dir` at `../../infrastructure/d1/migrations` and **that directory does not exist yet**. Sanity check the output against `drizzle/0000_curly_wallow.sql`, which is the DO side of the same table and should match column for column, `image_r2_key` included — **Hashir Rauf**
-- [ ] Apply the migration and confirm the table exists, locally and remote — **Hashir Rauf**
-- [ ] Add `getD1Db` to `db/client.ts`, per the shape above. Do this first, it is four lines and everything else you write imports it — **Arham Zahid**
-- [ ] Write `repository/d1.repository.ts`. The file exists but is empty. Two functions, `exportRuns` and `readRun`, per the shapes above — **Arham Zahid** (data layer)
-- [ ] Make the export idempotent using `onConflictDoNothing` on the `id` primary key. Calling it twice with the same rows must leave one copy, not two, without the caller checking first — **Arham Zahid**
-- [ ] Add `getRunRows` and `pruneCompletedRuns` to `repository/do.repository.ts`. Oldest first, whole runs only, completed only, never failed — **Arham Zahid**
-- [ ] Take the retention limit from `config.retentionLimit`. Do not read `env.RETENTION_LIMIT` and do not hardcode 5 — **Arham Zahid**
-- [ ] Wire `exportAndPrune` into `pipeline.ts` and call it from **both** the success return and the catch. No SQL and no Drizzle in this file — **Arham Zahid** (owns `services/pipeline.ts`)
-- [ ] A failed export logs and does not fail the run. Break the D1 binding on purpose and confirm a normal request still returns its pattern — **Arham Zahid**
-- [ ] Pruning only runs after the export returned without throwing. Never gate it on the number of rows changed, see decision 7 — **Arham Zahid**
-- [ ] Tests with a fake database, so they cost nothing. Cover: `pruneCompletedRuns` keeps exactly the newest N completed runs and deletes whole runs not single rows, `exportRuns` called twice inserts once, and both failure shapes survive pruning. **The two failure shapes are not the same test.** One is a planner failure, a single `failed` text row and no image row. The other is an image failure, a `completed` text row next to a `failed` image row, and it is the one a naive implementation silently half-deletes. A suite that only covers the first shape passes while the bug is live — **Arham Zahid**
-- [ ] Exported rows are read back from D1 **through `readRun`**, not a hand-typed query. Ticket 03's equivalent box was ticked on a hand-run SQLite query with no read path in code. Do not repeat that — **Hashir Rauf** (review gate)
-- [ ] Confirm end to end that a completed run reaches D1, that a failed run also reaches D1 and is not pruned, and that the oldest run disappears from the DO once the limit is passed — **Hashir Rauf** (review gate)
+- [x] Add `drizzle.d1.config.ts` next to the existing `drizzle.config.ts`. Same `schema.ts`, but no `driver` and `out: "../../infrastructure/d1/migrations"`. The existing config is locked to `durable-sqlite` and cannot emit both, which is why there are two. One source of truth for the schema, two outputs — **Hashir Rauf** (data-layer conventions)
+- [x] Generate the D1 migration and commit it. `wrangler.jsonc:44` already points `migrations_dir` at `../../infrastructure/d1/migrations` and **that directory does not exist yet**. Sanity check the output against `drizzle/0000_curly_wallow.sql`, which is the DO side of the same table and should match column for column, `image_r2_key` included — **Hashir Rauf**
+- [x] Apply the migration and confirm the table exists, locally and remote — **Hashir Rauf**
+- [x] Add `getD1Db` to `db/client.ts`, per the shape above. Do this first, it is four lines and everything else you write imports it — **Arham Zahid**
+- [x] Write `repository/d1.repository.ts`. The file exists but is empty. Two functions, `exportRuns` and `readRun`, per the shapes above — **Arham Zahid** (data layer)
+- [x] Make the export idempotent using `onConflictDoNothing` on the `id` primary key. Calling it twice with the same rows must leave one copy, not two, without the caller checking first — **Arham Zahid**
+- [x] Add `getRunRows` and `pruneCompletedRuns` to `repository/do.repository.ts`. Oldest first, whole runs only, completed only, never failed — **Arham Zahid**
+- [x] Take the retention limit from `config.retentionLimit`. Do not read `env.RETENTION_LIMIT` and do not hardcode 5 — **Arham Zahid**
+- [x] Wire `exportAndPrune` into `pipeline.ts` and call it from **both** the success return and the catch. No SQL and no Drizzle in this file — **Arham Zahid** (owns `services/pipeline.ts`)
+- [x] A failed export logs and does not fail the run. Break the D1 binding on purpose and confirm a normal request still returns its pattern — **Arham Zahid**
+- [x] Pruning only runs after the export returned without throwing. Never gate it on the number of rows changed, see decision 7 — **Arham Zahid**
+- [x] Tests with a fake database, so they cost nothing. Cover: `pruneCompletedRuns` keeps exactly the newest N completed runs and deletes whole runs not single rows, `exportRuns` called twice inserts once, and both failure shapes survive pruning. **The two failure shapes are not the same test.** One is a planner failure, a single `failed` text row and no image row. The other is an image failure, a `completed` text row next to a `failed` image row, and it is the one a naive implementation silently half-deletes. A suite that only covers the first shape passes while the bug is live — **Arham Zahid**
+- [x] Exported rows are read back from D1 **through `readRun`**, not a hand-typed query. Ticket 03's equivalent box was ticked on a hand-run SQLite query with no read path in code. Do not repeat that — **Hashir Rauf** (review gate)
+- [x] Confirm end to end that a completed run reaches D1, that a failed run also reaches D1 and is not pruned, and that the oldest run disappears from the DO once the limit is passed — **Hashir Rauf** (review gate)
 
 ## Verification without burning the image budget
 
