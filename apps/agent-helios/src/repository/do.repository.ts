@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import type { HeliosDb } from "../db/client";
-import { heliosRuns, type NewHeliosRun } from "../db/schema";
+import { heliosRuns, type HeliosRun, type NewHeliosRun } from "../db/schema";
 
 /**
  * Every write against `helios_runs` in this Durable Object's own SQLite.
@@ -36,22 +36,22 @@ export async function startTextRun(
 
 /** Settles the text row with the params the planner actually produced. */
 export async function completeTextRun(
-        db: HeliosDb,
-        pInvocId: string,
-        params: HeliosParams,
-        modelMetadata: ModelMetadata,
-        costUsd: number | null,
+	db: HeliosDb,
+	pInvocId: string,
+	params: HeliosParams,
+	modelMetadata: ModelMetadata,
+	costUsd: number | null,
 ): Promise<void> {
-        await db
-                .update(heliosRuns)
-                .set({
-                        status: "completed",
-                        plannerParams: params,
-                        modelMetadata,
-                        costUsd,
-                        completedAt: new Date(),
-                })
-                .where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
+	await db
+		.update(heliosRuns)
+		.set({
+			status: "completed",
+			plannerParams: params,
+			modelMetadata,
+			costUsd,
+			completedAt: new Date(),
+		})
+		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
 }
 
 /**
@@ -87,6 +87,7 @@ export async function completeImageRun(
 		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "image")));
 }
+
 /**
  * Marks whichever row is still `running` for this invocation as failed — just
  * the text row if planner/validate blew up, or the image row if image
@@ -105,4 +106,47 @@ export async function failRunningRuns(
 		.update(heliosRuns)
 		.set({ status: "failed", completedAt: new Date(), ...(costUsd !== null && { costUsd }) })
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
+}
+
+/** The rows for one invocation, for handing to the exporter. */
+export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<HeliosRun[]> {
+	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+}
+
+/**
+ * Deletes completed runs beyond the limit, oldest first, whole runs only.
+ * Failed runs are never touched. Returns how many runs were deleted.
+ */
+export async function pruneCompletedRuns(db: HeliosDb, retentionLimit: number): Promise<number> {
+	const allRows = await db.select().from(heliosRuns);
+
+	const byRun = new Map<string, HeliosRun[]>();
+	for (const row of allRows) {
+		const existing = byRun.get(row.pInvocId);
+		if (existing) {
+			existing.push(row);
+		} else {
+			byRun.set(row.pInvocId, [row]);
+		}
+	}
+
+	const completedRuns = [...byRun.entries()]
+		.filter(([, rows]) => rows.every((row) => row.status === "completed"))
+		.map(([pInvocId, rows]) => ({
+			pInvocId,
+			latestCreatedAt: Math.max(...rows.map((row) => row.createdAt.getTime())),
+		}))
+		.sort((a, b) => b.latestCreatedAt - a.latestCreatedAt);
+
+	const runsToDelete = completedRuns.slice(retentionLimit);
+	if (runsToDelete.length === 0) return 0;
+
+	await db.delete(heliosRuns).where(
+		inArray(
+			heliosRuns.pInvocId,
+			runsToDelete.map((run) => run.pInvocId),
+		),
+	);
+
+	return runsToDelete.length;
 }

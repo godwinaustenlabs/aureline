@@ -1,4 +1,6 @@
 import type { HeliosDb } from "../db/client";
+import { getD1Db } from "../db/client";
+import { exportRuns } from "../repository/d1.repository";
 import {
 	HeliosParamsSchema,
 	type HeliosParams,
@@ -16,6 +18,8 @@ import {
 	startImageRun,
 	completeImageRun,
 	failRunningRuns,
+	getRunRows,
+	pruneCompletedRuns,
 } from "../repository/do.repository";
 
 type Stage = "persist" | "planner" | "validate" | "image";
@@ -36,7 +40,26 @@ function imageModelMetadata(config: HeliosConfig) {
 		steps: resolveSteps(config),
 	};
 }
-
+/**
+ * Copies this invocation's rows into D1, then prunes the DO down to the
+ * retention limit — but only if the export succeeded. Never throws: export
+ * is an audit concern, not something that should cost the caller their
+ * result after they already waited on the pipeline.
+ */
+async function exportAndPrune(
+	db: HeliosDb,
+	env: Env,
+	p_invoc_id: string,
+	retentionLimit: number,
+): Promise<void> {
+	try {
+		const rows = await getRunRows(db, p_invoc_id);
+		await exportRuns(getD1Db(env.DB), rows);
+		await pruneCompletedRuns(db, retentionLimit);
+	} catch (cause) {
+		console.error("d1 export failed:", describeError(cause));
+	}
+}
 /**
  * Fixed-order orchestrator: planner → validate → image generator.
  *
@@ -90,6 +113,8 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 
 		await completeImageRun(db, p_invoc_id, imageR2Key, imageCost);
 
+		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+
 		return {
 			p_invoc_id,
 			status: "completed",
@@ -107,6 +132,8 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
+
+		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
 
 		return {
 			p_invoc_id,
