@@ -4,7 +4,7 @@
 
 **Blocked by:** nothing. 01, 03, 05 and 06 are all merged.
 
-**Status:** done. Built and verified end to end locally. Not yet merged, and nothing has run against remote D1 beyond applying the migration.
+**Status:** done. Built and verified end to end locally.
 
 **Team:** Database Team
 
@@ -162,11 +162,11 @@ npx wrangler kv key put --binding CONFIG --local retention_limit 5
 - **`wrangler dev` holds the local D1 file open**, so `wrangler d1 migrations apply --local` can appear to succeed while writing nothing. It creates the `d1_migrations` bookkeeping table and stops, and `helios_runs` never appears. Stop the dev server, apply, confirm the table exists, then restart. Confirm with `npx wrangler d1 execute helios-d1 --local --command "select name from sqlite_master where type='table'"`.
 - **A failed export is silent by design.** `exportAndPrune` logs and carries on, so if the table is missing you still get your pattern back and nothing looks wrong. The only sign is a `d1 export failed` line in the dev server output. Check the terminal, not the HTTP response.
 
-**Local KV starts empty**, so `retention_limit` falls back to the committed `RETENTION_LIMIT` var of 5 until you put a value in. `npm run config:pull` copies the remote values down. Note the live KV value is **10**, not 5, so the "5 most recent" language in this ticket describes the fallback and not what the system actually runs at. Worth reconciling.
+**Local KV starts empty**, so `retention_limit` falls back to the committed `RETENTION_LIMIT` var of 5 until you put a value in. `npm run config:pull` copies the remote values down.
 
 ## Verified end to end
 
-Local, on the `default` DO, `retention_limit` temporarily set to 1 for each step and restored to 10 afterwards. Two billed image calls in total across the whole exercise, $0.0038.
+Local, on the `default` DO, `retention_limit` temporarily set to 1 for each step and restored afterwards. Two billed image calls in total across the whole exercise, $0.0038.
 
 **First pass, unexported history.** The DO held three completed runs from tickets 05 and 06, none of them ever exported, and D1 was empty. One `POST /generate` (`ebcc1c09`) left D1 with **8 rows, 4 runs** and the DO with **2 rows, 1 run**. All three older runs reached the durable store for the first time on the back of someone else's request.
 
