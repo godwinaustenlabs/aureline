@@ -66,7 +66,7 @@ function imageModelMetadata(config: HeliosConfig) {
  * Never throws. Export is an audit concern, not something that should cost the
  * caller their result after they already waited on the pipeline.
  */
-async function exportAndPrune(
+export async function exportAndPrune(
 	db: HeliosDb,
 	env: Env,
 	p_invoc_id: string,
@@ -96,21 +96,30 @@ async function exportAndPrune(
  *
  * Never throws. A failure comes back as `ok: false` carrying the cause, so the
  * caller decides what a failed image means for its own result.
+ *
+ * `metadataExtras` is merged over the image row's model metadata. `runPipeline`
+ * passes nothing; a resume passes its `resumed_from` and `attempt` markers,
+ * which have to reach this row because it is the one carrying `cost_usd` and
+ * `image_r2_key` and so the one every cost query reads (ticket 08, decision 15).
  */
-async function runImageStage(
+export async function runImageStage(
 	db: HeliosDb,
 	env: Env,
 	config: HeliosConfig,
 	p_invoc_id: string,
 	concept: string,
 	params: HeliosParams,
+	metadataExtras: Record<string, unknown> = {},
 ): Promise<ImageStageOutcome> {
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
 
 	try {
-		await startImageRun(db, p_invoc_id, concept, params, imageModelMetadata(config));
+		await startImageRun(db, p_invoc_id, concept, params, {
+			...imageModelMetadata(config),
+			...metadataExtras,
+		});
 
 		const image = await generateImage(params, config, env, p_invoc_id);
 		costUsd = image.cost_usd;
