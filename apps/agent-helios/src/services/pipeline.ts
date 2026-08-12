@@ -1,4 +1,6 @@
 import type { HeliosDb } from "../db/client";
+import { getD1Db } from "../db/client";
+import { exportRuns } from "../repository/d1.repository";
 import {
 	HeliosParamsSchema,
 	type HeliosParams,
@@ -16,6 +18,8 @@ import {
 	startImageRun,
 	completeImageRun,
 	failRunningRuns,
+	getSettledRows,
+	pruneCompletedRuns,
 } from "../repository/do.repository";
 
 type Stage = "persist" | "planner" | "validate" | "image";
@@ -35,6 +39,35 @@ function imageModelMetadata(config: HeliosConfig) {
 		// whenever config carries a steps value above Flux's cap.
 		steps: resolveSteps(config),
 	};
+}
+
+/**
+ * Copies every settled row in this DO into D1, then prunes the DO down to the
+ * retention limit — but only if the export succeeded.
+ *
+ * It exports the whole DO rather than just this invocation because pruning
+ * deletes from the whole DO. Exporting less than it prunes means a run whose
+ * own export failed and was swallowed here sits unexported until some later
+ * run's successful export prunes it away, losing it from both stores. Doing
+ * both over the same set makes the invariant exact: prune only ever runs once
+ * everything prunable is confirmed in D1.
+ *
+ * Never throws. Export is an audit concern, not something that should cost the
+ * caller their result after they already waited on the pipeline.
+ */
+async function exportAndPrune(
+	db: HeliosDb,
+	env: Env,
+	p_invoc_id: string,
+	retentionLimit: number,
+): Promise<void> {
+	try {
+		const rows = await getSettledRows(db);
+		await exportRuns(getD1Db(env.DB), rows);
+		await pruneCompletedRuns(db, retentionLimit);
+	} catch (cause) {
+		console.error(`d1 export failed for ${p_invoc_id}:`, describeError(cause));
+	}
 }
 
 /**
@@ -90,6 +123,8 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 
 		await completeImageRun(db, p_invoc_id, imageR2Key, imageCost);
 
+		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+
 		return {
 			p_invoc_id,
 			status: "completed",
@@ -107,6 +142,8 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
+
+		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
 
 		return {
 			p_invoc_id,
