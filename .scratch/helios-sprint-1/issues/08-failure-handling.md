@@ -187,7 +187,7 @@ if (!outcome.ok) throw outcome.cause; // falls into the catch that already exist
 
 `resumeRun` calls the same function and builds its own result from the same outcome.
 
-**Note for the reviewer: this is not a pure move.** The lines relocate, but `runPipeline` gains three lines it did not have, and an image failure now reaches the catch by an explicit `throw` rather than by propagating. Observable behaviour is identical, the structure shifts slightly. Review it as a small restructure, not as a rename.
+**Note for the reviewer: this is not a pure move.** The lines relocate, but `runPipeline` gains three lines it did not have, an image failure now reaches the catch by an explicit `throw` rather than by propagating, and one error label changed. Review it as a small restructure, not as a rename. The label change is written up under the work box below.
 
 **`runPipeline`'s own signature and observable behaviour do not change.** That is a hard constraint, not a preference: phase 1's tests are written against it and they are the safety net for this refactor. If the extraction changes what `runPipeline` does, the refactor is wrong.
 
@@ -209,29 +209,34 @@ The text row is written from `resume.ts`, not from inside `runImageStage`. `runP
 
 Ali Amir takes phase 1, the test suite. Maaz Bin Asif takes phase 2, the resume route, plus the two judgement calls.
 
-**Straight answer on whether you can work independently: mostly, but not completely, and it is one file.**
+**Straight answer on whether you can work independently: yes. The one thing that coupled you is already done and committed** (`8dc5dbf`).
 
-Ali's work is a new file, `src/services/pipeline.test.ts`. Maaz's is mostly new files: `services/resume.ts`, `services/resume.test.ts`, a schema in `shared-types`, routing in `index.ts` and `agent.ts`. None of those touch each other.
+`services/pipeline.ts` was the only file you both needed, because phase 2 could not call the image half until it was a function. That extraction is in, verified against a real run, and neither of you should have to touch the file again.
 
-**The one overlap is `services/pipeline.ts`.** Maaz needs the `runImageStage` extraction there. Ali needs the file stable while he writes tests against it, and will need to edit it if a test turns up a real bug.
+| | Ali Amir | Maaz Bin Asif |
+|---|---|---|
+| New files | `services/pipeline.test.ts` | `services/resume.ts`, `services/resume.test.ts` |
+| Edited files | none | `shared-types` schema, `index.ts`, `agent.ts` |
 
-**So do the extraction first, on its own, before either of you starts properly.** Pure move of existing lines, no behaviour change, maybe twenty minutes. Commit and push it, then you are clear of each other for the rest of the ticket. Same move as ticket 07's "do `getD1Db` first, everything imports it".
+Nothing overlaps. Start whenever you like, in either order.
 
-Three more things:
+Four things that are not blockers but are worth knowing:
 
-**Ali's tests are not a gate on Maaz, but they are the safety net.** Phase 2 refactors the file phase 1 tests. You do not have to wait for green, but if the suite is red when the refactor lands, nobody can tell whether the refactor broke it. Land the extraction before the tests exist, or after they are green. Not in the middle.
+**Ali, if a test turns up a real bug in `pipeline.ts`, that is the one case where you land back in Maaz's file.** Say so before you fix it rather than after, so a bug fix does not arrive in the middle of the resume work.
+
+**The extraction is not fully proven, and Ali's suite is what proves it.** The real run that checked it was a success case, so it covered the model call, R2, the D1 export and the cost. It never exercised a failure. The behaviour most at risk from restructuring is cost surviving a failure after the image has already billed, which is Ali's `image succeeded and a later step throws` box. **Worth writing that one early.** Until it exists, that guarantee holds by inspection only.
 
 **You review each other's phase.** Ali reviews the extraction and phase 2. Maaz reviews phase 1. Nobody ticks a review gate on their own work. Tickets 03 and 07 both had gates ticked by the person who wrote the code and both got unticked at review, which is the entire reason this sentence is here.
 
-**Ali, do the planner-throws case first.** It is the smallest end of the fake env and it forces the `AI.run` dispatch and the `createTestDb` wiring. Everything after is a variation on that setup.
+**Ali, do the planner-throws case first**, after the cost one. It is the smallest end of the fake env and it forces the `AI.run` dispatch and the `createTestDb` wiring. Everything after is a variation on that setup.
 
-**Maaz, settle the error-message judgement call early**, because it changes what strings Ali's tests assert on. It is the only place one of you can block the other.
+**Maaz, settle the error-message judgement call early**, because it changes what strings Ali's tests assert on. It is the only place left where one of you can block the other.
 
 ## Work
 
-### Do this first, together
+### Already done, the shared piece
 
-- [x] Extract `runImageStage` out of `runPipeline` in `services/pipeline.ts`, returning `ImageStageOutcome` per the shape above. `runPipeline`'s signature untouched. Commit and push on its own before either phase starts — **Maaz Bin Asif**, reviewed by **Ali Amir**. Done. `tsc` clean, 34 + 33 tests green, and one real run end to end (`a159d657`): completed, `cost_usd` 0.0019008, both rows in D1, image served back as 1,032,769 bytes of jpeg. **One behaviour change went with it, see below.**
+- [x] Extract `runImageStage` out of `runPipeline` in `services/pipeline.ts`, returning `ImageStageOutcome` per the shape above. `runPipeline`'s signature untouched. Its own commit, landed before either phase starts, so nothing else in this ticket is coupled — **Maaz Bin Asif**, reviewed by **Ali Amir**. Done in `8dc5dbf`. `tsc` clean, 34 + 33 tests green, and one real run end to end (`a159d657`): completed, `cost_usd` 0.0019008, both rows in D1, image served back as 1,032,769 bytes of jpeg. **One behaviour change went with it, see below.**
 
 **The one behaviour change in that commit, and it needs a reviewer's eye.** `startImageRun` used to run while `stage` was still `"validate"`, because `stage = "image"` was set on the next line down. So a failure opening the image row was reported as `validate: ...`. It now lives inside `runImageStage`, which is called after `stage = "image"`, so the same failure reports as `image: ...`.
 
