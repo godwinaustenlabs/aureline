@@ -2,8 +2,9 @@ import { Agent } from "agents";
 import { getDb } from "./db/client";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../drizzle/migrations";
-import { HeliosRequestSchema } from "@aureline/shared-types";
+import { HeliosRequestSchema, HeliosResumeRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
+import { resumeRun } from "./services/resume";
 import { firstIssueMessage } from "./utils";
 
 /**
@@ -26,7 +27,23 @@ export class HeliosAgent extends Agent<Env> {
 			return error("POST required", 405);
 		}
 
+		const url = new URL(request.url);
 		const body = await request.json().catch(() => undefined);
+		const db = getDb(this.ctx.storage);
+
+		if (url.pathname === "/resume") {
+			const parsed = HeliosResumeRequestSchema.safeParse(body);
+			if (!parsed.success) {
+				return error(firstIssueMessage(parsed.error), 400);
+			}
+
+			const outcome = await resumeRun(db, parsed.data.p_invoc_id, this.env, url.origin);
+			// A refusal never became an invocation: no rows, no model call, nothing
+			// billed. 409 rather than a `failed` result, which would claim a run
+			// happened. A run that did happen and failed still comes back as a 200.
+			return outcome.ok ? json(outcome.result) : error(outcome.reason, 409);
+		}
+
 		const parsed = HeliosRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			// A malformed request never became a pipeline invocation, so there is no
@@ -34,9 +51,7 @@ export class HeliosAgent extends Agent<Env> {
 			return error(firstIssueMessage(parsed.error), 400);
 		}
 
-		const db = getDb(this.ctx.storage);
-		const origin = new URL(request.url).origin;
-		const result = await runPipeline(db, parsed.data, this.env, origin);
+		const result = await runPipeline(db, parsed.data, this.env, url.origin);
 		return json(result);
 	}
 }

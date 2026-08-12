@@ -4,11 +4,11 @@
 
 **Phase 1, prove the failure behaviour.** A crash mid-pipeline leaves a record you can go and look at: the right rows marked `failed`, whatever succeeded before the crash kept, money already spent still recorded, and nothing quietly retrying the whole run.
 
-**Phase 2, make one of those failures recoverable.** A `POST /resume` route that takes a run whose planner succeeded and whose image failed, and runs just the image half again from the params already on disk. Half the cost of a fresh request, and the same params the caller already saw.
+**Phase 2, make one of those failures recoverable.** A `POST /resume` route that takes a run whose planner succeeded and whose image failed, and runs just the image half again from the params already on disk. It saves the planner call, about a third of a fresh request, and returns the same params the caller already saw.
 
 **Blocked by:** nothing. 03 and 07 are both merged (`e1f6938`).
 
-**Status:** ready to assign. The shared extraction is done and verified, so both phases start in parallel with no coupling left.
+**Status:** phase 1 open. Phase 2's code and unit tests are done on `feature/08-failure-handling-MaazBinAsif`; what is left there is the real forced-failure and resume run, which needs Ali's review either way.
 
 **Team:** Ali Amir (phase 1), Maaz Bin Asif (phase 2)
 
@@ -69,7 +69,7 @@ function fakeEnv(overrides: {
 
 Dispatch inside the single `run` mock on model name, since both stages share the binding. `@cf/openai/gpt-oss-120b` is the planner, `@cf/black-forest-labs/flux-1-schnell` the image model, both from `HeliosConfig`, so the test controls them.
 
-**The database.** Reuse `createTestDb()` from `do.repository.test.ts`. Import it or lift it into a shared helper, but do not stand up a third way of making a test database.
+**The database.** `createTestDb()` has been lifted out of `do.repository.test.ts` into `src/db/testDb.ts` and both suites import it from there. Do not stand up a third way of making a test database.
 
 **Assert on rows, not just the returned result.** Read `helios_runs` back and check `status`, `plannerParams` and `costUsd`. The result and the stored rows are two different things and a bug can get one right and the other wrong.
 
@@ -90,7 +90,7 @@ Dispatch inside the single `run` mock on model name, since both stages share the
 
 11. **One resume point only: the image half.** This route *is* the image stage's retry, per decision 2, manual because each call spends the expensive model. It never re-runs the planner. If the planner is what failed, that is a fresh `POST /generate`, and the route says so with a 409.
 
-12. **Resume takes `session_id` and `p_invoc_id`, both required.** `scopeKey` in `index.ts` picks the DO by session id (ADR-0005). A `p_invoc_id` alone cannot find the DO holding the run.
+12. **Resume takes `p_invoc_id` required and `session_id` optional**, exactly as `/generate` does. `scopeKey` in `index.ts` picks the DO by session id (ADR-0005), so the pair is what finds the run, but `session_id` is optional on `HeliosRequestSchema` and `scopeKey` already falls back to a DO named `default`. Requiring it on resume would make every run generated without one unreachable. One routing rule, not two.
 
 13. **A resume mints a new `p_invoc_id`, never reusing the old one.** Reusing overwrites the failure record phase 1 exists to preserve. And it does not work anyway: the failed rows are already in D1 via the catch's `exportAndPrune`, and `exportRuns` uses `onConflictDoNothing`, so whichever version landed first is what D1 keeps forever.
 
@@ -105,6 +105,8 @@ Dispatch inside the single `run` mock on model name, since both stages share the
     **Both rows.** The image row carries `cost_usd` and `image_r2_key`, so it is what every cost report reads. Mark only the text row and a query grouped on image rows cannot tell a retry from an original, which is the whole question the field answers.
 
     **`attempt` is an integer and not optional**, otherwise "was this a retry" means walking the chain backwards. Original: neither field. First retry: `attempt: 2`, `resumed_from` = the original. Second: `attempt: 3`, `resumed_from` = the **immediate parent**, not the root.
+
+    **How it reaches the image row.** `runImageStage` builds that row's metadata itself from `imageModelMetadata(config)`, so resume had no way in. It now takes a `metadataExtras` parameter defaulted to `{}`. `runPipeline` passes nothing and writes byte for byte what it wrote before.
 
 16. **It stays in `model_metadata` rather than becoming a column.** It is queryable, and we already depend on this column exactly this way: the planner neuron figures behind our cost estimates came out of it.
 
@@ -122,7 +124,9 @@ Dispatch inside the single `run` mock on model name, since both stages share the
 
 17. **Params are re-parsed coming out of the database.** They return as `unknown`. Run `HeliosParamsSchema.parse`. A row from an older schema version must fail loudly, not make a nonsense image.
 
-18. **Resume is guarded and refuses rather than guessing.** Proceed only when the run has a `completed` text row and no `completed` image row. Everything else is a 409 with a reason. A second image on a run that has one is a second charge and a second R2 object, so this guard is about money.
+18. **Resume is guarded and refuses rather than guessing.** Proceed only when the run has a `completed` text row and an image row that is `failed` or absent. Everything else is a 409 with its own reason. A second image on a run that has one is a second charge and a second R2 object, so this guard is about money.
+
+    **A `running` image row refuses too.** The guard as first written was "no `completed` image row", which a row still in flight passes, and resuming a concurrent invocation bills twice. Four refusals: run not found, planner never succeeded, image already completed, image still running. Stored params that no longer parse (17) refuse the same way, since nothing has been written or billed at that point either.
 
 19. **R2-saved-but-row-update-failed is out of scope.** Note for whoever picks it up: the key is deterministic, `patterns/{p_invoc_id}.jpg`, so a future recovery can probe R2 and patch the row without regenerating. Narrow window, and it adds a branch to an otherwise simple path.
 
@@ -143,14 +147,20 @@ type ImageStageOutcome =
 **Everything else for phase 2 is a new file, `services/resume.ts`:**
 
 ```ts
+export type ResumeOutcome =
+	| { ok: false; reason: string }        // 409, nothing written, nothing billed
+	| { ok: true;  result: HeliosResult };  // 200, settled either way
+
 export async function resumeRun(
 	db: HeliosDb, p_invoc_id: string, env: Env, origin: string,
-): Promise<HeliosResult>
+): Promise<ResumeOutcome>
 ```
 
-It reads the run with `getRunRows`, applies the decision 18 guard, re-parses params (17), mints a new id (13), writes the carried-over text row (14 and 15), then hands off to `runImageStage`. **The text row is written from `resume.ts`, not inside `runImageStage`** — `runPipeline` opens its own before the planner runs and must not get a second one.
+**Not a bare `HeliosResult`,** which has no room for a status code while decision 18 wants a 409 per reason. The split is: everything before the first write is a refusal, everything after it is a settled `HeliosResult`, so nothing that fails a precondition ever writes a junk run. Same union pattern as `ImageStageOutcome`, and no exceptions used for control flow.
 
-**The route.** `POST /resume`, body `{ session_id, p_invoc_id }`, validated by a new `HeliosResumeRequestSchema` in `@aureline/shared-types`. Routing mirrors `/generate` in `index.ts` including `scopeKey`. Returns a `HeliosResult`, so nothing downstream learns a second shape.
+It reads the run with `getRunRows`, applies the decision 18 guard, re-parses params (17), mints a new id (13), writes the carried-over text row (14 and 15), then hands off to `runImageStage`. **The text row is written from `resume.ts`, not inside `runImageStage`** — `runPipeline` opens its own before the planner runs and must not get a second one. It goes in through one new repository function, `insertResumedTextRun`, inserted already `completed` rather than opened and then settled, since there is no `running` phase without a planner call.
+
+**The route.** `POST /resume`, body `{ p_invoc_id, session_id? }`, validated by a new `HeliosResumeRequestSchema` in `@aureline/shared-types`. `index.ts` routes it through the same `scopeKey` branch as `/generate`. `agent.ts` maps `ok: false` to 409 and `ok: true` to 200, so the only shape leaving the Worker is still a `HeliosResult`.
 
 ## Who does what
 
@@ -158,8 +168,10 @@ It reads the run with `getRunRows`, applies the decision 18 guard, re-parses par
 
 | | Ali Amir | Maaz Bin Asif |
 |---|---|---|
-| New files | `services/pipeline.test.ts` | `services/resume.ts`, `services/resume.test.ts` |
-| Edited files | none | `shared-types` schema, `index.ts`, `agent.ts` |
+| New files | `services/pipeline.test.ts` | `services/resume.ts`, `services/resume.test.ts`, `db/testDb.ts` |
+| Edited files | none | `shared-types` schema, `index.ts`, `agent.ts`, `do.repository.ts`, `pipeline.ts` |
+
+**Two edits Ali will notice, both landed and both additive.** `runImageStage` has a seventh parameter, `metadataExtras`, defaulted to `{}`, so `runPipeline`'s call site and the metadata it writes are unchanged. `createTestDb` moved to `src/db/testDb.ts` and `do.repository.test.ts` now imports it, so `pipeline.test.ts` imports it from the same place.
 
 Four things that are not blockers:
 
@@ -169,7 +181,7 @@ Four things that are not blockers:
 
 **You review each other's phase.** Ali reviews the extraction and phase 2, Maaz reviews phase 1. Nobody ticks a gate on their own work. Tickets 03 and 07 both had gates ticked by their own implementer and both got unticked at review.
 
-**Maaz, settle the error-message judgement call early**, because it changes what strings Ali's tests assert on. It is the only place left where one of you blocks the other.
+**The error-message judgement calls are settled**, so nothing blocks Ali's assertions. One of them changed a message: a thrown model call now reads `model call failed after N attempt(s): ...` instead of `schema validation failed ...`. See the judgement-call boxes.
 
 ## Work
 
@@ -192,33 +204,47 @@ Four things that are not blockers:
 
 ### Phase 2, the resume route
 
-- [ ] `HeliosResumeRequestSchema` in `@aureline/shared-types`, both fields required. Decision 12 — **Maaz Bin Asif**
-- [ ] `services/resume.ts` with `resumeRun` per the shape above — **Maaz Bin Asif**
-- [ ] The decision 18 guard with a distinct 409 reason per case: run not found, planner never succeeded, image already completed. **Not one generic error.** The three mean different things, and the third is what stands between us and a double charge — **Maaz Bin Asif**
-- [ ] `POST /resume` routed in `index.ts` with the same `scopeKey` lookup as `/generate`, validated in `agent.ts` the same way — **Maaz Bin Asif**
-- [ ] No migration is generated. If you find yourself running `db:generate`, re-read decision 16 — **Maaz Bin Asif**
-- [ ] `services/resume.test.ts`, fake bindings: a resume produces a new `p_invoc_id`, reuses stored params exactly rather than re-planning, leaves the original failed rows untouched, and all three 409 cases refuse — **Maaz Bin Asif**
-- [ ] The planner is never called on a resume. Assert the `AI.run` mock saw only the image model. That is the entire point of the route and it is one assertion — **Maaz Bin Asif**
-- [ ] A resumed run has **two** rows, its text row `completed` with `cost_usd` null and `planner_skipped: true`. Decision 14 — **Maaz Bin Asif**
-- [ ] `resumed_from` and `attempt` on **both** rows of a resumed run and **neither** row of an original. Decision 15. A test checking only the text row leaves the real gap open — **Maaz Bin Asif**
-- [ ] A failed resume can itself be resumed. Chain two, assert `attempt` goes 2 then 3, each `resumed_from` points at its immediate parent not the root, and all three runs stay inspectable — **Maaz Bin Asif**
-- [ ] Run decision 16's `json_extract` query against local D1 after that chain and confirm it separates attempts from originals — **Maaz Bin Asif**
+Code and unit tests are done, unticked boxes are the ones needing a real run.
 
-### Judgement calls, both Maaz, both before Ali writes assertions
+- [x] `HeliosResumeRequestSchema` in `@aureline/shared-types`. `p_invoc_id` required, `session_id` optional. Decision 12 — **Maaz Bin Asif**
+- [x] `services/resume.ts` with `resumeRun` returning `ResumeOutcome` per the shape above — **Maaz Bin Asif**
+- [x] `insertResumedTextRun` in `do.repository.ts`, one insert of an already-settled row — **Maaz Bin Asif**
+- [x] The decision 18 guard with a distinct 409 reason per case: run not found, planner never succeeded, image already completed, image still running, stored params no longer valid. **Not one generic error.** They mean different things, and the third is what stands between us and a double charge — **Maaz Bin Asif**
+- [x] `POST /resume` routed in `index.ts` through the same `scopeKey` branch as `/generate`, validated in `agent.ts` the same way, `ok: false` mapped to 409 — **Maaz Bin Asif**
+- [x] No migration generated. `model_metadata` is a JSON column, decision 16 — **Maaz Bin Asif**
+- [x] `services/resume.test.ts`, fake bindings, 12 cases. Suite is 46 agent-helios plus 34 shared-utils, `tsc` clean — **Maaz Bin Asif**
+- [x] The planner is never called on a resume. Asserts the `AI.run` mock saw only the image model. That is the entire point of the route and it is one assertion — **Maaz Bin Asif**
+- [x] A resumed run has **two** rows, its text row `completed` with `cost_usd` null and `planner_skipped: true`. Decision 14 — **Maaz Bin Asif**
+- [x] `resumed_from` and `attempt` on **both** rows of a resumed run and **neither** row of an original. Decision 15. A test checking only the text row leaves the real gap open — **Maaz Bin Asif**
+- [x] A failed resume can itself be resumed. Chains two, `attempt` goes 2 then 3, each `resumed_from` points at its immediate parent not the root, all three runs stay inspectable — **Maaz Bin Asif**
+- [x] Cost survives a failure on the resume path too: the image billed, the R2 save threw, and `cost_usd` is non-null on both the result and the row — **Maaz Bin Asif**
+- [x] Run decision 16's `json_extract` query against local D1 and confirm it separates attempts from originals — **Maaz Bin Asif**
 
-- [ ] **The planner error message misattributes transport failures.** `getTextualModelOutput` throws `schema validation failed after N attempt(s)` from a catch that also swallows a thrown `ai.run`, so a network error or bad model name is recorded as a schema problem. That makes the record misleading, and an inspectable record is the point of this ticket. Distinguish them in the helper or accept it and write down why — **Maaz Bin Asif**
-- [ ] **How much of the message reaches the row.** `error` is `${stage}: ${describeError(cause)}`, and the helper's message carries a JSON dump of the last error plus a 200 character response excerpt. Confirm that is what we want per failed row, or cap it — **Maaz Bin Asif**
+**Real run, done, roughly $0.003.** Broke `image_model` in local KV, one `POST /generate` on session `ticket08-resume-check`:
+
+- `16755eba` came back `failed`, `error: "image: 5007: No such model @cf/does/not-exist or task"`, **params non-null**, `cost_usd` null. Decision 5's exact shape.
+- Restored `image_model`, `POST /resume` on it: new id `9f0da2cd`, `completed`, params identical, image served back at HTTP 200 `image/jpeg`, 854,938 bytes, `cost_usd` 0.0019008.
+- Read back through `readRun`, not a hand-typed query. Original: text `completed` holding the params, image `failed` recording `@cf/does/not-exist`, no marker on either row. Resumed: text `completed` with `cost_usd` null, `planner_skipped: true` and the marker; image `completed` with the real cost, the R2 key and the marker. Two rows each.
+- Decision 16's query across every image row in local D1: nine originals with `attempt` and `resumed_from` null, one row with `attempt: 2` pointing at `16755eba`. It separates them cleanly.
+- Refusals against the live route: same resume again **409**, "already has an image, and resuming would generate and charge for a second one", no second image billed. Unknown id 409. Right id under a different `session_id` 409, which is decision 12's routing working. Missing `p_invoc_id` 400.
+
+**Found while reading D1, not fixed here, not phase 2's to fix.** The text row's `cost_usd` column holds **neurons, not dollars**: `16755eba`'s text row reads `88.80419921875`. `runPipeline` passes `extractNeuronCost(...)` straight into `completeTextRun`'s `costUsd` parameter (`pipeline.ts:170`). Any report that sums `cost_usd` across modalities is off by four orders of magnitude on every text row. Decision 16's counting only reads image rows so it is unaffected, which is why this survived. Raise it in the group.
+
+### Judgement calls, both Maaz, both settled
+
+- [x] **The planner error message misattributed transport failures.** `getTextualModelOutput` threw `schema validation failed after N attempt(s)` from a catch that also swallowed a thrown `ai.run`, so a bad model name or a network error was recorded as a schema problem, and `JSON.stringify` renders an `Error` as `{}`, so it carried no detail at all. **Fixed rather than documented**, because an inspectable record is the point of this ticket, and because the forced-failure step below produces exactly this case. The loop now tracks which kind of failure the last attempt was and throws `model call failed after N attempt(s): <message>` for a thrown call. Covered by a new test in `getTextualModelOutput.test.ts`. **Ali, this changes what a planner-failure row says**, so assert on `/model call failed/` for a thrown call and `/schema validation failed/` for drift — **Maaz Bin Asif**
+- [x] **How much of the message reaches the row. Accepted as is, no cap.** The verbose branch is now only schema drift, which is the one case where you need to see what the model actually returned, and it is already bounded: the Zod issues plus a 200 character response excerpt. The transport branch, which is the common one and was the unbounded-looking one, is now a single line. `planner_params` on the same row is a larger blob than any of this — **Maaz Bin Asif**
 
 ### Review gates
 
 - [ ] `npx tsc --noEmit` clean and the full suite green from the repo root — **Ali Amir**
-- [ ] One real forced failure end to end, failed rows reaching D1 with the right statuses, read back with `readRun` not a hand-typed query. Same gate as ticket 07 — **Maaz Bin Asif** (reviews phase 1)
-- [ ] One real resume end to end per the steps below, including the second-attempt 409 — **Ali Amir** (reviews phase 2)
+- [x] One real forced failure end to end, failed rows reaching D1 with the right statuses, read back with `readRun` not a hand-typed query. Same gate as ticket 07 — **Maaz Bin Asif** (reviews phase 1). Done on `16755eba`, evidence above. This demonstrates the behaviour; it does not review Ali's suite, which is still to come.
+- [ ] One real resume end to end per the steps below, including the second-attempt 409 — **Ali Amir** (reviews phase 2). The run has been done and the evidence is recorded above; this box is Ali confirming it, not repeating it. **Do not re-run the resume to check** — `16755eba`'s image row is still `failed`, so resuming it again is allowed by design and would bill another image.
 - [ ] No box ticked on a green unit test alone where a real run was asked for, and nobody ticks a gate on their own phase. Tickets 03 and 07 both had gates ticked without being demonstrated — **both**
 
 ## Verification without burning budget
 
-Every `POST /generate` is a real planner call plus a real image call, about $0.0019. **Do not generate failures by generating runs. Point config at something that cannot work.**
+Every `POST /generate` is a real planner call plus a real image call. **Measured, not estimated:** the planner is about 89 neurons, roughly $0.001, and the image is $0.0019008 from the gateway log, so a full generate is about $0.0029 and a resume is about $0.0019. **Do not generate failures by generating runs. Point config at something that cannot work.**
 
 **Planner failure, free:**
 
@@ -238,13 +264,13 @@ A bare string is fine, `prepareModelValue` wraps anything not starting with `{` 
 
 1. Put `image_model` back to Flux, leave `text_model` correct.
 2. `POST /resume` with that `session_id` and `p_invoc_id`.
-3. Costs **one image call and no planner call**, about $0.0009. Confirm in the log the planner never ran.
+3. Costs **one image call and no planner call**, about $0.0019. Confirm in the log the planner never ran.
 4. Confirm the original failed rows are untouched and the new run carries `resumed_from` and `attempt: 2` on **both** rows.
 5. Send the same resume again and confirm 409 rather than a second image. If it generates, you have found the bug decision 18 exists to prevent, and it is a billing bug.
 
 **Put config back:** `npm run config:pull`. Local KV starts empty and falls back to the committed vars, so a half-restored state looks fine right up until it does not.
 
-**Budget: 1 planner call for phase 1 plus 1 image call for phase 2**, about $0.002, and only if you reuse phase 1's failure as phase 2's input.
+**Budget: 1 planner call for phase 1 plus 1 image call for phase 2**, about $0.003, and only if you reuse phase 1's failure as phase 2's input. That is what phase 2 actually spent.
 
 ## Two things that will waste your afternoon
 

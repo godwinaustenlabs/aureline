@@ -55,6 +55,24 @@ export const HeliosRequestSchema = z.object({
 
 export type HeliosRequest = z.infer<typeof HeliosRequestSchema>;
 
+/**
+ * A request to run the image half of an existing invocation again, using the
+ * params already on disk instead of calling the planner.
+ *
+ * `p_invoc_id` names the run to resume. `session_id` is optional and works
+ * exactly as it does on `HeliosRequestSchema`: it picks the Durable Object, and
+ * a request without one lands on the same shared instance a generate without
+ * one did, so anything that can be generated can be resumed.
+ *
+ * The resumed run gets its own new `p_invoc_id`; this one is never reused.
+ */
+export const HeliosResumeRequestSchema = z.object({
+  p_invoc_id: z.string().trim().min(1).max(128),
+  session_id: z.string().trim().min(1).max(128).optional(),
+});
+
+export type HeliosResumeRequest = z.infer<typeof HeliosResumeRequestSchema>;
+
 export interface HeliosResult {
   p_invoc_id: string;
   status: HeliosStatus;

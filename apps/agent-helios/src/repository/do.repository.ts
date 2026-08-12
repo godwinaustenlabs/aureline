@@ -55,6 +55,35 @@ export async function completeTextRun(
 }
 
 /**
+ * The text row of a resumed run, inserted already settled.
+ *
+ * A resume never calls the planner, so this row has no `running` phase to open
+ * and no cost to record — it exists because ADR-0001 says one invocation is two
+ * rows, and a resume that wrote only an image row would leave anything reading
+ * D1 with half a run.
+ *
+ * `costUsd` is left null deliberately. Copying the original planner's cost here
+ * would bill the same planner call twice across our cost reports.
+ */
+export async function insertResumedTextRun(
+	db: HeliosDb,
+	pInvocId: string,
+	userPrompt: string,
+	params: HeliosParams,
+	modelMetadata: ModelMetadata,
+): Promise<void> {
+	await db.insert(heliosRuns).values({
+		pInvocId,
+		modality: "text",
+		status: "completed",
+		userPrompt,
+		plannerParams: params,
+		modelMetadata,
+		completedAt: new Date(),
+	});
+}
+
+/**
  * Opens the image row as `running`, duplicating planner_params from its text
  * sibling rather than requiring a join (ADR-0001).
  */
