@@ -25,6 +25,17 @@ import {
 type Stage = "persist" | "planner" | "validate" | "image";
 
 /**
+ * What the image stage reports back to whoever called it.
+ *
+ * The cost rides on **both** branches deliberately. The model bills before the
+ * R2 save and the row update run, so a caller that only learned the cost on
+ * success would record a spent image as having cost nothing.
+ */
+type ImageStageOutcome =
+	| { ok: true; imageR2Key: string; costUsd: number | null }
+	| { ok: false; cause: unknown; costUsd: number | null };
+
+/**
  * The image row's metadata, built from the config the run will actually use
  * rather than from literals — a hardcoded model name here would record a model
  * that was never called once `image_model` is changed in KV.
@@ -71,6 +82,50 @@ async function exportAndPrune(
 }
 
 /**
+ * Everything from the image row opening to the image row settling: the row, the
+ * model call, the R2 save, and the row update.
+ *
+ * It exists as its own function only so the resume route can enter the pipeline
+ * here, with params read back from storage instead of from the planner. Keeping
+ * one copy of the image path means a change to how images are made lands in one
+ * place rather than two.
+ *
+ * **Builds no `HeliosResult`.** Both callers track their own `stage` and
+ * `params` and shape their own result, so result building stays whole in one
+ * place per caller instead of being split across two functions.
+ *
+ * Never throws. A failure comes back as `ok: false` carrying the cause, so the
+ * caller decides what a failed image means for its own result.
+ */
+async function runImageStage(
+	db: HeliosDb,
+	env: Env,
+	config: HeliosConfig,
+	p_invoc_id: string,
+	concept: string,
+	params: HeliosParams,
+): Promise<ImageStageOutcome> {
+	// Assigned the moment the model returns, so it is already set if the R2 save
+	// or the row update throws after the call has billed.
+	let costUsd: number | null = null;
+
+	try {
+		await startImageRun(db, p_invoc_id, concept, params, imageModelMetadata(config));
+
+		const image = await generateImage(params, config, env, p_invoc_id);
+		costUsd = image.cost_usd;
+
+		const imageR2Key = await savePatternImage(env.PATTERNS, p_invoc_id, image.image, image.contentType);
+
+		await completeImageRun(db, p_invoc_id, imageR2Key, costUsd);
+
+		return { ok: true, imageR2Key, costUsd };
+	} catch (cause) {
+		return { ok: false, cause, costUsd };
+	}
+}
+
+/**
  * Fixed-order orchestrator: planner → validate → image generator.
  *
  * Never throws. Every path — including a stage blowing up, or DO storage
@@ -111,17 +166,18 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		const neurons = extractNeuronCost(planned.usage);
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
-		// Planner succeeded — settle the text row, then open the image row.
+		// Planner succeeded — settle the text row before the image row opens.
 		await completeTextRun(db, p_invoc_id, params, textModelMetadata, neurons);
-		await startImageRun(db, p_invoc_id, req.concept, params, imageModelMetadata(config));
 
 		stage = "image";
-		const image = await generateImage(params, config, env, p_invoc_id);
-		imageCost = image.cost_usd;
+		const outcome = await runImageStage(db, env, config, p_invoc_id, req.concept, params);
 
-		const imageR2Key = await savePatternImage(env.PATTERNS, p_invoc_id, image.image, image.contentType);
-
-		await completeImageRun(db, p_invoc_id, imageR2Key, imageCost);
+		// Recorded before anything can throw, so the catch below reports what the
+		// image actually cost rather than null.
+		imageCost = outcome.costUsd;
+		if (!outcome.ok) {
+			throw outcome.cause;
+		}
 
 		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
 
@@ -129,7 +185,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			p_invoc_id,
 			status: "completed",
 			params,
-			image_url: `${origin}/images/${imageR2Key}`,
+			image_url: `${origin}/images/${outcome.imageR2Key}`,
 			cost_usd: imageCost,
 			error: null,
 		};
