@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import type { HeliosDb } from "../db/client";
 import { heliosRuns, type HeliosRun, type NewHeliosRun } from "../db/schema";
@@ -108,9 +108,24 @@ export async function failRunningRuns(
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
 }
 
-/** The rows for one invocation, for handing to the exporter. */
+/** The rows for one invocation. */
 export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<HeliosRun[]> {
 	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+}
+
+/**
+ * Every row in this DO that has reached a terminal status, for handing to the
+ * exporter. The whole DO rather than one invocation, because pruning deletes
+ * from the whole DO: exporting less than it prunes is how a run that failed to
+ * export earlier gets deleted later by someone else's successful export.
+ *
+ * `running` rows are excluded deliberately. One DO serves one session
+ * (ADR-0005) and two overlapping invocations can leave a half-written row
+ * here. `exportRuns` never overwrites a row once it lands, so exporting one
+ * early would freeze null params and a null cost into D1 permanently.
+ */
+export async function getSettledRows(db: HeliosDb): Promise<HeliosRun[]> {
+	return db.select().from(heliosRuns).where(ne(heliosRuns.status, "running"));
 }
 
 /**
@@ -118,9 +133,18 @@ export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<Helios
  * Failed runs are never touched. Returns how many runs were deleted.
  */
 export async function pruneCompletedRuns(db: HeliosDb, retentionLimit: number): Promise<number> {
-	const allRows = await db.select().from(heliosRuns);
+	// Only the three fields the grouping below actually reads. Selecting the
+	// whole row would drag user_prompt and both JSON blobs across on every
+	// request, and this scan only grows: failed runs are never pruned.
+	const allRows = await db
+		.select({
+			pInvocId: heliosRuns.pInvocId,
+			status: heliosRuns.status,
+			createdAt: heliosRuns.createdAt,
+		})
+		.from(heliosRuns);
 
-	const byRun = new Map<string, HeliosRun[]>();
+	const byRun = new Map<string, (typeof allRows)[number][]>();
 	for (const row of allRows) {
 		const existing = byRun.get(row.pInvocId);
 		if (existing) {

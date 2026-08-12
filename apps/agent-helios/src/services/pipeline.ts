@@ -18,7 +18,7 @@ import {
 	startImageRun,
 	completeImageRun,
 	failRunningRuns,
-	getRunRows,
+	getSettledRows,
 	pruneCompletedRuns,
 } from "../repository/do.repository";
 
@@ -40,11 +40,20 @@ function imageModelMetadata(config: HeliosConfig) {
 		steps: resolveSteps(config),
 	};
 }
+
 /**
- * Copies this invocation's rows into D1, then prunes the DO down to the
- * retention limit — but only if the export succeeded. Never throws: export
- * is an audit concern, not something that should cost the caller their
- * result after they already waited on the pipeline.
+ * Copies every settled row in this DO into D1, then prunes the DO down to the
+ * retention limit — but only if the export succeeded.
+ *
+ * It exports the whole DO rather than just this invocation because pruning
+ * deletes from the whole DO. Exporting less than it prunes means a run whose
+ * own export failed and was swallowed here sits unexported until some later
+ * run's successful export prunes it away, losing it from both stores. Doing
+ * both over the same set makes the invariant exact: prune only ever runs once
+ * everything prunable is confirmed in D1.
+ *
+ * Never throws. Export is an audit concern, not something that should cost the
+ * caller their result after they already waited on the pipeline.
  */
 async function exportAndPrune(
 	db: HeliosDb,
@@ -53,13 +62,14 @@ async function exportAndPrune(
 	retentionLimit: number,
 ): Promise<void> {
 	try {
-		const rows = await getRunRows(db, p_invoc_id);
+		const rows = await getSettledRows(db);
 		await exportRuns(getD1Db(env.DB), rows);
 		await pruneCompletedRuns(db, retentionLimit);
 	} catch (cause) {
-		console.error("d1 export failed:", describeError(cause));
+		console.error(`d1 export failed for ${p_invoc_id}:`, describeError(cause));
 	}
 }
+
 /**
  * Fixed-order orchestrator: planner → validate → image generator.
  *
