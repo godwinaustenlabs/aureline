@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
-import { createTestDb, type TestDb } from "../db/testDb";
+import { createTestDb } from "../repository/test-db";
 import {
 	completeImageRun,
 	completeTextRun,
@@ -11,6 +11,8 @@ import {
 	startTextRun,
 } from "../repository/do.repository";
 import { resumeRun } from "./resume";
+
+type TestDb = ReturnType<typeof createTestDb>;
 
 const TEXT_MODEL = "@cf/openai/gpt-oss-120b";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";

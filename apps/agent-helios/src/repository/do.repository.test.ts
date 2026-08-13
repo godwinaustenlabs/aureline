@@ -1,23 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { heliosRuns } from "../db/schema";
-import { createTestDb } from "../db/testDb";
 import { getRunRows, getSettledRows, pruneCompletedRuns } from "./do.repository";
 import { exportRuns, readRun } from "./d1.repository";
-
-/** Inserts one row directly, bypassing the do.repository write helpers so
- * each test can set up exact created_at ordering and status combinations. */
-async function insertRow(
-	db: ReturnType<typeof createTestDb>,
-	overrides: Partial<typeof heliosRuns.$inferInsert> & { pInvocId: string; modality: "text" | "image" },
-) {
-	await db.insert(heliosRuns).values({
-		status: "completed",
-		userPrompt: "a pattern",
-		plannerParams: {},
-		modelMetadata: {},
-		...overrides,
-	});
-}
+import { createTestDb, insertRow } from "./test-db";
 
 describe("pruneCompletedRuns", () => {
 	let db: ReturnType<typeof createTestDb>;

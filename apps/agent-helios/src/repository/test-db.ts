@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
-import * as schema from "./schema";
+import * as schema from "../db/schema";
+import { heliosRuns } from "../db/schema";
 
 /**
  * A real in-memory SQLite database behind the same Drizzle schema the DO and
@@ -13,8 +14,8 @@ import * as schema from "./schema";
  * whose runtime is Workers and never uses SQLite from Node at all. Requires
  * Node 24, which the root `engines` field declares.
  *
- * Test-only, and deliberately not a `.test.ts` file so every suite can import
- * it. Nothing under `src/` that ships imports it, so it never reaches a bundle.
+ * Lifted out of `do.repository.test.ts` so every suite that needs a database
+ * (ticket 08's pipeline and resume tests included) shares one definition.
  */
 export function createTestDb() {
 	const sqlite = new DatabaseSync(":memory:");
@@ -56,4 +57,17 @@ export function createTestDb() {
 	);
 }
 
-export type TestDb = ReturnType<typeof createTestDb>;
+/** Inserts one row directly, bypassing the do.repository write helpers so
+ * each test can set up exact created_at ordering and status combinations. */
+export async function insertRow(
+	db: ReturnType<typeof createTestDb>,
+	overrides: Partial<typeof heliosRuns.$inferInsert> & { pInvocId: string; modality: "text" | "image" },
+) {
+	await db.insert(heliosRuns).values({
+		status: "completed",
+		userPrompt: "a pattern",
+		plannerParams: {},
+		modelMetadata: {},
+		...overrides,
+	});
+}
