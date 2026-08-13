@@ -200,7 +200,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		// on this binding, so the image stage would overwrite it. Real dollars, so
 		// `cost_usd` means the same thing on both rows. The provider's neuron
 		// figure is not lost, it rides in `usage` on the metadata below.
-		const textCostUsd = await readGatewayCost(env);
+		const textCostUsd = await readGatewayCost(env, "planner");
 
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);

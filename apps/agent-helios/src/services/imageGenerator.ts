@@ -80,7 +80,7 @@ export async function generateImage(
 		}
 	);
 
-	return { image, contentType, cost_usd: await readGatewayCost(env) };
+	return { image, contentType, cost_usd: await readGatewayCost(env, "image") };
 }
 
 /**
