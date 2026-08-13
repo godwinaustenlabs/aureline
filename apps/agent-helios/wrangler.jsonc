@@ -92,7 +92,11 @@
 		// fallback default — the live value is CONFIG:retention_limit in KV
 		"RETENTION_LIMIT": "5",
 		// fallback default — the live value is CONFIG:max_retries in KV
-		"MAX_RETRIES": "2"
+		"MAX_RETRIES": "2",
+		// fallback default — the live value is CONFIG:max_resume_attempts in KV.
+		// How many times one brief may be resumed, so 3 is an original plus three
+		// retries. Every retry spends the image model.
+		"MAX_RESUME_ATTEMPTS": "3"
 	},
 
 	"observability": {

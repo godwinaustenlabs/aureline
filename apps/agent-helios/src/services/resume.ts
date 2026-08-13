@@ -1,7 +1,12 @@
 import { HeliosParamsSchema, type HeliosResult } from "@aureline/shared-types";
 import type { HeliosDb } from "../db/client";
 import type { HeliosRun } from "../db/schema";
-import { failRunningRuns, getRunRows, insertResumedTextRun } from "../repository/do.repository";
+import {
+	countResumeAttempts,
+	failRunningRuns,
+	getRunRows,
+	insertResumedTextRun,
+} from "../repository/do.repository";
 import { describeConfig, resolveConfig } from "../config";
 import { describeError, firstIssueMessage } from "../utils";
 import { exportAndPrune, runImageStage } from "./pipeline";
@@ -75,11 +80,29 @@ export async function resumeRun(
 	console.log(describeConfig(config));
 
 	const parent = parentMetadata(textRow);
+
+	// The original this brief started from. Inherited unchanged down the chain, so
+	// every attempt at one concept shares it however deep or wide the retries go.
+	const root = parent.root ?? p_invoc_id;
+
+	// The money guard. `attempt` cannot do this job: it is depth from the
+	// original, so resuming the same failed run ten times gives ten siblings all
+	// reading `attempt: 2` and a cap on it would never bite. Counting by root
+	// counts what was actually spent on this concept.
+	const alreadySpent = await countResumeAttempts(db, root);
+	if (alreadySpent >= config.maxResumeAttempts) {
+		return {
+			ok: false,
+			reason: `this brief has already been resumed ${alreadySpent} times, the limit is ${config.maxResumeAttempts}. Send a new POST /generate if it is still worth pursuing`,
+		};
+	}
+
 	const newInvocId = crypto.randomUUID();
 
-	// `resumed_from` points at the immediate parent, not the root of the chain, so
-	// a resume of a resume reads back as one more step rather than a fork.
-	const marker = { resumed_from: p_invoc_id, attempt: parent.attempt + 1 };
+	// `resumed_from` points at the immediate parent, not the root, so a resume of
+	// a resume reads back as one more step rather than a fork. `root` is what
+	// makes counting one query instead of a walk back up the chain.
+	const marker = { root, resumed_from: p_invoc_id, attempt: parent.attempt + 1 };
 
 	// Held outside the try for the same reason `runPipeline` holds it: the image
 	// call bills before the R2 save and the row update, so a failure in either
@@ -153,11 +176,23 @@ export async function resumeRun(
  * An original run carries no `attempt`, which is what makes it an original: it
  * counts as attempt 1, so the first resume is attempt 2.
  */
-function parentMetadata(textRow: HeliosRun): { model: string | undefined; attempt: number } {
-	const metadata = (textRow.modelMetadata ?? {}) as { model?: unknown; attempt?: unknown };
+function parentMetadata(textRow: HeliosRun): {
+	model: string | undefined;
+	attempt: number;
+	root: string | undefined;
+} {
+	const metadata = (textRow.modelMetadata ?? {}) as {
+		model?: unknown;
+		attempt?: unknown;
+		root?: unknown;
+	};
 
 	return {
 		model: typeof metadata.model === "string" ? metadata.model : undefined,
 		attempt: typeof metadata.attempt === "number" ? metadata.attempt : 1,
+		// Absent on an original, and on any run written before the root existed.
+		// The caller falls back to the parent's own id, which is correct for an
+		// original and starts a fresh count for a legacy chain.
+		root: typeof metadata.root === "string" ? metadata.root : undefined,
 	};
 }

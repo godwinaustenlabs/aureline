@@ -168,6 +168,31 @@ export async function failRunningRuns(
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
 }
 
+/**
+ * How many times this brief has already been resumed, counted over the image
+ * rows carrying its `root`.
+ *
+ * Image rows because they are the ones that spend money, and a cap on retries
+ * is a cap on spend. Original runs carry no `root`, so the count is resumes
+ * only: a configured 3 means an original plus three retries rather than two.
+ *
+ * Counted over what this Durable Object still holds, not all time. That is
+ * accurate where it matters: failed runs are never pruned, so failed attempts
+ * persist, and a successful resume ends the chain anyway because the guard
+ * refuses a run that already has an image.
+ *
+ * Filtered in memory rather than through `json_extract` because a DO holds a
+ * handful of rows and Drizzle hands the JSON column back already parsed.
+ */
+export async function countResumeAttempts(db: HeliosDb, root: string): Promise<number> {
+	const rows = await db
+		.select({ modelMetadata: heliosRuns.modelMetadata })
+		.from(heliosRuns)
+		.where(eq(heliosRuns.modality, "image"));
+
+	return rows.filter((row) => (row.modelMetadata as { root?: unknown } | null)?.root === root).length;
+}
+
 /** The rows for one invocation. */
 export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<HeliosRun[]> {
 	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));

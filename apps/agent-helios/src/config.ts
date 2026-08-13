@@ -38,8 +38,14 @@ export interface HeliosConfig {
 	imageModel: ImageModelConfig;
 	maxRetries: number;
 	retentionLimit: number;
+	/**
+	 * How many times one brief may be resumed. Counts resumes only, so 3 means
+	 * an original plus three retries. Every retry spends the image model, so this
+	 * is the ceiling on what a single concept can cost.
+	 */
+	maxResumeAttempts: number;
 	/** Per-field provenance, for the log line. */
-	source: Record<"textModel" | "imageModel" | "maxRetries" | "retentionLimit", ConfigSource>;
+	source: Record<"textModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts", ConfigSource>;
 }
 
 /** How long the edge may serve a cached KV read, in seconds.
@@ -145,6 +151,18 @@ const FIELDS = [
 		schema: z.coerce.number().int().min(1).max(100),
 		prepare: (raw: string): unknown => raw,
 		fromVar: (env: Env): unknown => numberFromVar(env.RETENTION_LIMIT, "RETENTION_LIMIT", 5),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "max_resume_attempts",
+		field: "maxResumeAttempts",
+		var: "MAX_RESUME_ATTEMPTS",
+		// Capped at 20 rather than left open: this is the number of times one
+		// concept may spend the image model, so a fat-fingered dashboard edit
+		// should not be able to authorise an unbounded bill.
+		schema: z.coerce.number().int().min(1).max(20),
+		prepare: (raw: string): unknown => raw,
+		fromVar: (env: Env): unknown => numberFromVar(env.MAX_RESUME_ATTEMPTS, "MAX_RESUME_ATTEMPTS", 3),
 		describe: (value: unknown) => String(value),
 	},
 ] as const;

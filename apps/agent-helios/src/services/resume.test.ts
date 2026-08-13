@@ -64,7 +64,7 @@ function fakeD1(): D1Database {
  * Same shape as `imageGenerator.test.ts`'s helper, widened because resume
  * touches storage as well as the model.
  */
-function fakeEnv(overrides: { imageError?: Error } = {}) {
+function fakeEnv(overrides: { imageError?: Error; maxResumeAttempts?: number } = {}) {
 	const run = vi.fn(async (_model: string) => {
 		if (overrides.imageError) throw overrides.imageError;
 		return { image: BASE64 };
@@ -85,6 +85,7 @@ function fakeEnv(overrides: { imageError?: Error } = {}) {
 					["image_model", IMAGE_MODEL],
 					["max_retries", "2"],
 					["retention_limit", "5"],
+					["max_resume_attempts", String(overrides.maxResumeAttempts ?? 3)],
 				]),
 		},
 	} as unknown as Env;
@@ -131,6 +132,9 @@ describe("resumeRun", () => {
 
 	beforeEach(async () => {
 		db = createTestDb();
+		// Drains any queued `...Once` value and restores the live delegate, so a
+		// test that fails before consuming its queue cannot leak it into the next.
+		vi.mocked(startImageRun).mockReset();
 		await seedImageFailure(db, "original-1");
 	});
 
@@ -258,6 +262,73 @@ describe("resumeRun", () => {
 
 		await pruneCompletedRuns(db as never, 0);
 		expect((await rowsOf(db, outcome.result.p_invoc_id)).all).toHaveLength(2);
+	});
+
+	it("stamps the original's id as the root on both rows", async () => {
+		const { env } = fakeEnv();
+
+		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected a run");
+
+		const { all } = await rowsOf(db, outcome.result.p_invoc_id);
+		for (const row of all) {
+			expect(metadata(row).root).toBe("original-1");
+		}
+	});
+
+	it("keeps one root across a whole chain, however deep it goes", async () => {
+		// `attempt` is depth and `resumed_from` is the immediate parent, so neither
+		// answers "how much has this concept cost". `root` does, in one query.
+		const failing = fakeEnv({ imageError: new Error("model unavailable") });
+		const first = await resumeRun(db as never, "original-1", failing.env, "http://localhost");
+		if (!first.ok) throw new Error("expected a run");
+
+		const second = await resumeRun(db as never, first.result.p_invoc_id, fakeEnv().env, "http://localhost");
+		if (!second.ok) throw new Error("expected a run");
+
+		const secondRows = await rowsOf(db, second.result.p_invoc_id);
+		for (const row of secondRows.all) {
+			expect(metadata(row).root).toBe("original-1");
+			expect(metadata(row).resumed_from).toBe(first.result.p_invoc_id);
+			expect(metadata(row).attempt).toBe(3);
+		}
+	});
+
+	it("refuses once the brief has used up its resume attempts", async () => {
+		// Two failed resumes at a limit of two, so the third must refuse. Without
+		// this, a client looping on a failed run bills an image every time.
+		for (let i = 0; i < 2; i++) {
+			const { env } = fakeEnv({ imageError: new Error("model unavailable"), maxResumeAttempts: 2 });
+			const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+			if (!outcome.ok) throw new Error(`resume ${i + 1} should have been allowed`);
+			expect(outcome.result.status).toBe("failed");
+		}
+
+		const { env, run } = fakeEnv({ maxResumeAttempts: 2 });
+		const refused = await resumeRun(db as never, "original-1", env, "http://localhost");
+
+		expect(refused.ok).toBe(false);
+		if (refused.ok) return;
+		expect(refused.reason).toMatch(/already been resumed 2 times, the limit is 2/);
+		// The point of the guard: nothing was spent.
+		expect(run).not.toHaveBeenCalled();
+	});
+
+	it("counts siblings, not just depth, so retrying the same run repeatedly is capped", async () => {
+		// Every one of these resumes the same parent, so they all read attempt 2.
+		// A cap on `attempt` would never fire; a cap on root does.
+		for (let i = 0; i < 2; i++) {
+			const { env } = fakeEnv({ imageError: new Error("model unavailable"), maxResumeAttempts: 2 });
+			await resumeRun(db as never, "original-1", env, "http://localhost");
+		}
+
+		const attempts = (await db.select().from(heliosRuns))
+			.filter((row) => row.modality === "image")
+			.map((row) => (row.modelMetadata as { attempt?: number }).attempt);
+		expect(attempts.filter((a) => a === 2)).toHaveLength(2);
+
+		const refused = await resumeRun(db as never, "original-1", fakeEnv({ maxResumeAttempts: 2 }).env, "http://localhost");
+		expect(refused.ok).toBe(false);
 	});
 
 	it("can itself be resumed, chaining attempt and pointing at the immediate parent", async () => {
