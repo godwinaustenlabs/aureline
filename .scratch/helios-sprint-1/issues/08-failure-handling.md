@@ -8,7 +8,9 @@
 
 **Blocked by:** nothing. 03 and 07 are both merged (`e1f6938`).
 
-**Status:** phase 1 open. Phase 2's code and unit tests are done on `feature/08-failure-handling-MaazBinAsif`; what is left there is the real forced-failure and resume run, which needs Ali's review either way.
+**Status:** both phases delivered and merged onto `feature/08-failure-handling`. `tsc` clean, 59 agent-helios and 34 shared-utils tests green, both real runs done. Two boxes left, both Ali reviewing work that is not his own: the failed-image-row fix, and the resume evidence.
+
+**Decisions from this ticket and 07 are now documented** outside the sprint folder, since ticket files are not where anyone looks in six months: ADR-0009 (retry policy is per stage), ADR-0010 (export the whole DO before pruning any of it), and `docs/helios-runs-conventions.md` (how to read the audit table, including the counting definitions and the `cost_usd` warning).
 
 **Team:** Ali Amir (phase 1), Maaz Bin Asif (phase 2)
 
@@ -193,14 +195,26 @@ Four things that are not blockers:
 
 ### Phase 1, failure behaviour
 
-- [ ] `src/services/pipeline.test.ts` exists, using the fake `AI` binding and `createTestDb`. No live model call in it — **Ali Amir** (owns the file)
-- [ ] **Image billed, then a later step throws** (R2 save or row update): `cost_usd` non-null on both the failed result and the row. Decision 6, real money, and the one behaviour the extraction could have broken. **Write this first** — **Ali Amir**
-- [ ] Planner throws: one row, `modality: text`, `status: failed`, `completedAt` set, no image row ever opened. Result is `failed`, `params: null`, `image_url: null`, `error` starting `planner:` — **Ali Amir**
-- [ ] Planner returns a shape failing `HeliosParamsSchema`: fails at the **validate** stage, `error` starts `validate:`. **Note:** `tools.ts` already passes `HeliosParamsSchema` into `getTextualModelOutput`, which validates and retries there, so `pipeline.ts`'s re-parse cannot fail through the real path. It is deliberate layering, `planConcept` returns `unknown` so the pipeline trusts nothing. Fake the planner return directly and do not hunt for a production path, there is not one — **Ali Amir**
-- [ ] **Image throws, the one that matters.** Text row stays `completed` with real params, image row `failed`, returned `params` not null. Decision 5 and the trap at the top — **Ali Amir**
-- [ ] DO storage unavailable: `runPipeline` still returns a settled `failed` result rather than throwing. Decision 8. Make the cleanup write fail too and confirm nothing escapes — **Ali Amir**
-- [ ] A second invocation's `running` row in the same DO is untouched when this one fails. Decision 7 — **Ali Amir**
-- [ ] **The retry boundary, both sides.** Planner: throw from `AI.run` with `maxRetries: 2` and assert exactly two calls, then 3 and assert three, proving the KV value reaches the call rather than a hardcoded number. Image: fail it and assert `AI.run` was called **exactly once**. Decision 2, and that second assertion is what stops someone adding a retry loop to the expensive call by accident — **Ali Amir**
+Delivered in `df84eba`: 10 tests, `tsc` clean. Reviewed by **Maaz Bin Asif**, who found one gap, recorded below.
+
+- [x] `src/services/pipeline.test.ts` exists, using the fake `AI` binding and `createTestDb`. No live model call in it — **Ali Amir** (owns the file)
+- [x] **Image billed, then a later step throws** (R2 save or row update): `cost_usd` non-null on both the failed result and the row. Decision 6, real money, and the one behaviour the extraction could have broken. **Write this first** — **Ali Amir**
+- [x] Planner throws: one row, `modality: text`, `status: failed`, `completedAt` set, no image row ever opened. Result is `failed`, `params: null`, `image_url: null`, `error` starting `planner:` — **Ali Amir**
+- [x] Planner returns a shape failing `HeliosParamsSchema`: fails at the **validate** stage, `error` starts `validate:`. **Note:** `tools.ts` already passes `HeliosParamsSchema` into `getTextualModelOutput`, which validates and retries there, so `pipeline.ts`'s re-parse cannot fail through the real path. It is deliberate layering, `planConcept` returns `unknown` so the pipeline trusts nothing. Fake the planner return directly and do not hunt for a production path, there is not one — **Ali Amir**
+- [x] **Image throws, the one that matters.** Text row stays `completed` with real params, image row `failed`, returned `params` not null. Decision 5 and the trap at the top — **Ali Amir**
+- [x] DO storage unavailable: `runPipeline` still returns a settled `failed` result rather than throwing. Decision 8. Make the cleanup write fail too and confirm nothing escapes — **Ali Amir**
+- [x] A second invocation's `running` row in the same DO is untouched when this one fails. Decision 7 — **Ali Amir**
+- [x] **The retry boundary, both sides.** Planner: throw from `AI.run` with `maxRetries: 2` and assert exactly two calls, then 3 and assert three, proving the KV value reaches the call rather than a hardcoded number. Image: fail it and assert `AI.run` was called **exactly once**. Decision 2, and that second assertion is what stops someone adding a retry loop to the expensive call by accident — **Ali Amir**
+
+### Found at review, fixed in `73f6509`
+
+**A failed invocation could be recorded as a success and then deleted.** If `startImageRun` threw, the run ended as a single `completed` text row. `failRunningRuns` had nothing to mark, because the text row was already settled and the image row did not exist. So D1 showed a finished, successful-looking run for an invocation the caller was told had failed, and because `pruneCompletedRuns` keeps a run only when every row it has is `completed`, that run qualified and was **pruned like a success**. That contradicts decision 9 and ticket 07's decision 3, and it broke ADR-0001 for exactly the runs an audit table exists to keep.
+
+Not a regression from `8dc5dbf`. The same failure lost the same way before it, under the label `validate:`.
+
+- [x] `runImageStage` tracks whether the row opened and inserts one already `failed` if it did not. The rescue write is itself swallowed, since the usual cause is storage being unavailable, in which case it fails too — **Maaz Bin Asif**, **to be reviewed by Ali Amir**
+- [x] Three tests, two on the pipeline and one on resume, each asserting the failed row exists and that a prune at limit 0 leaves the run alone. All three confirmed to fail with the rescue disabled — **Maaz Bin Asif**
+- [x] **The `validate:` to `image:` label is settled: keep `image:`.** `validate` means the planner's answer was the wrong shape, and opening a database row has nothing to do with that, so the old label sent a reader to inspect model output that was fine. The fix settles it anyway: once a failure has a failed image row attached, calling it a validate failure is incoherent. Reviewed rather than inherited — **Ali Amir** to confirm
 
 ### Phase 2, the resume route
 
@@ -237,7 +251,8 @@ Code and unit tests are done, unticked boxes are the ones needing a real run.
 
 ### Review gates
 
-- [ ] `npx tsc --noEmit` clean and the full suite green from the repo root — **Ali Amir**
+- [x] `npx tsc --noEmit` clean and the full suite green from the repo root — **Ali Amir**. Confirmed on the merged branch: 59 agent-helios and 34 shared-utils.
+- [ ] **Ali reviews `73f6509`**, the failed-image-row fix. It is a change to `pipeline.ts`, which is Maaz's file, but it is phase 1's subject matter and Maaz must not sign off his own change — **Ali Amir**
 - [x] One real forced failure end to end, failed rows reaching D1 with the right statuses, read back with `readRun` not a hand-typed query. Same gate as ticket 07 — **Maaz Bin Asif** (reviews phase 1). Done on `16755eba`, evidence above. This demonstrates the behaviour; it does not review Ali's suite, which is still to come.
 - [ ] One real resume end to end per the steps below, including the second-attempt 409 — **Ali Amir** (reviews phase 2). The run has been done and the evidence is recorded above; this box is Ali confirming it, not repeating it. **Do not re-run the resume to check** — `16755eba`'s image row is still `failed`, so resuming it again is allowed by design and would bill another image.
 - [ ] No box ticked on a green unit test alone where a real run was asked for, and nobody ticks a gate on their own phase. Tickets 03 and 07 both had gates ticked without being demonstrated — **both**
