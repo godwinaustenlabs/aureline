@@ -93,7 +93,7 @@ export async function resumeRun(
 	if (alreadySpent >= config.maxResumeAttempts) {
 		return {
 			ok: false,
-			reason: `this brief has already been resumed ${alreadySpent} times, the limit is ${config.maxResumeAttempts}. Send a new POST /generate if it is still worth pursuing`,
+			reason: `this brief has already been resumed ${alreadySpent} ${alreadySpent === 1 ? "time" : "times"}, the limit is ${config.maxResumeAttempts}. Send a new POST /generate if it is still worth pursuing`,
 		};
 	}
 

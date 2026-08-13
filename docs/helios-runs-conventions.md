@@ -40,13 +40,17 @@ Anything else is a bug worth reporting, in particular a `failed` text row next t
 
 **`completed_at`** is set when a row settles, on both success and failure.
 
-## `cost_usd` does not mean the same thing on both rows
+## `cost_usd`
 
-On an **image** row it is real dollars, read from the AI Gateway log for that call, typically 0.0019008. Null when the gateway log was missing or unreadable, which is tolerated rather than fatal: a missing cost must never fail a run.
+Real dollars on both rows, read from the AI Gateway log for the call that produced them. The Gateway is the only source that speaks dollars: a model's own reply carries either nothing (Flux) or provider-side neuron figures (the planner), and converting neurons ourselves would hardcode a Cloudflare price that drifts silently the day they change it.
 
-On a **text** row it currently holds **neurons, not dollars**. `runPipeline` passes `extractNeuronCost(...)` straight into `completeTextRun`'s `costUsd` parameter, so a typical planner row reads about `88.8` where the real cost is about $0.001. Workers AI bills neurons at $0.011 per 1,000, so the column is out by roughly four orders of magnitude on every text row.
+Null when the gateway log was missing or unreadable, which is tolerated rather than fatal: a missing cost must never fail a run.
 
-**Any query that sums `cost_usd` across both modalities is wrong.** Until this is fixed, filter to `modality = 'image'`, which is also what the counting queries below do. This is a known bug and not a convention worth preserving.
+Two things to know before trusting a total.
+
+**Rows written before this changed hold neurons on the text side**, roughly `83` rather than `0.001`, four orders of magnitude out. The two ranges do not overlap, so `cost_usd > 1` on a text row identifies a stale row exactly.
+
+**A retried planner under-reports.** `aiGatewayLogId` holds only the most recent call, so a run whose planner needed two attempts records the cost of the second one, not the sum. The image stage never retries, so image rows are exact.
 
 ## `model_metadata`
 
@@ -64,7 +68,11 @@ Reusing the original id would not work even if we wanted it to: the failed rows 
 
 The resumed run's text row is inserted already `completed` with the copied params and **`cost_usd: null`**, because nothing was re-planned and a phantom planner cost would corrupt every cost report built on this table.
 
-**The marker goes on both rows.** `attempt` is a required integer and `resumed_from` points at the **immediate parent**, not the root of the chain. An original run carries neither field, which is what makes it an original. First retry is `attempt: 2`, second is `attempt: 3` pointing at the first retry. Marking only the text row would leave any query grouped on image rows unable to tell a retry from an original, and image rows are what cost queries read.
+**The marker is three fields, on both rows.** `resumed_from` points at the **immediate parent**. `attempt` is depth from the original, so the first retry is `attempt: 2` and a retry of that retry is `attempt: 3`. `root` is the original the whole chain descends from, inherited unchanged however deep or wide it goes. An original run carries none of the three, which is what makes it an original.
+
+Marking only the text row would leave any query grouped on image rows unable to tell a retry from an original, and image rows are what cost queries read.
+
+**Use `root`, not `attempt`, to answer anything about a brief.** Retries form a tree rather than a line: a run can be resumed more than once, so two retries of the same failed run are siblings that both read `attempt: 2`. Depth is not a count. Everything about "how many attempts has this concept had, and what did they cost" is a filter on `root`.
 
 These live in `model_metadata` rather than in columns of their own. If this is ever queried hot, the upgrade is real `resumed_from TEXT` and `attempt INTEGER` columns, indexable and visible in `SELECT *`, at the price of a migration on both schemas. There are no consumers yet, which is the only reason it has not been done.
 
@@ -72,6 +80,7 @@ These live in `model_metadata` rather than in columns of their own. If this is e
 
 ```sql
 select p_invoc_id,
+       json_extract(model_metadata, '$.root')         as root,
        json_extract(model_metadata, '$.attempt')      as attempt,
        json_extract(model_metadata, '$.resumed_from') as resumed_from,
        status, cost_usd
@@ -89,8 +98,10 @@ Over image rows only:
 
 So a chain of three where the first two reached the model is one brief, three attempts, two charges, one pattern.
 
-Counting text rows instead would double every figure, and summing their `cost_usd` would produce nonsense for the reason given above.
+**Everything about one brief is `where json_extract(model_metadata, '$.root') = ?`**, plus the original itself, which carries no `root` and is identified by its own `p_invoc_id`. That is the whole reason `root` exists.
 
-**Retries form a tree, not a line.** `resumed_from` points at the immediate parent, and a run can be resumed more than once, so two retries of the same failed run both read `attempt: 2` as siblings. `attempt` is depth from the original, not a per-brief counter. To count attempts for one brief, walk `resumed_from` rather than taking the largest `attempt`.
+Counting text rows instead would double every figure.
 
-**Nothing caps retries.** The guard in `POST /resume` refuses a run that already has an image, which is what stops the same success being paid for twice, but a run whose image genuinely failed can be resumed again and again, and each attempt bills. That is deliberate, since the whole point is that a person decides each attempt (ADR-0009), but it means the route has no attempt ceiling and no rate limit of its own. It is safe while the playground is the only caller and wants revisiting before anything untrusted can reach it.
+**Retries are capped.** `max_resume_attempts` in KV, default 3, limits how many times one brief may be resumed, counted over rows sharing a `root`. Originals do not count, so 3 means an original plus three retries. A resume past the limit is a 409 and spends nothing.
+
+The count is over what the Durable Object still holds rather than all time. That is accurate where it matters: failed runs are never pruned so failed attempts persist, and a successful resume ends the chain anyway because the guard already refuses a run that has an image. Runs resumed before `root` existed carry none, so a legacy chain starts its count afresh.
