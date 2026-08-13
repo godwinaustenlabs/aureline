@@ -1,5 +1,6 @@
 import { getAgentByName, routeAgentRequest } from "agents";
 import { readPatternImage } from "./repository/r2.repository";
+import { preflight, withCors } from "./cors";
 
 // The Durable Object class must be exported from the Worker's main module for
 // wrangler's `class_name: "HeliosAgent"` binding to resolve.
@@ -14,39 +15,55 @@ export default {
 	 * @returns The response to be sent back to the client
 	 */
 	async fetch(request: Request, env: Env) {
-		const url = new URL(request.url);
-
-		if (url.pathname === "/") {
-			return new Response("Helios Agent is running", { status: 200 });
+		// Ahead of routing: a preflight is a question about permission, not a
+		// request for the route it names, and `/generate` would reject the empty
+		// body of one long before CORS ever got a say.
+		if (request.method === "OPTIONS") {
+			return preflight(request, env);
 		}
 
-		if (url.pathname === "/generate" || url.pathname === "/resume" || url.pathname === "/runs") {
-			// The scope key picks which DO instance handles this request (ADR-0005);
-			// Sprint 1 has a single caller, so it falls back to a shared instance.
-			// `/resume` and `/runs` route by the same rule deliberately: a run can
-			// only be resumed or read from the DO that holds it, so both have to
-			// land where the original `/generate` did.
-			const agent = await getAgentByName(env.HeliosAgent, await scopeKey(request));
-			return agent.fetch(request);
-		}
-
-		if (url.pathname.startsWith("/images/")) {
-			// Everything after "/images/" is the R2 key, e.g. "patterns/{p_invoc_id}.jpg"
-			const key = url.pathname.slice("/images/".length);
-			const object = await readPatternImage(env.PATTERNS, key);
-
-			if (!object) {
-				return new Response("Not found", { status: 404 });
-			}
-
-			return new Response(object.body, {
-				headers: { "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream" },
-			});
-		}
-
-		return (await routeAgentRequest(request, env)) ?? new Response("Not found", { status: 404 });
+		// Every route, not the three the playground posts to. `/` is its connection
+		// check, `/images/*` is a fetch the moment anyone wants the bytes rather
+		// than an `<img>`, and a 404 that fails at CORS instead of reporting itself
+		// is a 404 nobody can debug.
+		return withCors(await route(request, env), request, env);
 	},
 };
+
+/** Path dispatch. CORS is the caller's job, so nothing below thinks about it. */
+async function route(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+
+	if (url.pathname === "/") {
+		return new Response("Helios Agent is running", { status: 200 });
+	}
+
+	if (url.pathname === "/generate" || url.pathname === "/resume" || url.pathname === "/runs") {
+		// The scope key picks which DO instance handles this request (ADR-0005);
+		// Sprint 1 has a single caller, so it falls back to a shared instance.
+		// `/resume` and `/runs` route by the same rule deliberately: a run can
+		// only be resumed or read from the DO that holds it, so both have to
+		// land where the original `/generate` did.
+		const agent = await getAgentByName(env.HeliosAgent, await scopeKey(request));
+		return agent.fetch(request);
+	}
+
+	if (url.pathname.startsWith("/images/")) {
+		// Everything after "/images/" is the R2 key, e.g. "patterns/{p_invoc_id}.jpg"
+		const key = url.pathname.slice("/images/".length);
+		const object = await readPatternImage(env.PATTERNS, key);
+
+		if (!object) {
+			return new Response("Not found", { status: 404 });
+		}
+
+		return new Response(object.body, {
+			headers: { "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream" },
+		});
+	}
+
+	return (await routeAgentRequest(request, env)) ?? new Response("Not found", { status: 404 });
+}
 
 /**
  * Which Durable Object serves this request (ADR-0005).

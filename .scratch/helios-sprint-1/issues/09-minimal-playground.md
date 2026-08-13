@@ -2,11 +2,13 @@
 
 **What to build:** An internal debug console. One page where you type a concept, spend the money once, and see as much of what happened as the engine is capable of telling you. It replaces curling the API by hand.
 
-`apps/playground` is **its own app, deployed separately** from `agent-helios`. It is a static frontend talking to the worker over HTTP and nothing else. There is no shared runtime, no service binding, no same-origin anything.
+**It lives in `apps/frontend`, deploys as a worker named `frontend`, and is built on its own branch off `dev`,** `feature/09-frontend`. Nothing in it goes onto a branch shared with backend work: this is a new app and it will churn, and `agent-helios` should stay reviewable on its own.
+
+It is **its own app, deployed separately** from `agent-helios`. A static frontend talking to the worker over HTTP and nothing else. There is no shared runtime, no service binding, no same-origin anything.
 
 **Blocked by:** nothing. 01, 06 and 08 are all merged into `dev`.
 
-**Status:** ready-for-agent. The frontend is unstarted. Two small backend pieces are needed and are specced below.
+**Status:** ready-for-agent. Both backend pieces are built and merged, `GET /runs` and CORS, so nothing blocks the frontend. The frontend is unstarted.
 
 **Team:** Frontend Team. The two backend boxes are worker code and are assigned separately.
 
@@ -31,12 +33,29 @@ Four regions on one page.
 | Field | Notes |
 |---|---|
 | Concept | Textarea. Required, trimmed, 1 to 1000 characters. Validate before submitting, a 400 round trip is pointless |
-| Session id | Text, defaults to something like `playground`. **First class, not hidden in settings.** It picks which Durable Object serves the request, so it decides which runs the history shows and which runs can be resumed |
+| Session id | Text, free-form, plus a **Randomise** button and a picker of sessions used before. **First class, not hidden in settings.** It picks which Durable Object serves the request, so it decides which runs the history shows and which runs can be resumed. See below |
 | Reference image | File input. Rendered, accepted, previewed locally, **never sent**. Carries a visible label saying it is not wired to the planner yet |
 | API base URL | Text, defaults to `http://localhost:8787`. Lets the same build point at local dev or the deployed worker |
 | Generate | Disabled while a run is in flight. Confirms the spend before the first call |
 
 The reference image field is in scope purely so the shape exists for a later sprint. Discard it client-side. If it silently vanished with no label, the next person to test the page reports it as a bug.
+
+#### Sessions
+
+The session id **is** the Durable Object name (ADR-0005). Send the same string and you land in the same DO, with the same history and the same runs available to resume. Send a different one and you get a different store that shares nothing with it. Since this page is for testing, that is how testers keep their runs apart, so make it easy to work with rather than a text box people paste into.
+
+Three ways to set it:
+
+- **Type one.** Any non-empty string. It is trimmed, and it is used exactly as typed, so `Test`, `test` and `test ` are two different DOs and one of them is not the one you meant. Trim and lowercase before sending if you want to spare people that.
+- **Randomise.** A button that generates a fresh readable id, something like `test-quiet-harbor-4f2a`. Use it when you want a clean store rather than adding to an existing one. Random ids are what stop two people testing at once from pruning each other's history out.
+- **Pick a previous one.** A list of sessions this browser has used, most recent first. Selecting one puts it in the field, and the next `GET /runs` and the next Generate both go to that DO. Nothing else needs to happen: the id in the field is the whole mechanism.
+
+**The list of previous sessions has to live in `localStorage`.** There is no route that lists sessions and there cannot easily be one. Durable Objects are addressed by name and cannot be enumerated, and `helios_runs` carries no session column in either the DO or D1, so even the permanent D1 copy cannot say which sessions exist. A session id that this browser never used is unreachable through the picker and has to be typed in.
+
+Two consequences worth showing in the UI rather than discovering:
+
+- **An empty session id is not "no session".** The worker falls back to a shared DO literally named `default`, which is where every run made without an id has ever gone. It is a real store with a real history, not a blank slate.
+- **Resume is session-bound.** A `p_invoc_id` from one session 409s in another with "no run with that id in this session". If the user switches sessions with a run on screen, its Resume button no longer applies.
 
 ### 2. Scratchpad
 
@@ -57,7 +76,7 @@ What it shows, and where each value comes from:
 | Resume lineage | `root`, `resumed_from`, `attempt` inside `modelMetadata`, when present |
 | Client wall clock | measured in the browser |
 
-**It must also name what is missing, rather than leaving a gap.** These four are not captured anywhere in the engine, and each gets a visible row saying so with the reason. An empty box reads as a page bug. A labelled gap reads as an engine gap, which is what it is, and gives us a list if we later decide to capture them.
+**It must also name what is missing, rather than leaving a gap.** These are not captured anywhere in the engine, and each gets a visible row saying so with the reason. An empty box reads as a page bug. A labelled gap reads as an engine gap, which is what it is, and gives us a list if we later decide to capture them.
 
 | Not available | Why |
 |---|---|
@@ -65,6 +84,7 @@ What it shows, and where each value comes from:
 | The planner prompt | Built per call in `prompts/planner.prompt.ts`, never stored or returned |
 | The image prompt sent to Flux | Built per call by `buildImagePrompt`, never stored or returned |
 | Retry attempts inside the planner | The retry loop is internal to `getTextualModelOutput` and reports only the final outcome |
+| Which sessions exist | Durable Objects are addressed by name, not enumerated, and no run row records its session. The picker shows what this browser has used, nothing more |
 
 ### 3. Image output
 
@@ -146,7 +166,7 @@ A plain `<img src>` loads this cross-origin without any CORS involvement. Only f
 
 ## Because the two deploy separately
 
-**CORS is mandatory.** The worker sends no CORS headers today, so every `fetch` from the playground origin fails at preflight. This is the one thing that blocks the whole ticket. See the backend work below.
+**CORS is done, and your origin has to be on the list.** The worker answers preflight and grants exactly the origins in the `ALLOWED_ORIGINS` var in `wrangler.jsonc`. It ships with `localhost:5173`, `:4173`, `:3000`, `127.0.0.1:5173` and the deployed `https://frontend.aureline.workers.dev`. If your dev server picks a different port, add it there, or every `fetch` fails at preflight with a 403 that names the origin it refused.
 
 **The base URL is configuration, not a constant.** Local dev is `http://localhost:8787`, production is the deployed worker's hostname. Make it a field in the UI as well as a build-time default, so nobody has to rebuild to point at the other one.
 
@@ -154,7 +174,9 @@ A plain `<img src>` loads this cross-origin without any CORS involvement. Only f
 
 **No auth, no cookies, no credentials.** Do not send `credentials: "include"`. There is nothing to authenticate against, and it makes the CORS config strictly harder for no benefit.
 
-**Deploy target for the playground** is Cloudflare Pages or a static-assets Worker, whichever the team prefers. It is a static build with no server side.
+**Deploy target for the playground** is a static-assets Worker. It is a static build with no server side.
+
+**The worker must be named `frontend`.** Put `"name": "frontend"` in `apps/frontend/wrangler.jsonc`, so it deploys to `https://frontend.aureline.workers.dev`. That exact origin is already in the worker's `ALLOWED_ORIGINS`, so a deploy under any other name is refused at preflight by a backend nobody thought to change. If the name has to move, the allow-list moves with it in the same commit.
 
 ## Backend work
 
@@ -180,9 +202,16 @@ The single-invocation form is `getRunRows(db, pInvocId)`, which already exists. 
 
 ### CORS
 
-`OPTIONS` preflight handling plus `Access-Control-Allow-Origin` on `/generate`, `/resume` and `/runs`. `/images/*` only needs it if the page ends up fetching bytes from JavaScript rather than using `<img src>`.
+Built, in `src/cors.ts`, wired in `src/index.ts` ahead of routing.
 
-Use an origin allow-list from a new `wrangler.jsonc` var rather than a blanket `*`. There is no auth on `/generate`, and it spends real money on every call, so the origin list is the only thing standing between us and any webpage being able to bill our account.
+`OPTIONS` is answered before any path dispatch, and every response the worker returns carries the headers, not just the three the playground posts to. `/` is a connection check, `/images/*` becomes a `fetch` the moment anyone wants the bytes rather than an `<img>`, and a 404 that fails at CORS instead of reporting itself is a 404 nobody can debug.
+
+The allow-list is `ALLOWED_ORIGINS` in `wrangler.jsonc` vars, exact origins, comma separated, never `*` and deliberately not in KV. There is no auth on `/generate` and it spends real money on every call, so the origin list is the only thing standing between us and any webpage being able to bill our account, which makes it something that should be reviewed rather than editable from a dashboard.
+
+Two behaviours worth knowing:
+
+- **A refused preflight is a 403 naming the origin**, not a silent 204. JavaScript cannot read that body but you can, in the network tab.
+- **No credentials, ever.** Do not send `credentials: "include"`. Nothing authenticates, and the worker never answers `Access-Control-Allow-Credentials`.
 
 ## Decisions
 
@@ -196,29 +225,33 @@ Use an origin allow-list from a new `wrangler.jsonc` var rather than a blanket `
 
 5. **The scratchpad is reconstructed, not streamed.** Decision 4 in the page section above. If we ever want live progress it means broadcasting state from the Durable Object, which is a pipeline change and a different ticket.
 
-6. **The scratchpad names what it cannot show.** The four-row table above, verbatim, not silently omitted.
+6. **The scratchpad names what it cannot show.** The "not available" table above, verbatim, not silently omitted.
 
 7. **Raw JSON is always visible**, alongside any prettified view.
 
 8. **The reference image is discarded client-side and labelled as such.**
 
-9. **Session id is a visible field**, not a hidden constant. A run generated under one session cannot be resumed under another, and the page should make that legible rather than surprising.
+9. **Session id is a visible field**, not a hidden constant, with a randomiser and a picker of ids this browser has used. A run generated under one session cannot be resumed under another, and the page should make that legible rather than surprising.
 
 10. **`GET /runs` is free and read-only forever.** If it ever gains a side effect, that is a bug.
+
+11. **The session picker is `localStorage`, and that is a limitation, not a design.** Sessions cannot be listed from the server: Durable Objects are not enumerable and no run row records which session it came from. If we ever want a real session list it means a column on `helios_runs` and a route over D1, which is its own ticket.
 
 ## Work
 
 ### Backend, needed before the frontend can call anything
 
-- [ ] CORS: preflight plus allow-list from a var. **This blocks everything else** — **TBD**
-- [ ] `GET /runs`, both forms, including the `scopeKey` and 405 fixes above — **TBD**
-- [ ] One new repository function for the list form, ordered newest first — **TBD**
-- [ ] Tests for both, using the existing `createTestDb`. No live model call — **TBD**
+- [x] CORS: preflight plus allow-list from a var. **This blocks everything else** — `src/cors.ts`, allow-list in `ALLOWED_ORIGINS`
+- [x] `GET /runs`, both forms, including the `scopeKey` and 405 fixes above — commit `a495098`
+- [x] One new repository function for the list form, ordered newest first — `listRuns` in `do.repository.ts`
+- [x] Tests for both, using the existing `createTestDb`. No live model call — `src/cors.test.ts`, `src/repository/do.repository.test.ts`
 
 ### Frontend
 
-- [ ] `apps/playground` scaffolded in the workspace, depending on `@aureline/shared-types` — **Maaz Ahmad**
+- [ ] Branch `feature/09-frontend` cut from `dev` — **Maaz Ahmad**
+- [ ] `apps/frontend` scaffolded in the workspace, depending on `@aureline/shared-types`, deploying as a worker named `frontend` — **Maaz Ahmad**
 - [ ] Input region: concept, session id, reference image, base URL — **Maaz Ahmad**
+- [ ] Session id: free text, a randomiser, and a picker of ids from `localStorage`, with switching one reloading the history from that DO — **Maaz Ahmad**
 - [ ] Concept validated with `HeliosRequestSchema` before submitting — **Maaz Ahmad**
 - [ ] `POST /generate` wired, with the spend confirm, the in-flight disable and the running tally — **Maaz Ahmad**
 - [ ] **`status` drives success or failure, not the HTTP code.** The one that catches the trap at the top — **Maaz Ahmad**
@@ -228,8 +261,8 @@ Use an origin allow-list from a new `wrangler.jsonc` var rather than a blanket `
 - [ ] Run history table from `GET /runs` — **Maaz Ahmad**
 - [ ] Resume wired from the history table, with its own confirm — **Maaz Ahmad**
 - [ ] A 409 renders as a refusal showing the backend's reason verbatim, not as an error and not as a failed run — **Maaz Ahmad**
-- [ ] The reference image is discarded and carries its label — **Ali Amir** (was already his box)
-- [ ] Raw `HeliosResult` and the image both render — **Ali Amir** (was already his box)
+- [ ] The reference image is discarded and carries its label — **Ali Amir** 
+- [ ] Raw `HeliosResult` and the image both render — **Ali Amir** 
 
 ### Review gates
 

@@ -96,7 +96,18 @@
 		// fallback default — the live value is CONFIG:max_resume_attempts in KV.
 		// How many times one brief may be resumed, so 3 is an original plus three
 		// retries. Every retry spends the image model.
-		"MAX_RESUME_ATTEMPTS": "3"
+		"MAX_RESUME_ATTEMPTS": "3",
+		// Browser origins allowed to call this worker from JavaScript (ticket 09).
+		// Comma separated, exact origins, no trailing slash. Anything not listed
+		// is refused at preflight.
+		//
+		// Never "*", and deliberately NOT in KV. There is no auth on /generate and
+		// it spends real money per call, so this list is the only thing stopping
+		// any webpage from billing our account. It belongs where it gets reviewed.
+		//
+		// The defaults are the local dev servers the playground is likely to use.
+		// Add the deployed playground's origin here when it exists.
+		"ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:4173,http://localhost:3000,http://127.0.0.1:5173,https://frontend.aureline.workers.dev/"
 	},
 
 	"observability": {
@@ -108,9 +119,9 @@
 	]
 
 	/**
-	 * Static Assets — ticket 09 (playground). Left commented until we decide
-	 * whether the playground is served from this worker (same-origin, no CORS)
-	 * or lives in its own `apps/playground` project.
+	 * Static Assets. Not used: ticket 09 settled that the playground is its own
+	 * app on its own host, so it reaches this worker cross-origin and through
+	 * ALLOWED_ORIGINS above rather than being served from here.
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
 	 */
 	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
