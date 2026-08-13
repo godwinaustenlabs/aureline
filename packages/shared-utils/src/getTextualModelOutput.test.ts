@@ -98,6 +98,29 @@ describe("getTextualModelOutput", () => {
     expect(mockAi.run).toHaveBeenCalledTimes(2);
   });
 
+  it("reports a thrown call as a call failure, not as schema drift", async () => {
+    // The loop swallows a thrown `ai.run` into the same `lastError` as a schema
+    // mismatch. Reporting both the same way records a bad model name or a
+    // network error as a schema problem, and `JSON.stringify` on an Error gives
+    // `{}`, so the message would carry no detail at all. This is the exact
+    // failure ticket 08's forced-failure verification produces.
+    const mockAi: AiRunner = {
+      run: vi.fn().mockRejectedValue(new Error("No such model @cf/does/not-exist")),
+    };
+
+    await expect(
+      getTextualModelOutput(
+        personSchema,
+        "Generate a person",
+        "@cf/does/not-exist",
+        mockAi,
+        { maxRetries: 2 }
+      )
+    ).rejects.toThrow(/model call failed after 2 attempt\(s\): No such model/);
+
+    expect(mockAi.run).toHaveBeenCalledTimes(2);
+  });
+
   it("calls the model directly when no gateway is configured", async () => {
     const mockAi: AiRunner = {
       run: vi.fn().mockResolvedValue(chatCompletionsEnvelope(JSON.stringify({ name: "Ava", age: 30 }))),

@@ -20,9 +20,12 @@ export default {
 			return new Response("Helios Agent is running", { status: 200 });
 		}
 
-		if (url.pathname === "/generate") {
+		if (url.pathname === "/generate" || url.pathname === "/resume") {
 			// The scope key picks which DO instance handles this request (ADR-0005);
 			// Sprint 1 has a single caller, so it falls back to a shared instance.
+			// `/resume` routes by the same rule deliberately: a run can only be
+			// resumed from the DO that holds it, so it has to land where its
+			// original `/generate` did.
 			const agent = await getAgentByName(env.HeliosAgent, await scopeKey(request));
 			return agent.fetch(request);
 		}

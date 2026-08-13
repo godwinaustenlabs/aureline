@@ -226,6 +226,13 @@ export async function getTextualModelOutput<T extends ZodType>(
   let lastError: unknown;
   let lastResponse: unknown;
 
+  // Which kind of failure the last attempt was. The loop catches two genuinely
+  // different things and they cannot share one message: a thrown call (bad model
+  // name, network, rate limit) never produced a response to validate at all, and
+  // `JSON.stringify` renders an `Error` as `{}`, so reporting one as a schema
+  // problem records a transport failure with no detail whatsoever.
+  let lastFailure: "schema" | "call" = "schema";
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await ai.run(model, body, runOptions);
@@ -240,9 +247,18 @@ export async function getTextualModelOutput<T extends ZodType>(
       }
 
       lastError = result.error.issues;
+      lastFailure = "schema";
     } catch (err) {
       lastError = err;
+      lastFailure = "call";
     }
+  }
+
+  if (lastFailure === "call") {
+    throw new Error(
+      `getTextualModelOutput: model call failed after ${maxRetries} attempt(s): ` +
+        `${lastError instanceof Error ? lastError.message : String(lastError)}`
+    );
   }
 
   throw new Error(

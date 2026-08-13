@@ -25,7 +25,14 @@ const CONFIG: HeliosConfig = {
 	},
 	maxRetries: 2,
 	retentionLimit: 5,
-	source: { textModel: "var", imageModel: "kv", maxRetries: "var", retentionLimit: "var" },
+	maxResumeAttempts: 3,
+	source: {
+		textModel: "var",
+		imageModel: "kv",
+		maxRetries: "var",
+		retentionLimit: "var",
+		maxResumeAttempts: "var",
+	},
 };
 
 /** base64 for the bytes [72, 101, 108, 108, 111] ("Hello") */

@@ -10,12 +10,14 @@ import {
 import { planConcept } from "./planner";
 import { generateImage, resolveSteps } from "./imageGenerator";
 import { savePatternImage } from "../repository/r2.repository";
-import { describeError, extractNeuronCost } from "../utils";
+import { describeError } from "../utils";
+import { readGatewayCost } from "./gatewayCost";
 import { describeConfig, resolveConfig, type HeliosConfig } from "../config";
 import {
 	startTextRun,
 	completeTextRun,
 	startImageRun,
+	insertFailedImageRun,
 	completeImageRun,
 	failRunningRuns,
 	getSettledRows,
@@ -66,7 +68,7 @@ function imageModelMetadata(config: HeliosConfig) {
  * Never throws. Export is an audit concern, not something that should cost the
  * caller their result after they already waited on the pipeline.
  */
-async function exportAndPrune(
+export async function exportAndPrune(
 	db: HeliosDb,
 	env: Env,
 	p_invoc_id: string,
@@ -96,21 +98,43 @@ async function exportAndPrune(
  *
  * Never throws. A failure comes back as `ok: false` carrying the cause, so the
  * caller decides what a failed image means for its own result.
+ *
+ * **Always leaves an image row behind.** If opening the row is what failed, one
+ * is inserted already `failed`, so an invocation is two rows whether it
+ * succeeded or not (ADR-0001). See `insertFailedImageRun` for what goes wrong
+ * without it.
+ *
+ * `metadataExtras` is merged over the image row's model metadata. `runPipeline`
+ * passes nothing; a resume passes its `resumed_from` and `attempt` markers,
+ * which have to reach this row because it is the one carrying `cost_usd` and
+ * `image_r2_key` and so the one every cost query reads (ticket 08, decision 15).
  */
-async function runImageStage(
+export async function runImageStage(
 	db: HeliosDb,
 	env: Env,
 	config: HeliosConfig,
 	p_invoc_id: string,
 	concept: string,
 	params: HeliosParams,
+	metadataExtras: Record<string, unknown> = {},
 ): Promise<ImageStageOutcome> {
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
 
+	// Built once so the rescue insert below records the same model as the row
+	// that was meant to open.
+	const modelMetadata = { ...imageModelMetadata(config), ...metadataExtras };
+
+	// Whether the image row exists. If opening it is what failed, the caller's
+	// `failRunningRuns` has nothing to mark, and the invocation settles as a lone
+	// `completed` text row: a failure that looks like a success and that
+	// `pruneCompletedRuns` will delete like any other completed run.
+	let rowOpened = false;
+
 	try {
-		await startImageRun(db, p_invoc_id, concept, params, imageModelMetadata(config));
+		await startImageRun(db, p_invoc_id, concept, params, modelMetadata);
+		rowOpened = true;
 
 		const image = await generateImage(params, config, env, p_invoc_id);
 		costUsd = image.cost_usd;
@@ -121,6 +145,18 @@ async function runImageStage(
 
 		return { ok: true, imageR2Key, costUsd };
 	} catch (cause) {
+		if (!rowOpened) {
+			// Its own try, and swallowed: the usual reason opening the row failed is
+			// that DO storage is unavailable, in which case this write fails too.
+			// Nothing can be recorded then, and `cause` is still the failure worth
+			// reporting.
+			try {
+				await insertFailedImageRun(db, p_invoc_id, concept, params, modelMetadata);
+			} catch (rescueCause) {
+				console.error(`could not record the unopened image row for ${p_invoc_id}:`, describeError(rescueCause));
+			}
+		}
+
 		return { ok: false, cause, costUsd };
 	}
 }
@@ -160,14 +196,19 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		stage = "planner";
 		const planned = await planConcept(req.concept, env, config, p_invoc_id);
 
+		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
+		// on this binding, so the image stage would overwrite it. Real dollars, so
+		// `cost_usd` means the same thing on both rows. The provider's neuron
+		// figure is not lost, it rides in `usage` on the metadata below.
+		const textCostUsd = await readGatewayCost(env);
+
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
 
-		const neurons = extractNeuronCost(planned.usage);
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row before the image row opens.
-		await completeTextRun(db, p_invoc_id, params, textModelMetadata, neurons);
+		await completeTextRun(db, p_invoc_id, params, textModelMetadata, textCostUsd);
 
 		stage = "image";
 		const outcome = await runImageStage(db, env, config, p_invoc_id, req.concept, params);

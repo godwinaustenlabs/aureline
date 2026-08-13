@@ -2,6 +2,7 @@ import type { HeliosParams } from "@aureline/shared-types";
 import { getImageModelOutput } from "@aureline/shared-utils";
 import { buildImagePrompt } from "../prompts";
 import type { HeliosConfig } from "../config";
+import { readGatewayCost } from "./gatewayCost";
 
 /**
  * What the image maker returns: the raw decoded bytes and their content type,
@@ -79,7 +80,7 @@ export async function generateImage(
 		}
 	);
 
-	return { image, contentType, cost_usd: await readImageCost(env) };
+	return { image, contentType, cost_usd: await readGatewayCost(env) };
 }
 
 /**
@@ -101,21 +102,3 @@ function buildFluxPrompt(params: HeliosParams): string {
 	return prompt;
 }
 
-/**
- * Reads the image's cost (real dollars) from the AI Gateway log written by the
- * just-completed call. The image model's own reply carries no usage, so the
- * Gateway log is the only source. A missing, failed or unlogged cost is always
- * tolerated as `null` — a missing cost must never fail a run (ticket 06).
- */
-async function readImageCost(env: Env): Promise<number | null> {
-	try {
-		const logId = env.AI.aiGatewayLogId;
-		if (!logId) {
-			return null;
-		}
-		const log = await env.AI.gateway(env.AI_GATEWAY_ID).getLog(logId);
-		return log.cost ?? null;
-	} catch {
-		return null;
-	}
-}

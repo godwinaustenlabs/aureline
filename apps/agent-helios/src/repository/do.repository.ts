@@ -55,6 +55,35 @@ export async function completeTextRun(
 }
 
 /**
+ * The text row of a resumed run, inserted already settled.
+ *
+ * A resume never calls the planner, so this row has no `running` phase to open
+ * and no cost to record — it exists because ADR-0001 says one invocation is two
+ * rows, and a resume that wrote only an image row would leave anything reading
+ * D1 with half a run.
+ *
+ * `costUsd` is left null deliberately. Copying the original planner's cost here
+ * would bill the same planner call twice across our cost reports.
+ */
+export async function insertResumedTextRun(
+	db: HeliosDb,
+	pInvocId: string,
+	userPrompt: string,
+	params: HeliosParams,
+	modelMetadata: ModelMetadata,
+): Promise<void> {
+	await db.insert(heliosRuns).values({
+		pInvocId,
+		modality: "text",
+		status: "completed",
+		userPrompt,
+		plannerParams: params,
+		modelMetadata,
+		completedAt: new Date(),
+	});
+}
+
+/**
  * Opens the image row as `running`, duplicating planner_params from its text
  * sibling rather than requiring a join (ADR-0001).
  */
@@ -72,6 +101,37 @@ export async function startImageRun(
 		userPrompt,
 		plannerParams: params,
 		modelMetadata,
+	});
+}
+
+/**
+ * Records an image row for an invocation whose image row never opened, so the
+ * failure is visible rather than absent.
+ *
+ * Without it, a failure while opening the image row leaves the invocation as a
+ * lone `completed` text row: `failRunningRuns` finds nothing to mark, so D1
+ * shows a run that looks finished and successful, and `pruneCompletedRuns`
+ * deletes it like any other completed run because every row it has is
+ * `completed`. Both are wrong, and the second loses the record entirely.
+ *
+ * Inserted already `failed` rather than opened and then settled, since the
+ * thing being recorded has already happened.
+ */
+export async function insertFailedImageRun(
+	db: HeliosDb,
+	pInvocId: string,
+	userPrompt: string,
+	params: HeliosParams,
+	modelMetadata: ModelMetadata,
+): Promise<void> {
+	await db.insert(heliosRuns).values({
+		pInvocId,
+		modality: "image",
+		status: "failed",
+		userPrompt,
+		plannerParams: params,
+		modelMetadata,
+		completedAt: new Date(),
 	});
 }
 
@@ -106,6 +166,31 @@ export async function failRunningRuns(
 		.update(heliosRuns)
 		.set({ status: "failed", completedAt: new Date(), ...(costUsd !== null && { costUsd }) })
 		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
+}
+
+/**
+ * How many times this brief has already been resumed, counted over the image
+ * rows carrying its `root`.
+ *
+ * Image rows because they are the ones that spend money, and a cap on retries
+ * is a cap on spend. Original runs carry no `root`, so the count is resumes
+ * only: a configured 3 means an original plus three retries rather than two.
+ *
+ * Counted over what this Durable Object still holds, not all time. That is
+ * accurate where it matters: failed runs are never pruned, so failed attempts
+ * persist, and a successful resume ends the chain anyway because the guard
+ * refuses a run that already has an image.
+ *
+ * Filtered in memory rather than through `json_extract` because a DO holds a
+ * handful of rows and Drizzle hands the JSON column back already parsed.
+ */
+export async function countResumeAttempts(db: HeliosDb, root: string): Promise<number> {
+	const rows = await db
+		.select({ modelMetadata: heliosRuns.modelMetadata })
+		.from(heliosRuns)
+		.where(eq(heliosRuns.modality, "image"));
+
+	return rows.filter((row) => (row.modelMetadata as { root?: unknown } | null)?.root === root).length;
 }
 
 /** The rows for one invocation. */

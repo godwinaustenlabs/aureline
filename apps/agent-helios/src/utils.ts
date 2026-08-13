@@ -17,10 +17,3 @@ export function describeError(cause: unknown): string {
 	if (cause instanceof ZodError) return firstIssueMessage(cause);
 	return cause instanceof Error ? cause.message : String(cause);
 }
-/** Neuron count from a model call's usage data, or null when the provider
- * did not report a real (non-zero) figure for this call shape. A zero is
- * not trustworthy cost data — treat it as absent, not as free. */
-export function extractNeuronCost(usage: unknown): number | null {
-	const rawNeurons = (usage as { neurons?: number })?.neurons;
-	return rawNeurons ? rawNeurons : null;
-}

@@ -7,9 +7,16 @@ const VARS = {
 	AI_GATEWAY_ID: "helios",
 	RETENTION_LIMIT: "5",
 	MAX_RETRIES: "2",
+	MAX_RESUME_ATTEMPTS: "3",
 };
 
-const ALL_KEYS = ["text_model", "image_model", "max_retries", "retention_limit"];
+const ALL_KEYS = [
+	"text_model",
+	"image_model",
+	"max_retries",
+	"retention_limit",
+	"max_resume_attempts",
+];
 
 /**
  * Builds a fake `Env` whose CONFIG namespace returns the given KV values.
@@ -30,6 +37,7 @@ const FULL_KV = {
 		'{ "model": "@cf/black-forest-labs/flux-1-schnell", "width": 1024, "height": 1024, "steps": 4 }',
 	max_retries: "3",
 	retention_limit: "10",
+	max_resume_attempts: "4",
 };
 
 let warn: ReturnType<typeof vi.spyOn>;
@@ -43,7 +51,7 @@ afterEach(() => {
 });
 
 describe("resolveConfig", () => {
-	it("takes every value from KV when all four keys are present and valid", async () => {
+	it("takes every value from KV when all the keys are present and valid", async () => {
 		const { env } = fakeEnv(FULL_KV);
 
 		const config = await resolveConfig(env);
@@ -58,17 +66,19 @@ describe("resolveConfig", () => {
 			},
 			maxRetries: 3,
 			retentionLimit: 10,
+			maxResumeAttempts: 4,
 			source: {
 				textModel: "kv",
 				imageModel: "kv",
 				maxRetries: "kv",
 				retentionLimit: "kv",
+				maxResumeAttempts: "kv",
 			},
 		});
 		expect(warn).not.toHaveBeenCalled();
 	});
 
-	it("reads all four keys in one call, with the cache TTL", async () => {
+	it("reads every key in one call, with the cache TTL", async () => {
 		const { env, get } = fakeEnv(FULL_KV);
 
 		await resolveConfig(env);
@@ -185,11 +195,13 @@ describe("resolveConfig", () => {
 			imageModel: { model: VARS.IMAGE_MODEL },
 			maxRetries: 2,
 			retentionLimit: 5,
+			maxResumeAttempts: 3,
 			source: {
 				textModel: "var",
 				imageModel: "var",
 				maxRetries: "var",
 				retentionLimit: "var",
+				maxResumeAttempts: "var",
 			},
 		});
 		expect(warn).toHaveBeenCalledOnce();
@@ -217,7 +229,37 @@ describe("describeConfig", () => {
 		expect(line).toBe(
 			"config: text_model=@cf/openai/gpt-oss-120b(temperature=1) (kv) " +
 				"image_model=@cf/black-forest-labs/flux-1-schnell(width=1024,height=1024,steps=4) (kv) " +
-				"max_retries=3 (kv) retention_limit=5 (var)"
+				"max_retries=3 (kv) retention_limit=5 (var) max_resume_attempts=4 (kv)"
 		);
+	});
+
+	it("names the resume cap too, so a raised limit is visible in the log", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, max_resume_attempts: "9" });
+
+		expect(describeConfig(await resolveConfig(env))).toContain("max_resume_attempts=9 (kv)");
+	});
+});
+
+describe("max_resume_attempts", () => {
+	it("falls back to the var when the value is out of range", async () => {
+		// A cap on how many times one concept may spend the image model, so an
+		// unbounded dashboard value must not be accepted.
+		const { env } = fakeEnv({ ...FULL_KV, max_resume_attempts: "500" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.maxResumeAttempts).toBe(3);
+		expect(config.source.maxResumeAttempts).toBe("var");
+		expect(warn).toHaveBeenCalledOnce();
+	});
+
+	it("falls back to the var when the key is absent", async () => {
+		const { max_resume_attempts: _absent, ...rest } = FULL_KV;
+		const { env } = fakeEnv(rest);
+
+		const config = await resolveConfig(env);
+
+		expect(config.maxResumeAttempts).toBe(3);
+		expect(config.source.maxResumeAttempts).toBe("var");
 	});
 });
