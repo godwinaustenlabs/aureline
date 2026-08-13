@@ -7,10 +7,18 @@ import {
 	completeImageRun,
 	completeTextRun,
 	failRunningRuns,
+	pruneCompletedRuns,
 	startImageRun,
 	startTextRun,
 } from "../repository/do.repository";
 import { resumeRun } from "./resume";
+
+// Only `startImageRun` is mocked, and only so one test can make opening the
+// image row fail. Every other call goes to the real implementation.
+vi.mock("../repository/do.repository", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../repository/do.repository")>();
+	return { ...actual, startImageRun: vi.fn(actual.startImageRun) };
+});
 
 type TestDb = ReturnType<typeof createTestDb>;
 
@@ -224,6 +232,32 @@ describe("resumeRun", () => {
 		expect(text?.status).toBe("completed");
 		expect(image?.status).toBe("failed");
 		expect(image?.costUsd).toBe(0.0009);
+	});
+
+	it("still records a failed image row when opening that row is what failed", async () => {
+		// The same hole runPipeline had. A resume that could not open its image row
+		// would settle as a lone completed text row: a failure that reads as a
+		// success and that pruning deletes like any other completed run.
+		const { env } = fakeEnv();
+		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
+
+		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected a run, not a refusal");
+
+		expect(outcome.result.status).toBe("failed");
+		expect(outcome.result.error).toMatch(/^image: /);
+
+		const { all, text, image } = await rowsOf(db, outcome.result.p_invoc_id);
+		expect(all).toHaveLength(2);
+		expect(text?.status).toBe("completed");
+		expect(image?.status).toBe("failed");
+		// The resume marker still has to reach the image row, since that row is
+		// what cost queries read.
+		expect(metadata(image).resumed_from).toBe("original-1");
+		expect(metadata(image).attempt).toBe(2);
+
+		await pruneCompletedRuns(db as never, 0);
+		expect((await rowsOf(db, outcome.result.p_invoc_id)).all).toHaveLength(2);
 	});
 
 	it("can itself be resumed, chaining attempt and pointing at the immediate parent", async () => {

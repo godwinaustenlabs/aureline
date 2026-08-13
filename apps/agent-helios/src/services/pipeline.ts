@@ -16,6 +16,7 @@ import {
 	startTextRun,
 	completeTextRun,
 	startImageRun,
+	insertFailedImageRun,
 	completeImageRun,
 	failRunningRuns,
 	getSettledRows,
@@ -97,6 +98,11 @@ export async function exportAndPrune(
  * Never throws. A failure comes back as `ok: false` carrying the cause, so the
  * caller decides what a failed image means for its own result.
  *
+ * **Always leaves an image row behind.** If opening the row is what failed, one
+ * is inserted already `failed`, so an invocation is two rows whether it
+ * succeeded or not (ADR-0001). See `insertFailedImageRun` for what goes wrong
+ * without it.
+ *
  * `metadataExtras` is merged over the image row's model metadata. `runPipeline`
  * passes nothing; a resume passes its `resumed_from` and `attempt` markers,
  * which have to reach this row because it is the one carrying `cost_usd` and
@@ -115,11 +121,19 @@ export async function runImageStage(
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
 
+	// Built once so the rescue insert below records the same model as the row
+	// that was meant to open.
+	const modelMetadata = { ...imageModelMetadata(config), ...metadataExtras };
+
+	// Whether the image row exists. If opening it is what failed, the caller's
+	// `failRunningRuns` has nothing to mark, and the invocation settles as a lone
+	// `completed` text row: a failure that looks like a success and that
+	// `pruneCompletedRuns` will delete like any other completed run.
+	let rowOpened = false;
+
 	try {
-		await startImageRun(db, p_invoc_id, concept, params, {
-			...imageModelMetadata(config),
-			...metadataExtras,
-		});
+		await startImageRun(db, p_invoc_id, concept, params, modelMetadata);
+		rowOpened = true;
 
 		const image = await generateImage(params, config, env, p_invoc_id);
 		costUsd = image.cost_usd;
@@ -130,6 +144,18 @@ export async function runImageStage(
 
 		return { ok: true, imageR2Key, costUsd };
 	} catch (cause) {
+		if (!rowOpened) {
+			// Its own try, and swallowed: the usual reason opening the row failed is
+			// that DO storage is unavailable, in which case this write fails too.
+			// Nothing can be recorded then, and `cause` is still the failure worth
+			// reporting.
+			try {
+				await insertFailedImageRun(db, p_invoc_id, concept, params, modelMetadata);
+			} catch (rescueCause) {
+				console.error(`could not record the unopened image row for ${p_invoc_id}:`, describeError(rescueCause));
+			}
+		}
+
 		return { ok: false, cause, costUsd };
 	}
 }

@@ -104,6 +104,37 @@ export async function startImageRun(
 	});
 }
 
+/**
+ * Records an image row for an invocation whose image row never opened, so the
+ * failure is visible rather than absent.
+ *
+ * Without it, a failure while opening the image row leaves the invocation as a
+ * lone `completed` text row: `failRunningRuns` finds nothing to mark, so D1
+ * shows a run that looks finished and successful, and `pruneCompletedRuns`
+ * deletes it like any other completed run because every row it has is
+ * `completed`. Both are wrong, and the second loses the record entirely.
+ *
+ * Inserted already `failed` rather than opened and then settled, since the
+ * thing being recorded has already happened.
+ */
+export async function insertFailedImageRun(
+	db: HeliosDb,
+	pInvocId: string,
+	userPrompt: string,
+	params: HeliosParams,
+	modelMetadata: ModelMetadata,
+): Promise<void> {
+	await db.insert(heliosRuns).values({
+		pInvocId,
+		modality: "image",
+		status: "failed",
+		userPrompt,
+		plannerParams: params,
+		modelMetadata,
+		completedAt: new Date(),
+	});
+}
+
 /** Settles the image row with its R2 key and cost. */
 export async function completeImageRun(
 	db: HeliosDb,

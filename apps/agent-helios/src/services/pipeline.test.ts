@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeliosParams, HeliosRequest } from "@aureline/shared-types";
 import { runPipeline } from "./pipeline";
 import { planConcept } from "./planner";
-import { startTextRun, failRunningRuns } from "../repository/do.repository";
+import { startTextRun, failRunningRuns, startImageRun, pruneCompletedRuns } from "../repository/do.repository";
 import { heliosRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
 
@@ -22,6 +22,7 @@ vi.mock("../repository/do.repository", async (importOriginal) => {
 		...actual,
 		startTextRun: vi.fn(actual.startTextRun),
 		failRunningRuns: vi.fn(actual.failRunningRuns),
+		startImageRun: vi.fn(actual.startImageRun),
 	};
 });
 
@@ -256,6 +257,44 @@ describe("runPipeline failure behaviour", () => {
 		await runPipeline(db as never, REQ, env, ORIGIN);
 
 		expect(run.mock.calls.filter((call) => call[0] === VARS.PLANNER_MODEL)).toHaveLength(3);
+	});
+
+	it("still records a failed image row when opening that row is what failed", async () => {
+		// Without this, failRunningRuns has nothing to mark: the text row is already
+		// completed and the image row does not exist. The invocation settles as a
+		// lone completed text row, so D1 shows a failure as a success.
+		const { env } = fakeEnv();
+		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
+
+		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatch(/^image:/);
+		expect(result.params).toEqual(VALID_PARAMS);
+
+		const rows = await rowsFor(db, result.p_invoc_id);
+		expect(rows).toHaveLength(2);
+		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
+		const imageRow = rows.find((row) => row.modality === "image");
+		expect(imageRow?.status).toBe("failed");
+		expect(imageRow?.completedAt).not.toBeNull();
+		// The params are duplicated onto the image row like any other (ADR-0001),
+		// so the failure is inspectable without a join.
+		expect(imageRow?.plannerParams).toEqual(VALID_PARAMS);
+	});
+
+	it("does not let that run be pruned as if it had succeeded", async () => {
+		const { env } = fakeEnv();
+		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
+
+		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+
+		// A limit of 0 prunes every fully completed run. This one has a failed row,
+		// so it must survive. Before the failed row was recorded it was a single
+		// completed text row, and this deleted it.
+		await pruneCompletedRuns(db as never, 0);
+
+		expect(await rowsFor(db, result.p_invoc_id)).toHaveLength(2);
 	});
 
 	it("calls the image model exactly once on an image failure", async () => {
