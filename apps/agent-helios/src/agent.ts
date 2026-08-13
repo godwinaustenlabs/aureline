@@ -5,6 +5,7 @@ import migrations from "../drizzle/migrations";
 import { HeliosRequestSchema, HeliosResumeRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
 import { resumeRun } from "./services/resume";
+import { getRunRows, listRuns } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
 
 /**
@@ -23,13 +24,26 @@ export class HeliosAgent extends Agent<Env> {
 	}
 
 	async onRequest(request: Request) {
+		const url = new URL(request.url);
+		const db = getDb(this.ctx.storage);
+
+		// Ahead of the POST check and the body parse: this is the one route with
+		// no body to read, and 405-ing it would make the history unreachable.
+		//
+		// Read-only and free. It must never be able to reach a model: it is the
+		// route a page is allowed to call on load and on every refresh.
+		if (request.method === "GET" && url.pathname === "/runs") {
+			const pInvocId = url.searchParams.get("p_invoc_id")?.trim();
+			// Rows exactly as stored, not reshaped. Whatever reads this is
+			// debugging, and the stored shape is the thing worth seeing.
+			return json({ runs: pInvocId ? await getRunRows(db, pInvocId) : await listRuns(db) });
+		}
+
 		if (request.method !== "POST") {
 			return error("POST required", 405);
 		}
 
-		const url = new URL(request.url);
 		const body = await request.json().catch(() => undefined);
-		const db = getDb(this.ctx.storage);
 
 		if (url.pathname === "/resume") {
 			const parsed = HeliosResumeRequestSchema.safeParse(body);

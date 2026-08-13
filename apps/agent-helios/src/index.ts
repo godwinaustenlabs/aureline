@@ -20,12 +20,12 @@ export default {
 			return new Response("Helios Agent is running", { status: 200 });
 		}
 
-		if (url.pathname === "/generate" || url.pathname === "/resume") {
+		if (url.pathname === "/generate" || url.pathname === "/resume" || url.pathname === "/runs") {
 			// The scope key picks which DO instance handles this request (ADR-0005);
 			// Sprint 1 has a single caller, so it falls back to a shared instance.
-			// `/resume` routes by the same rule deliberately: a run can only be
-			// resumed from the DO that holds it, so it has to land where its
-			// original `/generate` did.
+			// `/resume` and `/runs` route by the same rule deliberately: a run can
+			// only be resumed or read from the DO that holds it, so both have to
+			// land where the original `/generate` did.
 			const agent = await getAgentByName(env.HeliosAgent, await scopeKey(request));
 			return agent.fetch(request);
 		}
@@ -48,9 +48,24 @@ export default {
 	},
 };
 
+/**
+ * Which Durable Object serves this request (ADR-0005).
+ *
+ * A POST carries its session in the JSON body, a GET has no body at all and
+ * carries it in the query string. Both are read, because a GET falling through
+ * to the shared `default` instance would report an empty history for every
+ * named session while looking like it worked.
+ */
 async function scopeKey(request: Request): Promise<string> {
-	if (request.method !== "POST") return "default";
+	if (request.method !== "POST") {
+		return normaliseSession(new URL(request.url).searchParams.get("session_id"));
+	}
+
 	const body = await request.clone().json<{ session_id?: unknown }>().catch(() => undefined);
-	const session = body?.session_id;
+	return normaliseSession(body?.session_id);
+}
+
+/** A usable session name, or the shared instance an omitted one lands on. */
+function normaliseSession(session: unknown): string {
 	return typeof session === "string" && session.trim() ? session.trim() : "default";
 }

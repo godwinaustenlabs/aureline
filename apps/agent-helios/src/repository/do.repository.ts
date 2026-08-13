@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import type { HeliosDb } from "../db/client";
 import { heliosRuns, type HeliosRun, type NewHeliosRun } from "../db/schema";
@@ -196,6 +196,22 @@ export async function countResumeAttempts(db: HeliosDb, root: string): Promise<n
 /** The rows for one invocation. */
 export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<HeliosRun[]> {
 	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+}
+
+/**
+ * Every row in this DO, newest first, for showing a session's history.
+ *
+ * Unlike `getSettledRows` this **includes `running` rows**, because a caller
+ * looking at a session wants to see an invocation that is still in flight, not
+ * have it silently missing. It is a read for humans, never for the exporter.
+ *
+ * Unbounded on purpose. The set is already bounded by retention: only
+ * `retention_limit` completed runs survive a prune. Failed runs are never
+ * pruned, so a session that fails a lot grows, and a limit here would silently
+ * hide the failures someone came looking for.
+ */
+export async function listRuns(db: HeliosDb): Promise<HeliosRun[]> {
+	return db.select().from(heliosRuns).orderBy(desc(heliosRuns.createdAt));
 }
 
 /**

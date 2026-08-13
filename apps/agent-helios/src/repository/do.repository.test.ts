@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { heliosRuns } from "../db/schema";
-import { getRunRows, getSettledRows, pruneCompletedRuns } from "./do.repository";
+import { getRunRows, getSettledRows, listRuns, pruneCompletedRuns } from "./do.repository";
 import { exportRuns, readRun } from "./d1.repository";
 import { createTestDb, insertRow } from "./test-db";
 
@@ -131,6 +131,38 @@ describe("getSettledRows", () => {
 		const rows = await getSettledRows(db as never);
 
 		expect(rows.map((row) => row.pInvocId).sort()).toEqual(["run-a", "run-b"]);
+	});
+});
+
+describe("listRuns", () => {
+	it("returns every row newest first, across every invocation", async () => {
+		const db = createTestDb();
+		await insertRow(db, { pInvocId: "older", modality: "text", createdAt: new Date(1_000_000) });
+		await insertRow(db, { pInvocId: "newest", modality: "text", createdAt: new Date(3_000_000) });
+		await insertRow(db, { pInvocId: "middle", modality: "text", createdAt: new Date(2_000_000) });
+
+		const rows = await listRuns(db as never);
+
+		expect(rows.map((row) => row.pInvocId)).toEqual(["newest", "middle", "older"]);
+	});
+
+	it("includes running rows, unlike getSettledRows", async () => {
+		const db = createTestDb();
+		await insertRow(db, { pInvocId: "run-a", modality: "text", status: "completed" });
+		await insertRow(db, { pInvocId: "run-b", modality: "text", status: "failed" });
+		await insertRow(db, { pInvocId: "run-c", modality: "text", status: "running" });
+
+		const listed = await listRuns(db as never);
+		const settled = await getSettledRows(db as never);
+
+		// The whole reason this is not just getSettledRows: an invocation still in
+		// flight has to be visible to whoever is watching the session.
+		expect(listed.map((row) => row.pInvocId).sort()).toEqual(["run-a", "run-b", "run-c"]);
+		expect(settled.map((row) => row.pInvocId).sort()).toEqual(["run-a", "run-b"]);
+	});
+
+	it("returns an empty array for a session that has never run anything", async () => {
+		expect(await listRuns(createTestDb() as never)).toEqual([]);
 	});
 });
 
