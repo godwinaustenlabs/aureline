@@ -121,6 +121,15 @@ describe("runPipeline failure behaviour", () => {
 
 	beforeEach(() => {
 		db = createTestDb();
+		// These mocks carry live delegates from `vi.fn(actual.x)`, and several
+		// tests queue a `...Once` value. `mockReset` drains that queue and puts
+		// the delegate back, so a test that fails before consuming its queued
+		// value cannot leak it into the next one. A blanket `clearMocks` would
+		// leave the queue in place, which is the bug rather than the fix.
+		vi.mocked(planConcept).mockReset();
+		vi.mocked(startTextRun).mockReset();
+		vi.mocked(failRunningRuns).mockReset();
+		vi.mocked(startImageRun).mockReset();
 	});
 
 	it("completes a happy path with real params and a full image url", async () => {
@@ -138,6 +147,22 @@ describe("runPipeline failure behaviour", () => {
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		expect(rows.find((row) => row.modality === "image")?.status).toBe("completed");
+	});
+
+	it("records the planner's cost in dollars, not in neurons", async () => {
+		// The text row used to hold the provider's neuron figure, 102 here, in a
+		// column called cost_usd, so any query summing the column across both
+		// modalities was out by four orders of magnitude.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+
+		const textRow = (await rowsFor(db, result.p_invoc_id)).find((row) => row.modality === "text");
+		expect(textRow?.costUsd).toBe(0.0019008);
+		expect(textRow?.costUsd).not.toBe(102);
+		// The neuron figure is not lost, it just belongs in usage rather than in a
+		// column that claims to be dollars.
+		expect((textRow?.modelMetadata as { usage?: { neurons?: number } }).usage?.neurons).toBe(102);
 	});
 
 	it("records the image cost when the image billed and the R2 save then fails", async () => {

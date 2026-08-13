@@ -10,7 +10,8 @@ import {
 import { planConcept } from "./planner";
 import { generateImage, resolveSteps } from "./imageGenerator";
 import { savePatternImage } from "../repository/r2.repository";
-import { describeError, extractNeuronCost } from "../utils";
+import { describeError } from "../utils";
+import { readGatewayCost } from "./gatewayCost";
 import { describeConfig, resolveConfig, type HeliosConfig } from "../config";
 import {
 	startTextRun,
@@ -195,14 +196,19 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		stage = "planner";
 		const planned = await planConcept(req.concept, env, config, p_invoc_id);
 
+		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
+		// on this binding, so the image stage would overwrite it. Real dollars, so
+		// `cost_usd` means the same thing on both rows. The provider's neuron
+		// figure is not lost, it rides in `usage` on the metadata below.
+		const textCostUsd = await readGatewayCost(env);
+
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
 
-		const neurons = extractNeuronCost(planned.usage);
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row before the image row opens.
-		await completeTextRun(db, p_invoc_id, params, textModelMetadata, neurons);
+		await completeTextRun(db, p_invoc_id, params, textModelMetadata, textCostUsd);
 
 		stage = "image";
 		const outcome = await runImageStage(db, env, config, p_invoc_id, req.concept, params);
