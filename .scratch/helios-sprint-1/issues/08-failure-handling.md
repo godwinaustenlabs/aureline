@@ -252,6 +252,7 @@ Code and unit tests are done, unticked boxes are the ones needing a real run.
 ### Review gates
 
 - [x] `npx tsc --noEmit` clean and the full suite green from the repo root — **Ali Amir**. Confirmed on the merged branch: 59 agent-helios and 34 shared-utils.
+- [x] **Full end-to-end on the merged branch**, session `ticket08-final-e2e`. Planner failure (`1a309dad`) recorded `planner: getTextualModelOutput: model call failed after 3 attempt(s): 5007: No such model`, which is the new message and proves the KV `max_retries` of 3 reaches the call, and left **one** row, so the failed-image-row fix correctly does not fire when the image stage is never reached. Image failure (`7979abe8`) kept its params next to a `failed` image row. Resume (`4d59738c`) completed at 0.0019008 with markers on both rows, image served at 498,393 bytes. Resuming it again gave 409 "already has an image"; resuming the planner failure gave 409 "planner never succeeded". All read back through `readRun` — **Maaz Bin Asif**
 - [ ] **Ali reviews `73f6509`**, the failed-image-row fix. It is a change to `pipeline.ts`, which is Maaz's file, but it is phase 1's subject matter and Maaz must not sign off his own change — **Ali Amir**
 - [x] One real forced failure end to end, failed rows reaching D1 with the right statuses, read back with `readRun` not a hand-typed query. Same gate as ticket 07 — **Maaz Bin Asif** (reviews phase 1). Done on `16755eba`, evidence above. This demonstrates the behaviour; it does not review Ali's suite, which is still to come.
 - [ ] One real resume end to end per the steps below, including the second-attempt 409 — **Ali Amir** (reviews phase 2). The run has been done and the evidence is recorded above; this box is Ali confirming it, not repeating it. **Do not re-run the resume to check** — `16755eba`'s image row is still `failed`, so resuming it again is allowed by design and would bill another image.
@@ -268,6 +269,8 @@ npx wrangler kv key put --binding CONFIG --local text_model "@cf/does/not-exist"
 ```
 
 A bare string is fine, `prepareModelValue` wraps anything not starting with `{` into `{ model: ... }`. **Use the bare string, not JSON.** Malformed JSON returns null and silently falls back to the `PLANNER_MODEL` var, so a typo gives you a successful billed run instead of the failure you wanted.
+
+**Run every `wrangler` command from `apps/agent-helios`, and read the output.** From the repo root there is no `wrangler.jsonc`, so the command does not write to the app's local KV. The value you think you broke is still fine, and the next `POST /generate` is a full successful run that bills about $0.0029. This cost real money during the phase 2 end-to-end. Confirm the write with `wrangler kv key get` before sending anything.
 
 `ai.run` rejects an unknown model, so it fails before anything bills. Decision 3 means two attempts, so expect two in the log. If it returns a result object instead of throwing, record that here, it changes what the pipeline sees.
 

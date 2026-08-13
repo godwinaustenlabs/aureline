@@ -82,8 +82,15 @@ order by created_at;
 
 Over image rows only:
 
-- **Attempts billed** = every row.
+- **Attempts made** = every row.
+- **Attempts billed** = those with `cost_usd` not null. **This is not the same as attempts made.** An image call that failed before reaching the model, an unknown model name being the easy way to produce one, leaves a `failed` row with a null cost because nothing was ever charged. Counting every row as billed overstates spend.
 - **Patterns delivered** = those with `status = 'completed'`.
 - **Distinct briefs** = those with `resumed_from` null.
 
-So a chain of three is one brief, three charges, and one pattern. Counting text rows instead would double every figure, and summing their `cost_usd` would produce nonsense for the reason given above.
+So a chain of three where the first two reached the model is one brief, three attempts, two charges, one pattern.
+
+Counting text rows instead would double every figure, and summing their `cost_usd` would produce nonsense for the reason given above.
+
+**Retries form a tree, not a line.** `resumed_from` points at the immediate parent, and a run can be resumed more than once, so two retries of the same failed run both read `attempt: 2` as siblings. `attempt` is depth from the original, not a per-brief counter. To count attempts for one brief, walk `resumed_from` rather than taking the largest `attempt`.
+
+**Nothing caps retries.** The guard in `POST /resume` refuses a run that already has an image, which is what stops the same success being paid for twice, but a run whose image genuinely failed can be resumed again and again, and each attempt bills. That is deliberate, since the whole point is that a person decides each attempt (ADR-0009), but it means the route has no attempt ceiling and no rate limit of its own. It is safe while the playground is the only caller and wants revisiting before anything untrusted can reach it.
