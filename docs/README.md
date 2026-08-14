@@ -17,6 +17,16 @@ Every engine is built the same way, so these docs describe **the engine shape in
 
 Read them in that order the first time. After that they are reference and you can jump straight to the one you need.
 
+## The apps built on top
+
+`apps/frontend` is the **Playground** — an internal debug console for driving Helios by hand and seeing everything it recorded. It is the only app here that is not an engine.
+
+| Doc | The question it answers |
+|---|---|
+| [dev_docs/playground.md](dev_docs/playground.md) | What is the Playground, how do I run it, and how does it work? |
+
+Written for someone who has not read the docs above, so it is also the gentlest introduction to how a run is stored and what a resume actually does.
+
 ## The other two kinds of doc here
 
 **[adr/](adr/)** holds the Architecture Decision Records. The docs above tell you what the system does. An ADR tells you **why one decision was made and what was rejected**. When a doc above says "this is done because ADR-0006", that ADR is the full argument. Read them before changing architecture, because `agent-helios` is the template every future engine copies and several of those decisions apply repo-wide rather than to Helios alone.
