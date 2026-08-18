@@ -10,8 +10,13 @@
   "directories": {
     "test": "tests"
   },
+  "// engines": "Node 24 is where node:sqlite is stable; the helios repository tests use it so they need no native sqlite module. Nothing in a deployed Worker depends on this.",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm test --workspaces --if-present",
+    "config:pull:helios": "npm run config:pull --workspace=apps/agent-helios"
   },
   "repository": {
     "type": "git",

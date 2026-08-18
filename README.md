@@ -1,181 +1,82 @@
-# Aureline — Autonomous Textile Design Intelligence Platform
+# Aureline
 
-## 1. What this project is
+Autonomous textile design intelligence.
 
-Aureline is an AI platform that turns a textile design concept (a text description like "woven jacquard with a damask pattern in muted gold") into a production-ready design. The current build phase covers exactly one deployable component: **agent-helios**, a Cloudflare Worker that runs a two-model pipeline — a high-creativity text/planner model that distills a design concept into structured parameters (color, contrast, tone, style, composition), and a low-creativity image model that renders those parameters faithfully.
+Aureline turns a textile design concept, something like "art deco paisley with fine linework", into a production ready design. It does that with **engines**: small, independently deployable Cloudflare Workers that each own one part of the problem.
 
-Everything beyond Helios (orchestration, API gateway) is intentionally deferred and documented below.
+One engine exists today. **`agent-helios`** is the Pattern Engine. It runs a two model pipeline: a planner model distills a concept into structured pattern parameters, and an image model renders those parameters faithfully. Helios produces **black and white patterns only**, with no colour parameter of any kind, because colour is entirely the responsibility of Iris, the future Chromatic Engine.
 
-## 2. Repo layout
+Everything beyond Helios (orchestration, an API gateway) is deliberately deferred. [architecture.md](docs/architecture.md) says what and why.
+
+## Documentation
+
+Start with [docs/](docs/). The six files there describe the engine shape in general, using Helios as the worked example, because `agent-helios` is the template every future engine copies.
+
+| Doc | The question it answers |
+|---|---|
+| [architecture.md](docs/architecture.md) | How does an engine work, and why is it built this way? |
+| [spec.md](docs/spec.md) | What is the stack, and which exact object does each job? |
+| [database.md](docs/database.md) | How is data stored, in which store, and for how long? |
+| [flows.md](docs/flows.md) | What happens between a request arriving and a response going out? |
+| [directory-structure.md](docs/directory-structure.md) | What is in each file, and why does it exist? |
+| [running-locally.md](docs/running-locally.md) | How do I run it, and how do I know it works? |
+
+Two other kinds of doc live there. [docs/adr/](docs/adr/) holds the Architecture Decision Records, which are the *why* behind individual decisions. **Read them before changing architecture**, because several apply repo-wide rather than to Helios alone. [docs/helios-runs-conventions.md](docs/helios-runs-conventions.md) is for writing queries against the audit table.
+
+## Repo layout
 
 ```
 aureline/
 ├── apps/                  Independently deployable Cloudflare Workers
-│   └── agent-helios/      The one worker that exists today
-├── packages/              Shared, non-deployable code (workspace-linked)
-│   ├── shared-types/      TypeScript interfaces shared across apps
-│   └── shared-utils/      Placeholder — no source yet
+│   └── agent-helios/      The one engine that exists today
+├── packages/              Shared, non-deployable code, symlinked by npm workspaces
+│   ├── shared-types/      Zod schemas and the types inferred from them
+│   └── shared-utils/      Model-calling helpers (text, image, AI Gateway)
 ├── infrastructure/        Cloudflare resource definitions
-│   └── d1/                Placeholder — no D1 databases configured yet
-├── tests/                 Test suites
-│   └── .gitkeep           No tests written yet
-├── package.json           npm-workspaces root (apps/*, packages/*)
+│   └── d1/migrations/     Generated D1 migrations for the audit table
+├── docs/                  Documentation and ADRs
+├── tests/                 Scratch harnesses, not the test suite
+├── .scratch/              Sprint tickets as markdown
+├── package.json           npm workspaces root (apps/*, packages/*)
 ├── LICENSE                Apache 2.0
-└── repo.md                This file
+└── README.md              This file
 ```
 
-No `tsconfig.base.json`, `turbo.json`, or `.github` directory exist. Those may be added later if a build tool like Turborepo or a CI workflow is introduced.
+Plain npm workspaces. There is no `tsconfig.base.json`, no `turbo.json` and no `.github/` yet, and deploys are manual.
 
-## 3. apps/agent-helios
-
-**What it does.** Accepts an HTTP request and, in the future, runs the two-model pipeline. Today the pipeline logic is a stub: `onRequest` returns a fixed string.
-
-**How Agents SDK / Durable Objects works here.** Cloudflare's `agents` library (v0.19.0) wraps Durable Objects so each agent instance is a Durable Object with SQLite storage, HTTP routing, and WebSocket support built in. The worker's `fetch` handler delegates to `routeAgentRequest`, which inspects the URL path — requests under `/agents/<AgentName>/<instance-id>` are forwarded to the matching Durable Object's `onRequest` method. Everything else falls through to a 404.
-
-**What's implemented vs. stubbed.**
-
-| Artifact | Status |
-|---|---|
-| `HeliosAgent` class (extends `Agent<Env>`) | Stub — `onRequest` returns a static string |
-| `MyDurableObject` class (extends `DurableObject<Env>`) | Stub — `sayHello` RPC method exists but is unused |
-| Two-model pipeline (text-planner + image model) | Not started |
-| Integration with any AI model API | Not started |
-
-**wrangler.jsonc bindings** (actual contents):
-
-```jsonc
-{
-  "name": "agent-helios",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-07-27",
-  "migrations": [
-    {
-      "new_sqlite_classes": ["HeliosAgent"],
-      "tag": "v1"
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "HeliosAgent",
-        "name": "HeliosAgent"
-      }
-    ]
-  },
-  "observability": { "enabled": true },
-  "upload_source_maps": true,
-  "compatibility_flags": ["nodejs_compat"]
-}
-```
-
-- `durable_objects.bindings[0]` maps the JS class `HeliosAgent` to a binding named `HeliosAgent` so the worker can look up and call agent instances by name.
-- `migrations[0]` tells Cloudflare to create SQLite storage for the `HeliosAgent` class when first deployed.
-- `nodejs_compat` enables Node.js API shims (`Buffer`, `process`, etc.) inside the Workers runtime.
-- `MyDurableObject` was generated by the `create cloudflare` starter but is **not** registered in `wrangler.jsonc` — it has no binding. It exists in source but is unreachable at runtime. This is leftover scaffolding that should be removed before production.
-
-**Shared dependency.** `agent-helios` depends on `@aureline/shared-types` via workspace symlink. The actual interface it will use is already defined (see §4).
-
-## 4. packages/
-
-Two packages exist. Both are declared in the root `package.json` workspaces and are resolved as symlinks under `node_modules/@aureline/*`.
-
-### `@aureline/shared-types`
-
-Defines the contract between Helios and its eventual callers. Single source of truth so the API gateway (future), Athena (future), and Helios all agree on request/response shapes.
-
-```ts
-// packages/shared-types/src/v1/messages.ts
-export interface HeliosRequest {
-  concept: string;
-  requestId: string;
-}
-
-export interface HeliosParams {
-  color: string;
-  contrast: string;
-  tone: string;
-  style: string;
-  composition: string;
-}
-
-export interface HeliosResult {
-  requestId: string;
-  imageUrl: string;
-  params: HeliosParams;
-  modelVersion: string;
-  cost: number;
-}
-```
-
-The pipeline flow these types describe: `HeliosRequest` → (text-planner) → `HeliosParams` → (image model) → `HeliosResult`.
-
-### `@aureline/shared-utils`
-
-Placeholder. `package.json` exists but `"main": ""` and no source files except `src/.gitkeep`. Intended for utility functions (e.g., prompt templates, cost calculation) that multiple apps would import.
-
-### Why shared rather than duplicated per-app
-
-Workspace packages are symlinked at install time. A change to `shared-types` is instantly visible to every app that depends on it, without any publish step. When Helios is the only consumer there's little benefit, but once api-gateway or Athena arrives, duplicating these interfaces across apps would create drift.
-
-## 5. tests/
-
-The root `package.json` sets `"directories": { "test": "tests" }`, which reserves `tests/` for the project. Today it contains only `.gitkeep`.
-
-There is no test runner configured. The `test` script in root `package.json` is `echo "Error: no test specified" && exit 1`.
-
-When AI-evaluation material is added (test prompts, scorecards, expected outputs for tuning Helios's models), it should live in `tests/evals/` to keep it distinct from unit/integration tests. Evals are qualitative — they measure whether the model output is good, not whether the code is correct — and usually involve manual review or batch scoring rather than `assert` statements.
-
-## 6. Deployment model
-
-Each folder under `apps/` is a standalone Cloudflare Workers project with its own `wrangler.jsonc`. Cloudflare's Git integration (Workers & Pages → your repo → "build watch paths") can be configured so that:
-
-- A push changing `apps/agent-helios/**` triggers a deploy of **only** `agent-helios`.
-- A push changing `packages/shared-types/**` triggers a deploy of **every** app whose watch path includes that package.
-
-Today there is exactly **one** app (`agent-helios`), so there isn't a meaningful distinction yet. The pattern matters once a second app appears.
-
-No CI workflows (`.github/workflows/`) exist yet. Deployments must be run manually with `npm run deploy` inside the app directory, which calls `wrangler deploy`.
-
-## 7. Deliberately not here yet
-
-### api-gateway
-
-An HTTP gateway that authenticates requests, rate-limits, and routes them to the correct agent. It is not built because there is nothing to route — Helios is the only agent, and directly exposing `wrangler dev` on port 8787 is sufficient. The api-gateway will be built as a separate app under `apps/api-gateway` as soon as there is a second consumer of Helios (a web UI, an integration partner, etc.) that justifies the indirection.
-
-### agent-orchestrator (Athena)
-
-An orchestrator agent that decomposes complex design briefs into sub-tasks and delegates them to specialist agents (Helios for rendering, others for color-matching, material selection, etc.). It is not built because there are no specialist agents to orchestrate. Work on Athena will start once Helios's two-model pipeline is producing reliable results and there is a concrete need to chain agents together.
-
-## 8. How to run it locally
-
-### Prerequisites
-
-- Node.js ≥ 18 (for `wrangler`)
-- A Cloudflare account (for `wrangler deploy` — not needed for local dev)
-
-### Commands
+## Quickstart
 
 ```bash
-# Install all workspace dependencies from the repo root
-npm install
-
-# Start the agent-helios dev server (defaults to port 8787)
-npm run dev --workspace=apps/agent-helios
-
-# Or, from inside apps/agent-helios:
-cd apps/agent-helios
-npm run dev
-
-# Open http://localhost:8787/ — returns "Helios agent running"
+npm install                                   # from the repo root
+npm test                                      # 101 tests, no model calls, free
+cd apps/agent-helios && npx tsc --noEmit      # typecheck
+npm run dev                                   # http://localhost:8787
 ```
 
-The `dev` script calls `wrangler dev`, which compiles TypeScript on the fly, starts Miniflare (the local Cloudflare Workers simulator), and watches for file changes.
-
-### Available scripts per app
-
+```bash
+curl localhost:8787/
+# Helios Agent is running
 ```
-deploy   → wrangler deploy          # Push to Cloudflare Workers
-dev      → wrangler dev             # Local dev server with live reload
-start    → wrangler dev             # Alias for dev
-cf-typegen → wrangler types         # Regenerate worker-configuration.d.ts after binding changes
-```
+
+Two things to know before you go further:
+
+- **`wrangler dev` bills your real Cloudflare account.** Everything else is simulated locally, but the `AI` binding has no simulator, so `POST /generate` makes a real billed model call on localhost exactly as in production. About $0.0029 a run. Never put one in a loop.
+- **Run `npx tsc --noEmit` from inside `apps/agent-helios`**, not the repo root, where `npx` resolves a TypeScript version that rejects this project's module resolution.
+
+Full setup, the scripts, and a runbook for proving it works: [running-locally.md](docs/running-locally.md).
+
+## Status
+
+| | |
+|---|---|
+| Helios pipeline, planner and image, end to end | Built |
+| DO-local persistence, D1 export, retention pruning | Built |
+| R2 image storage and serving | Built |
+| Failure handling and manual resume | Built |
+| Runtime config from KV | Built |
+| Playground UI | Not started |
+| Iris, Atlas, Athena, and the rest | Not started |
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).
