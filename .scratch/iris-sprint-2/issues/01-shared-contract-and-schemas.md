@@ -12,6 +12,8 @@
 
 **Owner:** Maaz Bin Asif. **Reviewer:** Saad Naik.
 
+**Duration:** 1 day. **Scheduled:** Thu Aug 20 to Thu Aug 20.
+
 ## Read this first
 
 - `packages/shared-types/src/v1/messages.ts` is the whole existing contract, 83 lines. Read it top to bottom before writing anything. Every convention this ticket follows is already visible there.

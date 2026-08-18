@@ -12,6 +12,8 @@
 
 **Owner:** Saad Naik. **Reviewer:** Maaz Ahmad.
 
+**Duration:** 1 day. **Scheduled:** Wed Aug 19 to Wed Aug 19.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/issues/02-cloudflare-scaffolding-and-config.md` in full, because this ticket is the same job for the other engine and its decisions apply here unchanged unless this file says otherwise. Doing Iris's first and then this one is much faster than doing them independently.

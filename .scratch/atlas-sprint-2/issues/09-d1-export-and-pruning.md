@@ -12,6 +12,8 @@
 
 **Owner:** Arham Zahid. **Reviewer:** Hashir Rauf, with the D1 migration apply reviewed by Saad Naik.
 
+**Duration:** 1 day. **Scheduled:** Thu Aug 27 to Thu Aug 27.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/issues/11-d1-export-and-pruning.md`. Same job for the other engine, written by the same person. Every decision transfers except the chunk size, which is the one thing this ticket must not copy.

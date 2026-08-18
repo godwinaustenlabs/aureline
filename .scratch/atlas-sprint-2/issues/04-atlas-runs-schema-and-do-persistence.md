@@ -12,6 +12,8 @@
 
 **Owner:** Hashir Rauf. **Reviewer:** Arham Zahid.
 
+**Duration:** 1 day. **Scheduled:** Thu Aug 20 to Thu Aug 20.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/issues/03-iris-runs-schema-and-do-persistence.md`. This is the same job for the other engine, and most of its decisions carry over. The parts that do **not** carry over are the whole substance of this ticket, so read that file and then read the decisions below against it.

@@ -12,6 +12,8 @@
 
 **Owner:** M. Subhan. **Reviewer:** Maaz Bin Asif.
 
+**Duration:** 1 day. **Scheduled:** Fri Aug 21 to Fri Aug 21.
+
 ## Read this first
 
 - `apps/agent-helios/src/prompts/planner.prompt.ts` (273 lines). This is the reference for everything in this ticket: how the glossaries are typed against the schema, how each enum value gets a gloss, how the system prompt is structured, and how the prompt carries a version id.

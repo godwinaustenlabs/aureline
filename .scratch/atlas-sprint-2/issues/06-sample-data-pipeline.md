@@ -10,7 +10,9 @@
 
 **Status:** ready-for-human.
 
-**Owner:** Maaz Ahmad. **Reviewer:** Maaz Bin Asif.
+**Owner:** Maaz Ahmad. **Reviewer:** Ali Amir.
+
+**Duration:** 2 days. **Scheduled:** Tue Aug 25 to Wed Aug 26.
 
 ## Read this first
 
@@ -121,11 +123,11 @@ This differs from Helios's `patterns/{p_invoc_id}.jpg`, which names what the fil
 
 ### Review gates
 
-- [ ] Confirm `runPipeline` cannot throw. Read every `await` in it and ask what happens if that one rejects, then confirm the cleanup inside the catch is itself wrapped. (**Maaz Bin Asif**)
-- [ ] Confirm the image-cost variable is declared outside the try, and write down what would break if it were not. If you cannot state the failure, the reasoning has not landed and it will get moved by someone tidying up. (**Maaz Bin Asif**)
-- [ ] Confirm `runImageStage`'s signature is genuinely re-enterable by atlas-08, by writing out the call you would make from a resume path. If it needs an argument it does not have, say so now. (**Maaz Bin Asif**)
-- [ ] Confirm `sample-iris-result.ts` is validated by a real `IrisResultSchema.parse` in a test, not merely typed as `IrisResult` (decision 9). A type annotation is checked at compile time against a schema that may have moved. (**Maaz Bin Asif**)
-- [ ] Open `image_url` in a browser and confirm a garment image renders. Not a curl returning 200: actually look at it. (**Maaz Bin Asif**)
+- [ ] Confirm `runPipeline` cannot throw. Read every `await` in it and ask what happens if that one rejects, then confirm the cleanup inside the catch is itself wrapped. (**Ali Amir**)
+- [ ] Confirm the image-cost variable is declared outside the try, and write down what would break if it were not. If you cannot state the failure, the reasoning has not landed and it will get moved by someone tidying up. (**Ali Amir**)
+- [ ] Confirm `runImageStage`'s signature is genuinely re-enterable by atlas-08, by writing out the call you would make from a resume path. If it needs an argument it does not have, say so now. (**Ali Amir**)
+- [ ] Confirm `sample-iris-result.ts` is validated by a real `IrisResultSchema.parse` in a test, not merely typed as `IrisResult` (decision 9). A type annotation is checked at compile time against a schema that may have moved. (**Ali Amir**)
+- [ ] Open `image_url` in a browser and confirm a garment image renders. Not a curl returning 200: actually look at it. (**Ali Amir**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget

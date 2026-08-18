@@ -10,7 +10,9 @@
 
 **Status:** blocked, waiting on iris-01.
 
-**Owner:** Maaz Ahmad. **Reviewer:** Maaz Bin Asif.
+**Owner:** Maaz Ahmad. **Reviewer:** Saad Naik.
+
+**Duration:** 1 day. **Scheduled:** Fri Aug 21 to Fri Aug 21.
 
 ## Read this first
 
@@ -149,11 +151,11 @@ export function atlasInputFromIrisResult(
 
 ### Review gates
 
-- [ ] **Read this as the Iris manager.** Is anything Atlas needs missing from `IrisResultSchema`, and is anything in it that Atlas has to ignore? Now is when changing it is cheap; after atlas-06 has fixtures it means changing both engines. (**Maaz Bin Asif**)
-- [ ] Confirm `atlasInputFromIrisResult` is the only path from an Iris result into an Atlas request, and that nothing reconstructs it field by field. (**Maaz Bin Asif**)
-- [ ] Confirm the five regions and five garment types are the ones we actually want to support, because atlas-05 writes prompt text for each and atlas-10 renders a control for each. Adding one later means touching three tickets' output. (**Maaz Bin Asif**)
-- [ ] Confirm there is no free-text field anywhere on the request (decision 5). (**Maaz Bin Asif**)
-- [ ] Confirm `garment_ref` is required, validated as a URL (not a loose string like `pattern_ref`), and does not replace `garment_type` (decision 6). (**Maaz Bin Asif**)
+- [ ] **Read this as the Iris manager.** Is anything Atlas needs missing from `IrisResultSchema`, and is anything in it that Atlas has to ignore? Now is when changing it is cheap; after atlas-06 has fixtures it means changing both engines. (**Saad Naik**)
+- [ ] Confirm `atlasInputFromIrisResult` is the only path from an Iris result into an Atlas request, and that nothing reconstructs it field by field. (**Saad Naik**)
+- [ ] Confirm the five regions and five garment types are the ones we actually want to support, because atlas-05 writes prompt text for each and atlas-10 renders a control for each. Adding one later means touching three tickets' output. (**Saad Naik**)
+- [ ] Confirm there is no free-text field anywhere on the request (decision 5). (**Saad Naik**)
+- [ ] Confirm `garment_ref` is required, validated as a URL (not a loose string like `pattern_ref`), and does not replace `garment_type` (decision 6). (**Saad Naik**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget

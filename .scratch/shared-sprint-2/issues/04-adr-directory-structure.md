@@ -12,6 +12,8 @@
 
 **Owner:** Maaz Bin Asif. **Reviewer:** Maaz Ahmad.
 
+**Duration:** 1 day. **Scheduled:** Wed Aug 19 to Wed Aug 19.
+
 ## Read this first
 
 - `docs/adr/`, the ten existing files, just to see the naming and the format. `0009-retry-policy-is-per-stage-not-per-pipeline.md` and `0010-export-the-whole-do-before-pruning-any-of-it.md` are the two most recent and the ones to match.

@@ -12,6 +12,8 @@
 
 **Owner:** Arham Zahid. **Reviewer:** Hashir Rauf, with the D1 migration apply reviewed by Saad Naik.
 
+**Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
+
 ## Read this first
 
 - ADR-0010 in full. It is short and it is the whole rule this ticket implements.

@@ -10,7 +10,9 @@
 
 **Status:** blocked, waiting on iris-12.
 
-**Owner:** Maaz Ahmad. **Reviewer:** Maaz Bin Asif.
+**Owner:** Maaz Ahmad. **Reviewer:** M. Subhan.
+
+**Duration:** 1 day. **Scheduled:** Thu Aug 27 to Thu Aug 27.
 
 ## Read this first
 
@@ -106,12 +108,12 @@ export function validateAtlasGenerate(
 
 ### Review gates
 
-- [ ] Do the whole chain yourself in a browser: Helios run, copy into Iris, Iris run, copy into Atlas, Atlas run, look at the garment, resume it. If any step needs explaining, the labels need work. (**Maaz Bin Asif**)
-- [ ] Confirm the spend dialog shows Atlas's number when Atlas is selected, and Iris's and Helios's when they are. (**Maaz Bin Asif**)
-- [ ] Confirm the history shows a complete Atlas run from one row, with nothing rendered as missing or empty because a second row was expected (decision 5). (**Maaz Bin Asif**)
-- [ ] Confirm the garment and region controls are generated from the schema enums, not from a literal array in a component (decision 2). (**Maaz Bin Asif**)
-- [ ] Confirm Helios and Iris both still work exactly as before. Helios is deployed, so this is the regression check that matters most. (**Maaz Bin Asif**)
-- [ ] Confirm `ALLOWED_ORIGINS` on Atlas is a specific list and is not `*`. (**Maaz Bin Asif**)
+- [ ] Do the whole chain yourself in a browser: Helios run, copy into Iris, Iris run, copy into Atlas, Atlas run, look at the garment, resume it. If any step needs explaining, the labels need work. (**M. Subhan**)
+- [ ] Confirm the spend dialog shows Atlas's number when Atlas is selected, and Iris's and Helios's when they are. (**M. Subhan**)
+- [ ] Confirm the history shows a complete Atlas run from one row, with nothing rendered as missing or empty because a second row was expected (decision 5). (**M. Subhan**)
+- [ ] Confirm the garment and region controls are generated from the schema enums, not from a literal array in a component (decision 2). (**M. Subhan**)
+- [ ] Confirm Helios and Iris both still work exactly as before. Helios is deployed, so this is the regression check that matters most. (**M. Subhan**)
+- [ ] Confirm `ALLOWED_ORIGINS` on Atlas is a specific list and is not `*`. (**M. Subhan**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget

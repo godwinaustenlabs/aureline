@@ -12,6 +12,8 @@
 
 **Owner:** jointly, Maaz Bin Asif and Maaz Ahmad, with Saad Naik on the migration apply. One named holder, **to be filled in when it unblocks.**
 
+**Duration:** 1 day. **Scheduled:** Fri Aug 28 to Fri Aug 28.
+
 ## Read this first
 
 - `docs/sprint-2-3-conventions.md`, the two paragraphs explaining why the databases are separate now and why they get merged later. That is the reasoning this ticket carries out.

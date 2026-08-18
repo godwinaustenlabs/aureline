@@ -12,6 +12,8 @@
 
 **Owner:** Hashir Rauf. **Reviewer:** Arham Zahid.
 
+**Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
+
 ## Read this first
 
 - `apps/agent-helios/src/db/schema.ts` (36 lines) and `db/client.ts` (14 lines). Between them they are the whole pattern this ticket copies.

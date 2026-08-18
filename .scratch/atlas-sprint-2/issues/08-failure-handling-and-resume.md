@@ -10,7 +10,9 @@
 
 **Status:** ready-for-human, for the decision half.
 
-**Owner:** Maaz Bin Asif. **Reviewer:** Maaz Ahmad.
+**Owner:** Maaz Ahmad. **Reviewer:** Arham Zahid.
+
+**Duration:** 2 days. **Scheduled:** Mon Aug 31 to Tue Sep 1.
 
 ## Read this first
 
@@ -72,37 +74,37 @@ Markers in `model_metadata`, on the resumed run's single row:
 
 ### The decision, first, before any code
 
-- [ ] Write the ADR at `docs/adr/atlas/0002-...`, following shared-04's scheme, cited as `ADR-ATLAS-0002`. State that nothing auto-retries and why, for Atlas specifically (decision 1). Where the answer matches ADR-0009, say why the reasoning transfers rather than only citing it. (**Maaz Bin Asif**)
-- [ ] In the same ADR, decide the unfetchable-pattern and unfetchable-garment-reference questions (decision 12). For the pattern, include the case where Iris's own retention pruning removed the source run, because that is a real interaction between two engines' lifecycles and it will happen. For the garment reference, name that it is always an external URL (there is no upload endpoint, atlas-01 decision 6), fetched fresh on every attempt including a resume, so it can go stale for reasons entirely outside our control: the link expires, the host takes the image down, the caller's own storage changes. That is a different, less predictable failure mode than the pattern's, which at least depends on our own retention policy. (**Maaz Bin Asif**)
-- [ ] In the same ADR, state what `max_retries` governs in Atlas, given nothing on the image path retries. If the honest answer is "nothing today", say that, so the next person does not assume it is load-bearing. (**Maaz Bin Asif**)
-- [ ] Do **not** re-answer the two open notes from `Considerations for Sprint 2.md` here. `ADR-IRIS-0001` answers both, and this ADR cites it. Two ADRs answering the same question differently is worse than one. (**Maaz Bin Asif**)
+- [ ] Write the ADR at `docs/adr/atlas/0002-...`, following shared-04's scheme, cited as `ADR-ATLAS-0002`. State that nothing auto-retries and why, for Atlas specifically (decision 1). Where the answer matches ADR-0009, say why the reasoning transfers rather than only citing it. (**Maaz Ahmad**)
+- [ ] In the same ADR, decide the unfetchable-pattern and unfetchable-garment-reference questions (decision 12). For the pattern, include the case where Iris's own retention pruning removed the source run, because that is a real interaction between two engines' lifecycles and it will happen. For the garment reference, name that it is always an external URL (there is no upload endpoint, atlas-01 decision 6), fetched fresh on every attempt including a resume, so it can go stale for reasons entirely outside our control: the link expires, the host takes the image down, the caller's own storage changes. That is a different, less predictable failure mode than the pattern's, which at least depends on our own retention policy. (**Maaz Ahmad**)
+- [ ] In the same ADR, state what `max_retries` governs in Atlas, given nothing on the image path retries. If the honest answer is "nothing today", say that, so the next person does not assume it is load-bearing. (**Maaz Ahmad**)
+- [ ] Do **not** re-answer the two open notes from `Considerations for Sprint 2.md` here. `ADR-IRIS-0001` answers both, and this ADR cites it. Two ADRs answering the same question differently is worse than one. (**Maaz Ahmad**)
 
 ### The route
 
-- [ ] Write `src/services/resume.ts`, its own file because it is a second entry point into the pipeline rather than a step within it. (**Maaz Bin Asif**)
-- [ ] Implement all seven refusals, each with its own message. A single generic "cannot resume" is useless to a caller and worse than no route. (**Maaz Bin Asif**)
-- [ ] Count the cap over `root` using `countResumeAttempts` (decisions 6 and 7). (**Maaz Bin Asif**)
-- [ ] Re-validate the stored placement with `AtlasPlacementSchema.parse` and refuse with `firstIssueMessage` on failure (decision 10). (**Maaz Bin Asif**)
-- [ ] Call `runImageStage` with the markers as `metadataExtras`, so they land on the resumed run's row (decision 2). There is only one row, so there is only one place they can go and no way to get this half right. (**Maaz Bin Asif**)
-- [ ] Do **not** write a resumed non-image row for symmetry with Helios and Iris. There is no planner call to record the absence of. (**Maaz Bin Asif**)
-- [ ] Wire `POST /resume` in `agent.ts`: validate with `AtlasResumeRequestSchema`, 400 on a malformed body, 409 on a refusal, 200 with the result otherwise. Replace atlas-06's not-implemented stub. (**Maaz Bin Asif**)
-- [ ] Confirm `/resume` routes to the DO by the same `scopeKey` rule `/generate` does. A run can only be resumed from the DO that holds it. atlas-02 already did this; verify it. (**Maaz Bin Asif**)
-- [ ] Confirm `exportAndPrune` runs on a resumed run's exit paths too, not just `runPipeline`'s. (**Maaz Bin Asif**)
+- [ ] Write `src/services/resume.ts`, its own file because it is a second entry point into the pipeline rather than a step within it. (**Maaz Ahmad**)
+- [ ] Implement all seven refusals, each with its own message. A single generic "cannot resume" is useless to a caller and worse than no route. (**Maaz Ahmad**)
+- [ ] Count the cap over `root` using `countResumeAttempts` (decisions 6 and 7). (**Maaz Ahmad**)
+- [ ] Re-validate the stored placement with `AtlasPlacementSchema.parse` and refuse with `firstIssueMessage` on failure (decision 10). (**Maaz Ahmad**)
+- [ ] Call `runImageStage` with the markers as `metadataExtras`, so they land on the resumed run's row (decision 2). There is only one row, so there is only one place they can go and no way to get this half right. (**Maaz Ahmad**)
+- [ ] Do **not** write a resumed non-image row for symmetry with Helios and Iris. There is no planner call to record the absence of. (**Maaz Ahmad**)
+- [ ] Wire `POST /resume` in `agent.ts`: validate with `AtlasResumeRequestSchema`, 400 on a malformed body, 409 on a refusal, 200 with the result otherwise. Replace atlas-06's not-implemented stub. (**Maaz Ahmad**)
+- [ ] Confirm `/resume` routes to the DO by the same `scopeKey` rule `/generate` does. A run can only be resumed from the DO that holds it. atlas-02 already did this; verify it. (**Maaz Ahmad**)
+- [ ] Confirm `exportAndPrune` runs on a resumed run's exit paths too, not just `runPipeline`'s. (**Maaz Ahmad**)
 
 ### Tests
 
-- [ ] Write `services/resume.test.ts` with one test per refusal. Seven refusals, seven tests, each asserting the specific message. (**Maaz Bin Asif**)
-- [ ] Test the cap counting over `root` across a **chain**: original, resume, resume-of-resume. Assert the third is refused when the cap is two. A cap that counts `resumed_from` passes a single-level test and fails this one, which is why this test exists. (**Maaz Bin Asif**)
-- [ ] Assert the markers land on the resumed run's row and that a resumed run is exactly one row. (**Maaz Bin Asif**)
-- [ ] Assert a refusal writes **no row at all** and never touches the fake `AI` binding. A refusal that quietly bills is the worst outcome this ticket can produce, and for Atlas it is also the most expensive one. (**Maaz Bin Asif**)
+- [ ] Write `services/resume.test.ts` with one test per refusal. Seven refusals, seven tests, each asserting the specific message. (**Maaz Ahmad**)
+- [ ] Test the cap counting over `root` across a **chain**: original, resume, resume-of-resume. Assert the third is refused when the cap is two. A cap that counts `resumed_from` passes a single-level test and fails this one, which is why this test exists. (**Maaz Ahmad**)
+- [ ] Assert the markers land on the resumed run's row and that a resumed run is exactly one row. (**Maaz Ahmad**)
+- [ ] Assert a refusal writes **no row at all** and never touches the fake `AI` binding. A refusal that quietly bills is the worst outcome this ticket can produce, and for Atlas it is also the most expensive one. (**Maaz Ahmad**)
 
 ### Review gates
 
-- [ ] Read the ADR and confirm it decides the auto-retry question, the unfetchable-pattern question, the unfetchable-garment-reference question and the `max_retries` question, rather than deferring any of them. A deferred question in an ADR reads as an answered one six months later. (**Maaz Ahmad**)
-- [ ] Trigger a real resume and confirm the second image differs from the first. If they are identical, `skipCache` from atlas-07 is not in effect and resume is spending money to return a cached image. (**Maaz Ahmad**)
-- [ ] Hit the cap for real and confirm the refusal message names the actual count and the actual limit. (**Maaz Ahmad**)
-- [ ] Confirm each refusal path costs nothing, by checking the gateway log gains no row after each one. (**Maaz Ahmad**)
-- [ ] Read `GET /runs` for a resumed brief and confirm the whole history is reconstructable from the markers alone. (**Maaz Ahmad**)
+- [ ] Read the ADR and confirm it decides the auto-retry question, the unfetchable-pattern question, the unfetchable-garment-reference question and the `max_retries` question, rather than deferring any of them. A deferred question in an ADR reads as an answered one six months later. (**Maaz Bin Asif**)
+- [ ] Trigger a real resume and confirm the second image differs from the first. If they are identical, `skipCache` from atlas-07 is not in effect and resume is spending money to return a cached image. (**Maaz Bin Asif**)
+- [ ] Hit the cap for real and confirm the refusal message names the actual count and the actual limit. (**Maaz Bin Asif**)
+- [ ] Confirm each refusal path costs nothing, by checking the gateway log gains no row after each one. (**Maaz Bin Asif**)
+- [ ] Read `GET /runs` for a resumed brief and confirm the whole history is reconstructable from the markers alone. (**Maaz Bin Asif**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget

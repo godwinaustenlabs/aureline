@@ -10,7 +10,9 @@
 
 **Status:** blocked, waiting on iris-06.
 
-**Owner:** Arham Zahid. **Reviewer:** Maaz Ahmad.
+**Owner:** Arham Zahid. **Reviewer:** Maaz Bin Asif.
+
+**Duration:** 2 days. **Scheduled:** Tue Aug 25 to Wed Aug 26.
 
 ## Read this first
 

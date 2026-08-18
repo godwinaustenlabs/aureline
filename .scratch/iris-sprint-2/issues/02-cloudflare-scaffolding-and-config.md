@@ -12,6 +12,8 @@
 
 **Owner:** Maaz Bin Asif. **Reviewer:** Saad Naik.
 
+**Duration:** 1 day. **Scheduled:** Fri Aug 21 to Fri Aug 21.
+
 ## Read this first
 
 - `apps/agent-helios/wrangler.jsonc`, all 138 lines including the comments. The comments are the reasoning and they are the most valuable part of that file. This ticket is largely "do that again, for Iris", so read it rather than re-deriving it.

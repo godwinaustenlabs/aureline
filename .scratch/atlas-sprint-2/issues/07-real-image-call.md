@@ -12,6 +12,8 @@
 
 **Owner:** M. Subhan. **Reviewer:** Ali Amir.
 
+**Duration:** 2 days. **Scheduled:** Thu Aug 27 to Fri Aug 28.
+
 ## Read this first
 
 - `.scratch/atlas-sprint-2/issues/03-garment-placement-probe.md`, "What we found". The working prompt, the real cost, and whether the cost needs a retried read all come from there. If that section is empty, this ticket is not ready.

@@ -12,6 +12,8 @@
 
 **Owner:** Ali Amir. **Reviewer:** Hashir Rauf.
 
+**Duration:** 2 days. **Scheduled:** Fri Aug 28 to Mon Aug 31.
+
 ## Read this first
 
 - `apps/agent-helios/src/services/planner.ts` (49 lines) and `apps/agent-helios/src/tools.ts` (20 lines). Between them they are almost exactly this ticket, for a different schema. `tools.ts` in particular is deliberately thin: it binds a schema to the helper and owns nothing else.

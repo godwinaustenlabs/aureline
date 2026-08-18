@@ -12,6 +12,8 @@
 
 **Owner:** Saad Naik. **Reviewer:** Maaz Bin Asif and Maaz Ahmad, both, because it gates both squads.
 
+**Duration:** 1 day. **Scheduled:** Thu Aug 20 to Thu Aug 20.
+
 ## Read this first
 
 - `docs/sprint-2-3-conventions.md`, the CI section. It names the four checks and the branches. That section is this ticket's specification.

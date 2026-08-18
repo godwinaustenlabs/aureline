@@ -10,7 +10,9 @@
 
 **Status:** ready-for-human.
 
-**Owner:** Maaz Bin Asif. **Reviewer:** Ali Amir.
+**Owner:** Ali Amir. **Reviewer:** Maaz Bin Asif.
+
+**Duration:** 2 days. **Scheduled:** Wed Aug 26 to Thu Aug 27.
 
 ## Read this first
 
@@ -76,46 +78,46 @@ This differs from Helios's `patterns/{p_invoc_id}.jpg`, which names what the fil
 
 ### The pipeline
 
-- [ ] Write `services/pipeline.ts` with `runPipeline`, `runImageStage` and `exportAndPrune`. `exportAndPrune` may be a no-op body with a comment pointing at iris-11, but the call site must be in place, at both the success and the failure exit. (**Maaz Bin Asif**)
-- [ ] `runPipeline` never throws. Wrap the whole body, and wrap the cleanup inside the catch in its own try as well, because cleanup is itself a DO write and fails when storage is what broke. A throw from inside a catch escapes the function. (**Maaz Bin Asif**)
-- [ ] Track the image cost in a variable declared **outside** the try. The real image call bills before the R2 save and the row update run, so a failure in either must still report what was spent. Getting this wrong records a spent image as having cost nothing, and it is invisible until it happens in production. (**Maaz Bin Asif**)
-- [ ] Track the current stage in a variable and prefix it onto `error` on failure (`"planner: ..."`, `"image: ..."`). This is how failures stay attributable without a separate column, which is why decision 5 of iris-03 says there is no `error` column. (**Maaz Bin Asif**)
-- [ ] `runImageStage` always leaves an image row behind, even when opening the row is itself what failed, via `insertFailedImageRun`. Otherwise the invocation settles as a lone completed text row that looks like a success and gets pruned like one. (**Maaz Bin Asif**)
-- [ ] `runImageStage` accepts a `metadataExtras` argument merged over the image row's metadata. `runPipeline` passes nothing; iris-10's resume passes its `resumed_from` and `attempt` markers, which have to land on this row because it is the one carrying `cost_usd` and `image_r2_key` and therefore the one every cost query reads. (**Maaz Bin Asif**)
-- [ ] `runImageStage` returns an outcome object rather than throwing, so the caller decides what a failed image means for its own result. (**Maaz Bin Asif**)
+- [ ] Write `services/pipeline.ts` with `runPipeline`, `runImageStage` and `exportAndPrune`. `exportAndPrune` may be a no-op body with a comment pointing at iris-11, but the call site must be in place, at both the success and the failure exit. (**Ali Amir**)
+- [ ] `runPipeline` never throws. Wrap the whole body, and wrap the cleanup inside the catch in its own try as well, because cleanup is itself a DO write and fails when storage is what broke. A throw from inside a catch escapes the function. (**Ali Amir**)
+- [ ] Track the image cost in a variable declared **outside** the try. The real image call bills before the R2 save and the row update run, so a failure in either must still report what was spent. Getting this wrong records a spent image as having cost nothing, and it is invisible until it happens in production. (**Ali Amir**)
+- [ ] Track the current stage in a variable and prefix it onto `error` on failure (`"planner: ..."`, `"image: ..."`). This is how failures stay attributable without a separate column, which is why decision 5 of iris-03 says there is no `error` column. (**Ali Amir**)
+- [ ] `runImageStage` always leaves an image row behind, even when opening the row is itself what failed, via `insertFailedImageRun`. Otherwise the invocation settles as a lone completed text row that looks like a success and gets pruned like one. (**Ali Amir**)
+- [ ] `runImageStage` accepts a `metadataExtras` argument merged over the image row's metadata. `runPipeline` passes nothing; iris-10's resume passes its `resumed_from` and `attempt` markers, which have to land on this row because it is the one carrying `cost_usd` and `image_r2_key` and therefore the one every cost query reads. (**Ali Amir**)
+- [ ] `runImageStage` returns an outcome object rather than throwing, so the caller decides what a failed image means for its own result. (**Ali Amir**)
 
 ### The fakes
 
-- [ ] Write `services/planner.ts` with `planConcept` returning the fixture params. Signature exactly as above, returning `unknown`. Put a comment at the top saying which ticket replaces the body. (**Maaz Bin Asif**)
-- [ ] Write `services/colorizer.ts` with `colorizeMotif` returning the fixture image bytes, its dimensions, and `cost_usd: null`. Same treatment. (**Maaz Bin Asif**)
-- [ ] Add `fixtures/sample-colored.jpg`: a real, small, actually-colored JPEG. Keep it under about 50KB. It must render in a browser, because that is the only thing distinguishing this from random bytes (decision 8). (**Maaz Bin Asif**)
-- [ ] Add `fixtures/sample-params.ts` with a valid `IrisParams` that exercises the optional fields: one with all three colors, and one with only `primary_color`. (**Maaz Bin Asif**)
-- [ ] Do **not** put a config flag in the pipeline that switches between fake and real. iris-08 and iris-09 replace function bodies (decision 7). (**Maaz Bin Asif**)
+- [ ] Write `services/planner.ts` with `planConcept` returning the fixture params. Signature exactly as above, returning `unknown`. Put a comment at the top saying which ticket replaces the body. (**Ali Amir**)
+- [ ] Write `services/colorizer.ts` with `colorizeMotif` returning the fixture image bytes, its dimensions, and `cost_usd: null`. Same treatment. (**Ali Amir**)
+- [ ] Add `fixtures/sample-colored.jpg`: a real, small, actually-colored JPEG. Keep it under about 50KB. It must render in a browser, because that is the only thing distinguishing this from random bytes (decision 8). (**Ali Amir**)
+- [ ] Add `fixtures/sample-params.ts` with a valid `IrisParams` that exercises the optional fields: one with all three colors, and one with only `primary_color`. (**Ali Amir**)
+- [ ] Do **not** put a config flag in the pipeline that switches between fake and real. iris-08 and iris-09 replace function bodies (decision 7). (**Ali Amir**)
 
 ### Routes and the agent
 
-- [ ] `agent.ts`: `onRequest` handles `GET /runs` **before** the POST check, because it is the one route with no body and 405-ing it would make the history unreachable. (**Maaz Bin Asif**)
-- [ ] `GET /runs` returns `{ runs: [...] }`, an envelope and not a bare array, matching Helios. It honours an optional `p_invoc_id` query param to narrow to one invocation. Rows go out exactly as stored, not reshaped: whatever reads this is debugging, and the stored shape is the thing worth seeing. (**Maaz Bin Asif**)
-- [ ] `POST /generate` validates with `IrisRequestSchema.safeParse` and returns 400 with `firstIssueMessage` on failure. A malformed request never became an invocation, so there is no `p_invoc_id` to report: this is a transport error, not a run outcome. (**Maaz Bin Asif**)
-- [ ] `POST /resume` validates with `IrisResumeRequestSchema` and returns a clearly-marked not-implemented response pointing at iris-10. The route exists and validates; its behaviour does not. (**Maaz Bin Asif**)
-- [ ] Write `repository/r2.repository.ts` with `saveColoredImage` and `readColoredImage`, key format `iris/{p_invoc_id}.jpg`. All R2 access, both directions, and nothing else in the app touches R2. (**Maaz Bin Asif**)
-- [ ] `GET /images/*` in `index.ts` reads through `readColoredImage` and returns 404 when the key is absent. It sets `Content-Type` from the object's stored metadata. (**Maaz Bin Asif**)
-- [ ] `image_url` in the result is built as `${origin}/images/${key}`, a servable URL and not raw bytes, matching Helios. (**Maaz Bin Asif**)
-- [ ] `width` and `height` are populated on the result, from the fake for now. Atlas needs them and a null there means Atlas has to fetch and decode the image to find out what it is placing. (**Maaz Bin Asif**)
+- [ ] `agent.ts`: `onRequest` handles `GET /runs` **before** the POST check, because it is the one route with no body and 405-ing it would make the history unreachable. (**Ali Amir**)
+- [ ] `GET /runs` returns `{ runs: [...] }`, an envelope and not a bare array, matching Helios. It honours an optional `p_invoc_id` query param to narrow to one invocation. Rows go out exactly as stored, not reshaped: whatever reads this is debugging, and the stored shape is the thing worth seeing. (**Ali Amir**)
+- [ ] `POST /generate` validates with `IrisRequestSchema.safeParse` and returns 400 with `firstIssueMessage` on failure. A malformed request never became an invocation, so there is no `p_invoc_id` to report: this is a transport error, not a run outcome. (**Ali Amir**)
+- [ ] `POST /resume` validates with `IrisResumeRequestSchema` and returns a clearly-marked not-implemented response pointing at iris-10. The route exists and validates; its behaviour does not. (**Ali Amir**)
+- [ ] Write `repository/r2.repository.ts` with `saveColoredImage` and `readColoredImage`, key format `iris/{p_invoc_id}.jpg`. All R2 access, both directions, and nothing else in the app touches R2. (**Ali Amir**)
+- [ ] `GET /images/*` in `index.ts` reads through `readColoredImage` and returns 404 when the key is absent. It sets `Content-Type` from the object's stored metadata. (**Ali Amir**)
+- [ ] `image_url` in the result is built as `${origin}/images/${key}`, a servable URL and not raw bytes, matching Helios. (**Ali Amir**)
+- [ ] `width` and `height` are populated on the result, from the fake for now. Atlas needs them and a null there means Atlas has to fetch and decode the image to find out what it is placing. (**Ali Amir**)
 
 ### Tests
 
-- [ ] Write `services/pipeline.test.ts` against `createTestDb` from iris-03 and a fake `env`. Cover: a full success writing two rows; a planner failure leaving one failed text row and one failed image row; an image failure keeping the planner's params on the result rather than discarding them; and storage being unavailable still returning a settled `IrisResult` rather than throwing. (**Maaz Bin Asif**)
-- [ ] Assert that a failed run returns status 200 at the HTTP level, not just that the body says `failed`. Decision 3 is a contract with the frontend and needs a test that would notice it changing. (**Maaz Bin Asif**)
-- [ ] The fake `env` in tests must include a fake `AI` binding that **throws if called**. Nothing in this ticket should reach a model, and a test that would silently start billing when iris-08 lands is worse than no test. (**Maaz Bin Asif**)
+- [ ] Write `services/pipeline.test.ts` against `createTestDb` from iris-03 and a fake `env`. Cover: a full success writing two rows; a planner failure leaving one failed text row and one failed image row; an image failure keeping the planner's params on the result rather than discarding them; and storage being unavailable still returning a settled `IrisResult` rather than throwing. (**Ali Amir**)
+- [ ] Assert that a failed run returns status 200 at the HTTP level, not just that the body says `failed`. Decision 3 is a contract with the frontend and needs a test that would notice it changing. (**Ali Amir**)
+- [ ] The fake `env` in tests must include a fake `AI` binding that **throws if called**. Nothing in this ticket should reach a model, and a test that would silently start billing when iris-08 lands is worse than no test. (**Ali Amir**)
 
 ### Review gates
 
-- [ ] Confirm `runPipeline` cannot throw. Read every `await` in it and ask what happens if that one rejects. Then confirm the cleanup inside the catch is itself wrapped. (**Ali Amir**)
-- [ ] Confirm the image-cost variable is declared outside the try, and write down what would break if it were not. If you cannot state the failure, the reasoning has not landed and it will get moved later by someone tidying up. (**Ali Amir**)
-- [ ] Confirm `runImageStage`'s signature is genuinely re-enterable by iris-10, by writing the call you would make from a resume path. If it needs an argument it does not have, say so now. (**Ali Amir**)
-- [ ] Confirm the fake `AI` binding throws, and that no test passes because a model was quietly not called. (**Ali Amir**)
-- [ ] Open `image_url` in a browser and confirm a colored image renders. Not a curl that returns 200: actually look at it. (**Ali Amir**)
+- [ ] Confirm `runPipeline` cannot throw. Read every `await` in it and ask what happens if that one rejects. Then confirm the cleanup inside the catch is itself wrapped. (**Maaz Bin Asif**)
+- [ ] Confirm the image-cost variable is declared outside the try, and write down what would break if it were not. If you cannot state the failure, the reasoning has not landed and it will get moved later by someone tidying up. (**Maaz Bin Asif**)
+- [ ] Confirm `runImageStage`'s signature is genuinely re-enterable by iris-10, by writing the call you would make from a resume path. If it needs an argument it does not have, say so now. (**Maaz Bin Asif**)
+- [ ] Confirm the fake `AI` binding throws, and that no test passes because a model was quietly not called. (**Maaz Bin Asif**)
+- [ ] Open `image_url` in a browser and confirm a colored image renders. Not a curl that returns 200: actually look at it. (**Maaz Bin Asif**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget

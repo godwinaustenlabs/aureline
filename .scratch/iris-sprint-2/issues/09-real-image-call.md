@@ -12,6 +12,8 @@
 
 **Owner:** Ali Amir. **Reviewer:** Maaz Bin Asif.
 
+**Duration:** 2 days. **Scheduled:** Tue Sep 1 to Wed Sep 2.
+
 ## Read this first
 
 - `apps/agent-helios/src/services/imageGenerator.ts` (104 lines). The reference for this file's discipline: it returns raw bytes only, it does not know R2 exists, it clamps a model parameter to the model's real cap, it skips the gateway cache, and it rejects an over-long prompt **before** billing.

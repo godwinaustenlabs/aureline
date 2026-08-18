@@ -12,6 +12,8 @@
 
 **Owner:** Maaz Ahmad. **Reviewer:** Maaz Bin Asif.
 
+**Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
+
 ## Read this first
 
 - `apps/frontend/src/state/settings.ts` (30 lines). The base URL is already configuration, not a constant: a build-time default, overridable by a field in the UI, persisted in `localStorage`. Read the doc comment at the top; it explains the reasoning you are extending.

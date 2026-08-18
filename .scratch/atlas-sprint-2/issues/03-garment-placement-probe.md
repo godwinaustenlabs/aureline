@@ -12,6 +12,8 @@
 
 **Owner:** Ali Amir. **Reviewer:** M. Subhan.
 
+**Duration:** 1 day. **Scheduled:** Tue Aug 25 to Tue Aug 25.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/issues/06-flux-2-klein-probe.md`, the "What we found" section. That is the request shape. Use it exactly and verify none of it: it is already verified.

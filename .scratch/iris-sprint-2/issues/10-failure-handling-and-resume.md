@@ -12,6 +12,8 @@
 
 **Owner:** Maaz Bin Asif. **Reviewer:** Ali Amir.
 
+**Duration:** 2 days. **Scheduled:** Thu Sep 3 to Fri Sep 4.
+
 ## Read this first
 
 - ADR-0009 in full. It is the retry policy for Helios and most of it applies unchanged, but "most" is the point of this ticket: the parts that do not apply have to be named.

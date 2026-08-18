@@ -12,6 +12,8 @@
 
 **Owner:** jointly, Maaz Bin Asif and Maaz Ahmad. One of them holds it, and it is written down here which: **to be filled in when both engines' Phase 2 is merged.**
 
+**Duration:** 1 day. **Scheduled:** Fri Aug 28 to Fri Aug 28.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/plan.md`, "Cross-engine contract", and `.scratch/atlas-sprint-2/plan.md`, the same section.

@@ -12,6 +12,8 @@
 
 **Owner:** Ali Amir. **Reviewer:** Maaz Bin Asif.
 
+**Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
+
 ## Read this first
 
 - `packages/shared-utils/src/getImageModelOutput.ts` (69 lines) and `aiGateway.ts` (70 lines). These are what iris-07 will extend, so knowing what they assume is half of knowing what has to change.

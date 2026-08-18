@@ -12,6 +12,8 @@
 
 **Owner:** M. Subhan. **Reviewer:** Maaz Ahmad.
 
+**Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
+
 ## Read this first
 
 - `.scratch/iris-sprint-2/issues/04-color-vocabulary-and-planner-prompt.md`. Same shape of job for the other engine, including the compile-error-on-a-missing-entry trick this ticket copies. Read it before starting.
