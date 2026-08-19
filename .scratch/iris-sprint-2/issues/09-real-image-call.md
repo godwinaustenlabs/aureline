@@ -65,11 +65,16 @@ What lands in the image row's `model_metadata`:
   "model": "@cf/black-forest-labs/flux-2-klein-9b",
   "prompt_version": "iris-color-v1",
   "input_dimensions": { "width": 480, "height": 480 },
-  "original_dimensions": { "width": 1024, "height": 1024 }
+  "original_dimensions": { "width": 1024, "height": 1024 },
+  "output_dimensions": { "width": 1024, "height": 1024 }
 }
 ```
 
-Both dimension pairs are recorded deliberately. When an output looks wrong, the first question is always whether the input was mangled on the way in, and this is the only place that answer survives.
+All three dimension pairs are recorded deliberately, and they answer different questions.
+
+`input_dimensions` and `original_dimensions` are for debugging: when an output looks wrong, the first question is always whether the input was mangled on the way in, and this is the only place that answer survives.
+
+`output_dimensions` is **not** debugging — it is the durable home of the `width` and `height` that `IrisResultSchema` promises Atlas, and `iris_runs` has no column for them (iris-03 decision 9). Omit it and the dimensions live only in the live HTTP response: correct on the day, and gone the moment the run is exported to D1 and pruned out of the DO. Atlas is then back to fetching and decoding the image to find out what it is placing, which is the exact cost those fields were added to avoid.
 
 ## Work
 
@@ -102,7 +107,8 @@ Both dimension pairs are recorded deliberately. When an output looks wrong, the 
 ### The pipeline side
 
 - [ ] Confirm `runImageStage` assigns the cost the moment the model returns, before the R2 save, so a save failure still records real spend (decision 7). This was already built in iris-05; verify it survived. (**Ali Amir**)
-- [ ] Populate `model_metadata` with the shape above, both dimension pairs included. (**Ali Amir**)
+- [ ] Populate `model_metadata` with the shape above, all three dimension pairs included. (**Ali Amir**)
+- [ ] Build the result's `width` and `height` by reading `output_dimensions` back out of the metadata you stored, rather than from the in-memory value the model call returned. The two should be identical, and if they ever are not, that is a bug you want failing in verification step 2 rather than surfacing months later as an Atlas placement that is quietly off. (**Ali Amir**)
 - [ ] Update `pipeline.test.ts`'s fake `AI` binding: it now returns a plausible reply for both calls. Keep the assertion that no real network call happens. (**Ali Amir**)
 - [ ] Add a test where the image call throws and assert: the run settles `failed`, the planner's params are still on the result rather than discarded, an image row exists and is `failed`, and `cost_usd` is null because nothing billed. (**Ali Amir**)
 - [ ] Add a test where the image call succeeds but the R2 save throws, and assert `cost_usd` is **non-null** on the failed row. This is the exact scenario decision 7 exists for, and it is the one nobody writes a test for until money has already been lost. (**Ali Amir**)
@@ -126,7 +132,7 @@ Both dimension pairs are recorded deliberately. When an output looks wrong, the 
 - Spend a real call only when all three of those are already right.
 
 1. A real end-to-end run with a real Helios motif returns a colored image. Open the `image_url` and look at it.
-2. `curl -s 'http://localhost:8787/runs' | jq '.runs[] | select(.modality=="image")'`. Confirm `cost_usd` is a real number, `image_r2_key` is set, and `model_metadata` carries both dimension pairs.
+2. `curl -s 'http://localhost:8787/runs' | jq '.runs[] | select(.modality=="image")'`. Confirm `cost_usd` is a real number, `image_r2_key` is set, and `model_metadata` carries all three dimension pairs, `output_dimensions` included.
 3. Run the same request twice and confirm two distinct gateway log rows with two costs (the `skipCache` check).
 4. Send an oversized motif and confirm the resize handled it rather than the model rejecting it.
 5. Send a `motif_ref` that does not exist. Confirm the run fails **before** billing: the gateway log gets no new row, and `cost_usd` is null.
