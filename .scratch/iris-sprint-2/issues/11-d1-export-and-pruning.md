@@ -6,9 +6,9 @@
 
 **Final result:** every completed or failed run ends up in `iris-d1` and stays there, the DO holds only the newest few runs, and a failed run is never deleted from either place.
 
-**Blocked by:** iris-02 (the D1 database and its migrations directory) and iris-03 (the schema and `getSettledRows`).
+**Blocked by:** iris-02 (the D1 database and its migrations directory), iris-03 (the schema and `getSettledRows`), and **iris-05**, which creates `services/pipeline.ts` and leaves the no-op `exportAndPrune` body this ticket fills in. That file does not exist before iris-05 lands, so the ticket cannot start until then.
 
-**Status:** ready-for-human.
+**Status:** blocked, waiting on iris-05.
 
 **Owner:** Arham Zahid. **Reviewer:** Hashir Rauf, with the D1 migration apply reviewed by Saad Naik.
 
@@ -28,6 +28,8 @@
 2. **A `running` row is never exported.** It has not settled, so its status and cost are not final, and `onConflictDoNothing` means the first version of a row to land is the one that stays forever. Exporting a `running` row would freeze it in that state permanently. `getSettledRows` from iris-03 already filters this; do not add a second filter at the call site, because then there are two places to get it wrong.
 3. **A failed run is never pruned.** Failures are the runs people actually go looking for. `pruneCompletedRuns` only touches `completed`, and its name says so.
 4. **Chunk the insert at seven rows, not nine.** D1 caps a statement at 100 bound parameters, and a multi-row insert binds every column of every row. `iris_runs` has thirteen columns, so seven rows is 91 parameters and eight would be 104. Helios uses nine because `helios_runs` has eleven columns. Do not copy the 9 across.
+
+   **The 7 is derived from the column count, so it is not a constant anyone may leave alone after a schema change.** Adding two columns makes it 15 × 7 = 105 and the chunk size has to drop to 6. This is the reason `width` and `height` go in `model_metadata` rather than becoming columns of their own — see iris-03 decision 9. If a future ticket does add a column, recompute this and update the chunking test.
 5. **`onConflictDoNothing`, keyed on the primary key.** The `id` is generated in the DO and travels with the row, so exporting the same row twice conflicts and writes nothing. That is what makes a partway-through failure safe to retry. Note the flip side: it never updates either, which is decision 2's real teeth.
 6. **`exportAndPrune` runs on every exit path**, success and failure, in `runPipeline` and in `resumeRun`. A failed run's rows need exporting just as much as a successful one's.
 7. **The retention limit comes from `config.retentionLimit`.** Not `env.RETENTION_LIMIT`, and not a hardcoded 5. In Helios's sprint this exact box was unticked at review, so it is called out here.

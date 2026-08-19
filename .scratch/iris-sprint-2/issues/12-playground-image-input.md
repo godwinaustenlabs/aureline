@@ -8,7 +8,9 @@
 
 **Blocked by:** iris-05 for the real response shape. **Also blocked by a merge:** `apps/frontend` currently only exists on the `playground` branch and is not in `dev`. That branch has to land in `dev` before this ticket can start.
 
-**Status:** blocked, waiting on the `playground` branch reaching `dev`.
+**Neither blocker clears on the scheduled day.** iris-05 runs Wed Aug 26 to Thu Aug 27, and the `playground` merge has no owner and no date at all. The date below is therefore aspirational, not a plan. Two things have to happen before it becomes real: someone takes the `playground`-into-`dev` merge as named work, and iris-05 merges. Chase the first now — it is the one nobody is currently driving, and it is not Iris work, so it will not surface on its own.
+
+**Status:** blocked, waiting on the `playground` branch reaching `dev` **and** on iris-05.
 
 **Owner:** Maaz Ahmad. **Reviewer:** Maaz Bin Asif.
 
