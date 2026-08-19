@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# wrangler project
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+.wrangler/
