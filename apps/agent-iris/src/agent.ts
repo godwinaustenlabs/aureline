@@ -1,5 +1,8 @@
 import { Agent } from "agents";
+import { migrate } from "drizzle-orm/durable-sqlite/migrator";
+import migrations from "../drizzle/migrations";
 import { IrisRequestSchema, IrisResumeRequestSchema } from "@aureline/shared-types";
+import { getDb } from "./db/client";
 import { describeConfig, resolveConfig } from "./config";
 import { firstIssueMessage } from "./utils";
 
@@ -14,22 +17,11 @@ import { firstIssueMessage } from "./utils";
  * iris-05 supplies the pipeline the three of them call into.
  */
 export class IrisAgent extends Agent<Env> {
-	/**
-	 * Applies pending Drizzle migrations against this instance's own DO-local
-	 * SQLite storage, once per Durable Object wake-up.
-	 *
-	 * Empty until iris-03, which is the ticket that writes `db/schema.ts`,
-	 * `db/client.ts` and generates `../drizzle/migrations`. None of those exist
-	 * yet, so there is nothing to migrate and the real call cannot compile.
-	 * iris-03 replaces this body with:
-	 *
-	 *     await migrate(getDb(this.ctx.storage), migrations);
-	 *
-	 * Calling it on every wake-up is safe — drizzle tracks what is already
-	 * applied.
-	 */
+	/** Applies pending Drizzle migrations against this instance's own DO-local
+	 * SQLite storage. Runs once per Durable Object wake-up (safe to call on
+	 * every onStart — drizzle tracks what's already applied). */
 	async onStart() {
-		// iris-03.
+		await migrate(getDb(this.ctx.storage), migrations);
 	}
 
 	async onRequest(request: Request) {
