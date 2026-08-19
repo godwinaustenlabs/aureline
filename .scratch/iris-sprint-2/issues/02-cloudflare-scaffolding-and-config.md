@@ -86,37 +86,37 @@
 
 ### Cloudflare resources
 
-- [ ] Create the D1 database `iris-d1` and put its real `database_id` in `wrangler.jsonc`. (**Maaz Bin Asif**)
-- [ ] Create the R2 bucket `images-bucket`, shared with Atlas (decision 5). Named for the platform rather than for Iris, the same naming reasoning shared-03 uses for the eventual consolidated D1 database, so Atlas's ticket does not need to create a second one. Tell the Atlas squad once it exists. (**Maaz Bin Asif**)
-- [ ] Create the KV namespace titled `IRIS_CONFIG`, and put its **id** in `wrangler.jsonc`, not its title (decision 2). (**Maaz Bin Asif**)
-- [ ] Create the AI Gateway named `iris` under AI > AI Gateway. A gateway that does not exist does not error, it just silently stops logging, which means iris-08 and iris-09 record null costs and nobody knows why. (**Maaz Bin Asif**)
-- [ ] Seed all five keys in `IRIS_CONFIG` with the same values as the `vars` fallbacks, so the KV path is exercised from the first request rather than only the fallback path. (**Maaz Bin Asif**)
-- [ ] Create `infrastructure/d1/migrations/iris/` (a `.gitkeep` is enough for now). iris-03 generates the actual migration into it. (**Maaz Bin Asif**)
+- [x] Create the D1 database `iris-d1` and put its real `database_id` in `wrangler.jsonc`. (**Maaz Bin Asif**)
+- [x] Create the R2 bucket `images-bucket`, shared with Atlas (decision 5). Named for the platform rather than for Iris, the same naming reasoning shared-03 uses for the eventual consolidated D1 database, so Atlas's ticket does not need to create a second one. Tell the Atlas squad once it exists. (**Maaz Bin Asif**)
+- [x] Create the KV namespace titled `IRIS_CONFIG`, and put its **id** in `wrangler.jsonc`, not its title (decision 2). (**Maaz Bin Asif**)
+- [x] Create the AI Gateway named `iris` under AI > AI Gateway. A gateway that does not exist does not error, it just silently stops logging, which means iris-08 and iris-09 record null costs and nobody knows why. (**Maaz Bin Asif**)
+- [x] Seed all five keys in `IRIS_CONFIG` with the same values as the `vars` fallbacks, so the KV path is exercised from the first request rather than only the fallback path. (**Maaz Bin Asif**)
+- [x] Create `infrastructure/d1/migrations/iris/` (a `.gitkeep` is enough for now). iris-03 generates the actual migration into it. (**Maaz Bin Asif**)
 
 ### The workspace
 
-- [ ] Create `apps/agent-iris/` with `package.json`, `tsconfig.json`, `wrangler.jsonc`, `drizzle.config.ts`, `drizzle.d1.config.ts`, `.dev.vars.example`, `.prettierrc`, `.editorconfig`, `.gitignore`. Copy each from `apps/agent-helios` and change only what has to change. Do not write any of them from scratch. (**Maaz Bin Asif**)
-- [ ] `package.json` carries the same scripts Helios has, with `config:pull` looping over the same five keys. Read the `"//kv"` comment in `apps/agent-helios/package.json` before touching the kv scripts: it explains why they must be npm scripts and not bare `wrangler` commands. Reproduce that comment. (**Maaz Bin Asif**)
-- [ ] `.dev.vars.example` has **no keys in it**, same as Helios's. It is a written record that no secret is needed, because the AI Gateway is reached through the pre-authenticated `AI` binding. Do not put an API token in it. (**Maaz Bin Asif**)
-- [ ] `.gitignore` covers `.dev.vars*` and `.wrangler/`. (**Maaz Bin Asif**)
-- [ ] Add `config:pull:iris` to the **root** `package.json`, matching the existing `config:pull:helios`. This is the only root-level edit this ticket makes. (**Maaz Bin Asif**)
+- [x] Create `apps/agent-iris/` with `package.json`, `tsconfig.json`, `wrangler.jsonc`, `drizzle.config.ts`, `drizzle.d1.config.ts`, `.dev.vars.example`, `.prettierrc`, `.editorconfig`, `.gitignore`. Copy each from `apps/agent-helios` and change only what has to change. Do not write any of them from scratch. (**Maaz Bin Asif**)
+- [x] `package.json` carries the same scripts Helios has, with `config:pull` looping over the same five keys. Read the `"//kv"` comment in `apps/agent-helios/package.json` before touching the kv scripts: it explains why they must be npm scripts and not bare `wrangler` commands. Reproduce that comment. (**Maaz Bin Asif**)
+- [x] `.dev.vars.example` has **no keys in it**, same as Helios's. It is a written record that no secret is needed, because the AI Gateway is reached through the pre-authenticated `AI` binding. Do not put an API token in it. (**Maaz Bin Asif**)
+- [x] `.gitignore` covers `.dev.vars*` and `.wrangler/`. (**Maaz Bin Asif**)
+- [x] Add `config:pull:iris` to the **root** `package.json`, matching the existing `config:pull:helios`. This is the only root-level edit this ticket makes. (**Maaz Bin Asif**)
 
 ### `index.ts`, `agent.ts` and `cors.ts`, minimal versions
 
-- [ ] `src/index.ts`: routing only, and it exports `IrisAgent` from `./agent` because wrangler's `class_name` binding resolves through the main module. Route `/generate`, `/resume` and `/runs` to the DO through `getAgentByName` with the same `scopeKey` rule Helios uses, route `/images/*` to R2, and answer `/` with `"Iris Agent is running"`. Copy `apps/agent-helios/src/index.ts` including its `scopeKey` and `normaliseSession` helpers and the comment explaining why a GET reads the query string. No orchestration in this file. (**Maaz Bin Asif**)
-- [ ] `src/cors.ts`: copy `apps/agent-helios/src/cors.ts` and its test as-is. Do not write a new one, and do not simplify it. Preflight has to be handled ahead of routing, because `/generate` would reject a preflight's empty body long before CORS got a say. The existing file already gets this right. (**Maaz Bin Asif**)
-- [ ] `src/agent.ts`: the `IrisAgent` Durable Object with `onStart` running migrations and `onRequest` as its own inline controller. Stub the three routes to return a clearly-marked not-implemented response for now. iris-05 fills them in. Do not add a controller layer. (**Maaz Bin Asif**)
-- [ ] `src/utils.ts`: copy `firstIssueMessage` and `describeError` from `apps/agent-helios/src/utils.ts`. Nineteen lines, and every later ticket uses both. (**Maaz Bin Asif**)
-- [ ] Do **not** create `src/types.ts`. Helios has one and it is zero bytes and nothing imports it. `docs/directory-structure.md` calls it out as a leftover. Do not copy the leftover. (**Maaz Bin Asif**)
+- [x] `src/index.ts`: routing only, and it exports `IrisAgent` from `./agent` because wrangler's `class_name` binding resolves through the main module. Route `/generate`, `/resume` and `/runs` to the DO through `getAgentByName` with the same `scopeKey` rule Helios uses, route `/images/*` to R2, and answer `/` with `"Iris Agent is running"`. Copy `apps/agent-helios/src/index.ts` including its `scopeKey` and `normaliseSession` helpers and the comment explaining why a GET reads the query string. No orchestration in this file. (**Maaz Bin Asif**)
+- [x] `src/cors.ts`: copy `apps/agent-helios/src/cors.ts` and its test as-is. Do not write a new one, and do not simplify it. Preflight has to be handled ahead of routing, because `/generate` would reject a preflight's empty body long before CORS got a say. The existing file already gets this right. (**Maaz Bin Asif**)
+- [x] `src/agent.ts`: the `IrisAgent` Durable Object with `onStart` running migrations and `onRequest` as its own inline controller. Stub the three routes to return a clearly-marked not-implemented response for now. iris-05 fills them in. Do not add a controller layer. (**Maaz Bin Asif**)
+- [x] `src/utils.ts`: copy `firstIssueMessage` and `describeError` from `apps/agent-helios/src/utils.ts`. Nineteen lines, and every later ticket uses both. (**Maaz Bin Asif**)
+- [x] Do **not** create `src/types.ts`. Helios has one and it is zero bytes and nothing imports it. `docs/directory-structure.md` calls it out as a leftover. Do not copy the leftover. (**Maaz Bin Asif**)
 
 ### `config.ts`
 
-- [ ] `src/config.ts` is the only file in the app that reads KV. Port Helios's `FIELDS` table, `resolveConfig` and `describeConfig`, with the five keys above. (**Maaz Bin Asif**)
-- [ ] It **never throws**. Every failure path falls back to a `wrangler.jsonc` var and warns. Read the comment on `numberFromVar` in Helios's version: `resolveConfig` runs outside the pipeline's try block, so a throw here escapes as an opaque 500 instead of a settled result. (**Maaz Bin Asif**)
-- [ ] Config is read **once per invocation**, not at DO wake-up and not cached at module level (ADR-0008). Two reads straddling a KV edit produce one audit row that is half old model and half new. (**Maaz Bin Asif**)
-- [ ] `AI_GATEWAY_ID` is deliberately absent from `FIELDS`. Reproduce the comment in Helios's version saying why. (**Maaz Bin Asif**)
-- [ ] Port `config.test.ts` too, covering every fallback path including KV throwing outright and a broken var. Helios's has 12-plus cases; adapt them rather than writing new ones. (**Maaz Bin Asif**)
-- [ ] Run `npm run cf-typegen` and commit `worker-configuration.d.ts`. `wrangler types` types each var as its **literal** value, not as `string`, so anyone who later changes a var must regenerate or TypeScript rejects the new value. Say this in a comment near the vars. (**Maaz Bin Asif**)
+- [x] `src/config.ts` is the only file in the app that reads KV. Port Helios's `FIELDS` table, `resolveConfig` and `describeConfig`, with the five keys above. (**Maaz Bin Asif**)
+- [x] It **never throws**. Every failure path falls back to a `wrangler.jsonc` var and warns. Read the comment on `numberFromVar` in Helios's version: `resolveConfig` runs outside the pipeline's try block, so a throw here escapes as an opaque 500 instead of a settled result. (**Maaz Bin Asif**)
+- [x] Config is read **once per invocation**, not at DO wake-up and not cached at module level (ADR-0008). Two reads straddling a KV edit produce one audit row that is half old model and half new. (**Maaz Bin Asif**)
+- [x] `AI_GATEWAY_ID` is deliberately absent from `FIELDS`. Reproduce the comment in Helios's version saying why. (**Maaz Bin Asif**)
+- [x] Port `config.test.ts` too, covering every fallback path including KV throwing outright and a broken var. Helios's has 12-plus cases; adapt them rather than writing new ones. (**Maaz Bin Asif**)
+- [x] Run `npm run cf-typegen` and commit `worker-configuration.d.ts`. `wrangler types` types each var as its **literal** value, not as `string`, so anyone who later changes a var must regenerate or TypeScript rejects the new value. Say this in a comment near the vars. (**Maaz Bin Asif**)
 
 ### Review gates
 
