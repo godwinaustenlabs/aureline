@@ -7,7 +7,7 @@ import { colorizeMotif } from "./colorizer";
 import { startTextRun, failRunningRuns, startImageRun } from "../repository/do.repository";
 import { irisRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
-import { sampleParamsFull } from "../fixtures/sample-params";
+import { sampleParamsFull, sampleParamsMinimal } from "../fixtures/sample-params";
 import { json } from "../http";
 
 // The planner, the colorizer and the storage writes are imported by
@@ -132,6 +132,21 @@ describe("runPipeline", () => {
 
 		// Nothing in this ticket reaches a model.
 		expect(run).not.toHaveBeenCalled();
+	});
+
+	it("accepts params carrying only the required primary_color, with no secondary or accent color", async () => {
+		// Exercises the other fixture in sample-params.ts: sampleParamsFull covers
+		// all three optional color fields, this one covers none of them. Both have
+		// to clear the validate stage, not just be schema-valid in isolation.
+		const { env } = fakeEnv();
+		vi.mocked(planConcept).mockResolvedValueOnce(sampleParamsMinimal);
+
+		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		expect(result.params).toEqual(sampleParamsMinimal);
+		expect(result.params?.secondary_color).toBeUndefined();
+		expect(result.params?.accent_color).toBeUndefined();
 	});
 
 	it("marks a planner failure as one failed text row and one failed image row", async () => {
