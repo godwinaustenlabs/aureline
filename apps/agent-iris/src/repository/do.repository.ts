@@ -151,16 +151,35 @@ export async function insertFailedImageRun(
 	});
 }
 
-/** Settles the image row with its R2 key and cost. */
+/**
+ * Settles the image row with its R2 key and cost.
+ *
+ * `modelMetadata` is merged over the row's existing metadata rather than
+ * replacing it. `startImageRun` runs before the model call, when returned
+ * dimensions are not known yet, so this is the only moment at which they can
+ * be recorded — and merging keeps whatever `startImageRun` already wrote
+ * (the model name, the steps sent) intact rather than overwriting it.
+ */
 export async function completeImageRun(
 	db: IrisDb,
 	pInvocId: string,
 	imageR2Key: string,
 	costUsd: number | null,
+	modelMetadata: ModelMetadata = {},
 ): Promise<void> {
+	const [existing] = await db
+		.select({ modelMetadata: irisRuns.modelMetadata })
+		.from(irisRuns)
+		.where(and(eq(irisRuns.pInvocId, pInvocId), eq(irisRuns.modality, "image")));
+
+	const mergedMetadata = {
+		...((existing?.modelMetadata as Record<string, unknown> | null) ?? {}),
+		...(modelMetadata as Record<string, unknown>),
+	};
+
 	await db
 		.update(irisRuns)
-		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
+		.set({ status: "completed", imageR2Key, costUsd, modelMetadata: mergedMetadata, completedAt: new Date() })
 		.where(and(eq(irisRuns.pInvocId, pInvocId), eq(irisRuns.modality, "image")));
 }
 

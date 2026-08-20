@@ -3,8 +3,10 @@ import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../drizzle/migrations";
 import { IrisRequestSchema, IrisResumeRequestSchema } from "@aureline/shared-types";
 import { getDb } from "./db/client";
-import { describeConfig, resolveConfig } from "./config";
+import { runPipeline } from "./services/pipeline";
+import { getRunRows, listRuns } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
+import { json, error } from "./http";
 
 /**
  * Iris — the Color Engine.
@@ -12,9 +14,6 @@ import { firstIssueMessage } from "./utils";
  * Acts as its own inline controller: request validation happens directly in
  * `onRequest`, with no intermediate controller layer. One instance is scoped to
  * a session/project, not to a single pipeline invocation (ADR-0005).
- *
- * Scaffolding only. Every route below validates its input and then stops:
- * iris-05 supplies the pipeline the three of them call into.
  */
 export class IrisAgent extends Agent<Env> {
 	/** Applies pending Drizzle migrations against this instance's own DO-local
@@ -26,6 +25,7 @@ export class IrisAgent extends Agent<Env> {
 
 	async onRequest(request: Request) {
 		const url = new URL(request.url);
+		const db = getDb(this.ctx.storage);
 
 		// Ahead of the POST check and the body parse: this is the one route with
 		// no body to read, and 405-ing it would make the history unreachable.
@@ -33,8 +33,10 @@ export class IrisAgent extends Agent<Env> {
 		// Read-only and free. It must never be able to reach a model: it is the
 		// route a page is allowed to call on load and on every refresh.
 		if (request.method === "GET" && url.pathname === "/runs") {
-			// iris-03 supplies getRunRows/listRuns; iris-05 returns { runs: [...] }.
-			return notImplemented("GET /runs");
+			const pInvocId = url.searchParams.get("p_invoc_id")?.trim();
+			// Rows exactly as stored, not reshaped. Whatever reads this is
+			// debugging, and the stored shape is the thing worth seeing.
+			return json({ runs: pInvocId ? await getRunRows(db, pInvocId) : await listRuns(db) });
 		}
 
 		if (request.method !== "POST") {
@@ -49,7 +51,6 @@ export class IrisAgent extends Agent<Env> {
 				return error(firstIssueMessage(parsed.error), 400);
 			}
 
-			await logConfig(this.env);
 			return notImplemented("POST /resume");
 		}
 
@@ -60,25 +61,9 @@ export class IrisAgent extends Agent<Env> {
 			return error(firstIssueMessage(parsed.error), 400);
 		}
 
-		await logConfig(this.env);
-		return notImplemented("POST /generate");
+		const result = await runPipeline(db, parsed.data, this.env, url.origin);
+		return json(result);
 	}
-}
-
-/**
- * Resolves the runtime config and logs where each value came from.
- *
- * Called on the two routes that will actually spend money, once per request and
- * never at wake-up or module scope (ADR-0008): two reads straddling a KV edit
- * would produce one invocation that is half old model and half new.
- *
- * This exists so the KV path is exercised from the very first request rather
- * than staying unproven until iris-05. When iris-05 writes `runPipeline`, the
- * `resolveConfig` call moves there — outside the try block, because it never
- * throws — and this helper goes away. Do not leave both.
- */
-async function logConfig(env: Env): Promise<void> {
-	console.log(describeConfig(await resolveConfig(env)));
 }
 
 /**
@@ -87,16 +72,5 @@ async function logConfig(env: Env): Promise<void> {
  * well-formed and only the work is missing.
  */
 function notImplemented(route: string): Response {
-	return error(`not implemented: ${route} lands in iris-05`, 501);
-}
-
-function json(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "Content-Type": "application/json" },
-	});
-}
-
-function error(message: string, status: number) {
-	return json({ error: message }, status);
+	return error(`not implemented: ${route} lands in iris-10`, 501);
 }

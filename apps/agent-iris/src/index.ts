@@ -1,4 +1,5 @@
 import { getAgentByName, routeAgentRequest } from "agents";
+import { readColoredImage } from "./repository/r2.repository";
 import { preflight, withCors } from "./cors";
 
 // The Durable Object class must be exported from the Worker's main module for
@@ -52,25 +53,19 @@ async function route(request: Request, env: Env): Promise<Response> {
 		// The prefix names the engine rather than the file, because Iris and Atlas
 		// share one bucket (wrangler.jsonc r2_buckets) and the engine is now the
 		// thing that needs distinguishing.
-		//
-		// iris-05 replaces this body with a `readColoredImage` call against
-		// repository/r2.repository.ts, which that ticket owns. The route match
-		// lives here now so routing is provably complete before anything can read.
-		return notImplemented("GET /images/*");
+		const key = url.pathname.slice("/images/".length);
+		const object = await readColoredImage(env.PATTERNS, key);
+
+		if (!object) {
+			return new Response("Not found", { status: 404 });
+		}
+
+		return new Response(object.body, {
+			headers: { "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream" },
+		});
 	}
 
 	return (await routeAgentRequest(request, env)) ?? new Response("Not found", { status: 404 });
-}
-
-/**
- * A stub route, marked loudly enough that nobody mistakes it for a real 501 in
- * production. Every one of these names the ticket that removes it.
- */
-function notImplemented(route: string): Response {
-	return new Response(JSON.stringify({ error: `not implemented: ${route} lands in iris-05` }), {
-		status: 501,
-		headers: { "Content-Type": "application/json" },
-	});
 }
 
 /**
