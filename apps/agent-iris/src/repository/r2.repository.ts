@@ -8,23 +8,23 @@
  * and the bucket itself is shared with Atlas (see the comment above
  * `r2_buckets` in wrangler.jsonc for the full reasoning). Separation between
  * engines happens by key prefix, not by bucket — Iris writes
- * `iris/{p_invoc_id}.jpg`, Helios writes `patterns/{p_invoc_id}.jpg`, and Atlas
- * writes `atlas/{p_invoc_id}.jpg`.
+ * `iris/{pipeline_id}.jpg`, Helios writes `patterns/{pipeline_id}.jpg`, and Atlas
+ * writes `atlas/{pipeline_id}.jpg`.
  */
 
 const IRIS_PREFIX = "iris";
 
 /**
  * Saves the coloured image and returns its key.
- * Key format: iris/{p_invoc_id}.jpg
+ * Key format: iris/{pipeline_id}.jpg
  */
 export async function saveColoredImage(
 	bucket: R2Bucket,
-	pInvocId: string,
+	pipelineId: string,
 	image: Uint8Array,
 	contentType: string,
 ): Promise<string> {
-	const key = `${IRIS_PREFIX}/${pInvocId}.jpg`;
+	const key = `${IRIS_PREFIX}/${pipelineId}.jpg`;
 
 	await bucket.put(key, image, {
 		httpMetadata: {

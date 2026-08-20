@@ -42,7 +42,7 @@ export async function colorizeMotif(
 	params: IrisParams,
 	config: IrisConfig,
 	env: Env,
-	p_invoc_id: string,
+	pipeline_id: string,
 ): Promise<{ image: Uint8Array; contentType: string; width: number; height: number; cost_usd: number | null }> {
 	return {
 		image: decodeBase64(SAMPLE_COLORED_JPG_BASE64),

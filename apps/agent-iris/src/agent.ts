@@ -33,10 +33,10 @@ export class IrisAgent extends Agent<Env> {
 		// Read-only and free. It must never be able to reach a model: it is the
 		// route a page is allowed to call on load and on every refresh.
 		if (request.method === "GET" && url.pathname === "/runs") {
-			const pInvocId = url.searchParams.get("p_invoc_id")?.trim();
+			const pipelineId = url.searchParams.get("pipeline_id")?.trim();
 			// Rows exactly as stored, not reshaped. Whatever reads this is
 			// debugging, and the stored shape is the thing worth seeing.
-			return json({ runs: pInvocId ? await getRunRows(db, pInvocId) : await listRuns(db) });
+			return json({ runs: pipelineId ? await getRunRows(db, pipelineId) : await listRuns(db) });
 		}
 
 		if (request.method !== "POST") {
@@ -57,7 +57,7 @@ export class IrisAgent extends Agent<Env> {
 		const parsed = IrisRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			// A malformed request never became a pipeline invocation, so there is no
-			// p_invoc_id to report — this is a transport error, not a run outcome.
+			// pipeline_id to report — this is a transport error, not a run outcome.
 			return error(firstIssueMessage(parsed.error), 400);
 		}
 

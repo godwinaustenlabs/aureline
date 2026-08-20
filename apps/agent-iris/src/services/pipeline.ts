@@ -51,7 +51,7 @@ function imageModelMetadata(config: IrisConfig): Record<string, unknown> {
 export async function exportAndPrune(
 	db: IrisDb,
 	env: Env,
-	p_invoc_id: string,
+	pipelineId: string,
 	retentionLimit: number,
 ): Promise<void> {
 	// iris-11: export getSettledRows(db) to D1, then pruneCompletedRuns(db, retentionLimit).
@@ -88,13 +88,18 @@ export async function runImageStage(
 	db: IrisDb,
 	env: Env,
 	config: IrisConfig,
-	p_invoc_id: string,
-	sourcePInvocId: string,
-	concept: string,
-	motifRef: string,
-	params: IrisParams,
-	metadataExtras: Record<string, unknown> = {},
+	// One object rather than six positional arguments, four of them adjacent
+	// strings (AGENTS.md §6). Field order mirrors `db/schema.ts`.
+	stage: {
+		pipelineId: string;
+		designSessionId: string;
+		concept: string;
+		motifRef: string;
+		params: IrisParams;
+		metadataExtras?: Record<string, unknown>;
+	},
 ): Promise<ImageStageOutcome> {
+	const { pipelineId, designSessionId, concept, motifRef, params, metadataExtras = {} } = stage;
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
@@ -108,26 +113,43 @@ export async function runImageStage(
 	// `completed` text row.
 	let rowOpened = false;
 
+	const seed = { pipelineId, designSessionId, userPrompt: concept, motifRef, plannerParams: params, modelMetadata };
+
 	try {
-		await startImageRun(db, p_invoc_id, sourcePInvocId, concept, motifRef, params, modelMetadata);
+		await startImageRun(db, seed);
 		rowOpened = true;
 
-		const image = await colorizeMotif(motifRef, params, config, env, p_invoc_id);
+		const image = await colorizeMotif(motifRef, params, config, env, pipelineId);
 		costUsd = image.cost_usd;
 
-		const imageR2Key = await saveColoredImage(env.PATTERNS, p_invoc_id, image.image, image.contentType);
+		const imageR2Key = await saveColoredImage(env.PATTERNS, pipelineId, image.image, image.contentType);
 
 		// Persisted here, not just returned: model_metadata is the only durable
 		// home width/height have (there is no column and there deliberately never
 		// will be one, iris-03 decision 9).
-		await completeImageRun(db, p_invoc_id, imageR2Key, costUsd, { width: image.width, height: image.height });
+		await completeImageRun(db, {
+			pipelineId,
+			imageR2Key,
+			costUsd,
+			modelMetadata: { width: image.width, height: image.height },
+		});
 
 		// Read back from what was just stored, rather than trusting `image.width`
 		// and `image.height` directly, so a bug in the write path shows up here
 		// instead of hiding until Atlas reads a pruned run.
-		const rows = await getRunRows(db, p_invoc_id);
+		//
+		// A missing row **throws** rather than degrading to nulls. This read-back
+		// exists to catch a broken write path, and falling through to
+		// `width: null, height: null` is how it caught nothing: Atlas would receive
+		// a completed run with no dimensions and no indication anything was wrong
+		// (AGENTS.md §7). Throwing here lands in the catch below and settles the
+		// invocation as `failed`, with the stage named.
+		const rows = await getRunRows(db, pipelineId);
 		const imageRow = rows.find((row) => row.modality === "image");
-		const storedMetadata = (imageRow?.modelMetadata ?? {}) as { width?: unknown; height?: unknown };
+		if (!imageRow) {
+			throw new Error(`image row for pipeline_id ${pipelineId} vanished between writing and reading it back`);
+		}
+		const storedMetadata = (imageRow.modelMetadata ?? {}) as { width?: unknown; height?: unknown };
 
 		return {
 			ok: true,
@@ -143,9 +165,9 @@ export async function runImageStage(
 			// Nothing can be recorded then, and `cause` is still the failure worth
 			// reporting.
 			try {
-				await insertFailedImageRun(db, p_invoc_id, sourcePInvocId, concept, motifRef, params, modelMetadata);
+				await insertFailedImageRun(db, seed);
 			} catch (rescueCause) {
-				console.error(`could not record the unopened image row for ${p_invoc_id}:`, describeError(rescueCause));
+				console.error(`could not record the unopened image row for ${pipelineId}:`, describeError(rescueCause));
 			}
 		}
 
@@ -171,7 +193,7 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
-	const p_invoc_id = crypto.randomUUID();
+	const pipelineId = crypto.randomUUID();
 
 	let stage: Stage = "persist";
 	let params: IrisParams | null = null;
@@ -183,12 +205,16 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 	try {
 		// Inside the try so a storage failure is reported as a settled `failed`
 		// result rather than escaping as an opaque 500.
-		await startTextRun(db, p_invoc_id, req.source_p_invoc_id, req.concept, req.motif_ref, {
-			model: config.textModel.model,
+		await startTextRun(db, {
+			pipelineId,
+			designSessionId: req.design_session_id,
+			userPrompt: req.concept,
+			motifRef: req.motif_ref,
+			modelMetadata: { model: config.textModel.model },
 		});
 
 		stage = "planner";
-		const planned = await planConcept(req.concept, env, config, p_invoc_id);
+		const planned = await planConcept(req.concept, env, config, pipelineId);
 
 		stage = "validate";
 		params = IrisParamsSchema.parse(planned);
@@ -197,19 +223,16 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 
 		// Planner succeeded — settle the text row before the image row opens. No
 		// real cost yet: the planner call is faked in this ticket.
-		await completeTextRun(db, p_invoc_id, params, textModelMetadata, null);
+		await completeTextRun(db, pipelineId, params, textModelMetadata, null);
 
 		stage = "image";
-		const outcome = await runImageStage(
-			db,
-			env,
-			config,
-			p_invoc_id,
-			req.source_p_invoc_id,
-			req.concept,
-			req.motif_ref,
+		const outcome = await runImageStage(db, env, config, {
+			pipelineId,
+			designSessionId: req.design_session_id,
+			concept: req.concept,
+			motifRef: req.motif_ref,
 			params,
-		);
+		});
 
 		// Recorded before anything can throw, so the catch below reports what the
 		// image actually cost rather than null.
@@ -218,11 +241,11 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			throw outcome.cause;
 		}
 
-		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+		await exportAndPrune(db, env, pipelineId, config.retentionLimit);
 
 		return {
-			p_invoc_id,
-			source_p_invoc_id: req.source_p_invoc_id,
+			pipeline_id: pipelineId,
+			design_session_id: req.design_session_id,
 			status: "completed",
 			params,
 			image_url: `${origin}/images/${outcome.imageR2Key}`,
@@ -236,32 +259,33 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		// broke — and a throw from inside a catch escapes the function. Swallow
 		// it: `cause` is the failure worth reporting, this one is a symptom.
 		try {
-			await failRunningRuns(db, p_invoc_id, imageCost);
+			await failRunningRuns(db, pipelineId, imageCost);
 
 			// Every invocation is two rows, whether it succeeded or not (ADR-0001).
 			// A failure at "persist", "planner" or "validate" never reaches
 			// `runImageStage`, so nothing has opened an image row yet — without
 			// this, the invocation would settle as a single failed text row.
 			if (stage === "persist" || stage === "planner" || stage === "validate") {
-				await insertFailedImageRun(
-					db,
-					p_invoc_id,
-					req.source_p_invoc_id,
-					req.concept,
-					req.motif_ref,
-					params ?? ({} as IrisParams),
-					imageModelMetadata(config),
-				);
+				await insertFailedImageRun(db, {
+					pipelineId,
+					designSessionId: req.design_session_id,
+					userPrompt: req.concept,
+					motifRef: req.motif_ref,
+					// No cast: `RowSeed.plannerParams` admits `{}` because a run that
+					// never reached the planner genuinely has none.
+					plannerParams: params ?? {},
+					modelMetadata: imageModelMetadata(config),
+				});
 			}
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
 
-		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+		await exportAndPrune(db, env, pipelineId, config.retentionLimit);
 
 		return {
-			p_invoc_id,
-			source_p_invoc_id: req.source_p_invoc_id,
+			pipeline_id: pipelineId,
+			design_session_id: req.design_session_id,
 			status: "failed",
 			// Retained if the planner already produced valid params — partial
 			// state is kept rather than discarded, so a failure stays inspectable.

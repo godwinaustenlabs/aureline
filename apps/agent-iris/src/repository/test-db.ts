@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import type { IrisDb } from "../db/client";
 import * as schema from "../db/schema";
 import { irisRuns } from "../db/schema";
 
@@ -16,14 +17,25 @@ import { irisRuns } from "../db/schema";
  *
  * Lives in `repository/` from the start, not inside a test file, so every
  * suite that needs a database shares one definition.
+ *
+ * **Returns `IrisDb`, via the one cast in this file.** The proxy driver is a
+ * `BaseSQLiteDatabase<"async", …>` and `IrisDb` is a `BaseSQLiteDatabase<"sync",
+ * …>`, so the two are not assignable even though the query surface every suite
+ * uses is identical and every statement is awaited either way. Asserting it here
+ * once is what lets every call site be checked against the real `IrisDb`.
+ *
+ * The alternative — `as never` at each call site — is what this replaces, and it
+ * was not a cosmetic problem: a cast on the `db` argument switches off checking
+ * of *every other argument in that call*, which is how a `startImageRun` call
+ * passing an incomplete `IrisParams` sat in a green suite (AGENTS.md §4).
  */
-export function createTestDb() {
+export function createTestDb(): IrisDb {
 	const sqlite = new DatabaseSync(":memory:");
 	sqlite.exec(`
 		CREATE TABLE iris_runs (
 			id TEXT PRIMARY KEY,
-			p_invoc_id TEXT NOT NULL,
-			source_p_invoc_id TEXT NOT NULL,
+			pipeline_id TEXT NOT NULL,
+			design_session_id TEXT NOT NULL,
 			modality TEXT NOT NULL,
 			status TEXT NOT NULL,
 			user_prompt TEXT NOT NULL,
@@ -32,7 +44,11 @@ export function createTestDb() {
 			image_r2_key TEXT,
 			cost_usd REAL,
 			model_metadata TEXT NOT NULL,
-			created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+			-- Milliseconds, matching schema.ts's mode: "timestamp_ms". Kept
+			-- identical to the generated migration on purpose: nothing enforces
+			-- that this DDL matches, and a seconds default here would make every
+			-- test read timestamps Drizzle then interprets as milliseconds.
+			created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)),
 			completed_at INTEGER
 		);
 	`);
@@ -56,17 +72,17 @@ export function createTestDb() {
 			return { rows: method === "get" ? (rows[0] ?? []) : rows };
 		},
 		{ schema },
-	);
+	) as unknown as IrisDb;
 }
 
 /** Inserts one row directly, bypassing the do.repository write helpers so
  * each test can set up exact created_at ordering and status combinations. */
 export async function insertRow(
-	db: ReturnType<typeof createTestDb>,
-	overrides: Partial<typeof irisRuns.$inferInsert> & { pInvocId: string; modality: "text" | "image" },
+	db: IrisDb,
+	overrides: Partial<typeof irisRuns.$inferInsert> & { pipelineId: string; modality: "text" | "image" },
 ) {
 	await db.insert(irisRuns).values({
-		sourcePInvocId: "helios-run",
+		designSessionId: "helios-run",
 		status: "completed",
 		userPrompt: "a pattern",
 		motifRef: "motif-key",

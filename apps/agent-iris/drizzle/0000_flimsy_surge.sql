@@ -1,7 +1,7 @@
 CREATE TABLE `iris_runs` (
 	`id` text PRIMARY KEY NOT NULL,
-	`p_invoc_id` text NOT NULL,
-	`source_p_invoc_id` text NOT NULL,
+	`pipeline_id` text NOT NULL,
+	`design_session_id` text NOT NULL,
 	`modality` text NOT NULL,
 	`status` text NOT NULL,
 	`user_prompt` text NOT NULL,
@@ -10,6 +10,6 @@ CREATE TABLE `iris_runs` (
 	`image_r2_key` text,
 	`cost_usd` real,
 	`model_metadata` text NOT NULL,
-	`created_at` integer DEFAULT (unixepoch()) NOT NULL,
+	`created_at` integer DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)) NOT NULL,
 	`completed_at` integer
 );

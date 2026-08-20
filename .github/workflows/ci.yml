@@ -1,14 +1,11 @@
-# Pull request checks for the Iris integration branch.
+# Pull request checks for both squads' integration branches, and for dev.
 #
-# Two checks, ordered cheapest first: a clean install, then a typecheck of every
-# workspace. Both are free. Nothing here talks to Cloudflare, nothing here calls
-# a model, and nothing here needs a secret — if this workflow ever requires a
-# token, something has gone wrong (shared-01 decision 4).
+# Three checks, ordered cheapest first: a clean install, a typecheck of every
+# workspace, then the tests. All free. Nothing here talks to Cloudflare, nothing
+# here calls a model, and nothing here needs a secret — if this workflow ever
+# requires a token, something has gone wrong (shared-01 decision 4).
 #
 # Deliberately not here yet:
-#   - the test step. `npm test` from the root runs every workspace and exits
-#     non-zero on failure, so it is ready to add; it is left out to keep this
-#     first workflow small.
 #   - the PR title convention check.
 #   - any deploy step. Deploys stay manual. A deploy step in a pull request
 #     workflow is how a pull request ends up shipping to production.
@@ -21,6 +18,8 @@ on:
   pull_request:
     branches:
       - dev-iris
+      - dev-atlas
+      - dev
 
 # A new push to the same pull request cancels the run still in flight, rather
 # than queueing behind it.
@@ -71,3 +70,13 @@ jobs:
             echo "::endgroup::"
           done
           exit $failed
+
+      # Last because it is the slowest, and because a typecheck failure explains
+      # a test failure far more clearly than the test failure explains itself.
+      #
+      # `--if-present` so a workspace without a test script is skipped rather
+      # than failing the run. No workspace here calls a model or touches the
+      # network, so this stays free: any test that reaches the `AI` binding must
+      # fake it (AGENTS.md §5).
+      - name: Test
+        run: npm test --workspaces --if-present

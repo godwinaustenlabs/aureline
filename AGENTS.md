@@ -65,8 +65,8 @@ Three different ids that all look like UUIDs and mean completely different thing
 
 You need both. The design session id alone cannot tell two re-runs apart. The pipeline id alone cannot connect Iris's work to the Helios pattern it coloured.
 
-> **Naming as it stands today:** the columns are `design_session_id` and `pipeline_id`.
-
+> **Naming as it stands today:** Iris uses `design_session_id` and `pipeline_id` throughout —
+> the wire contract, the `iris_runs` columns, and the code.
 ---
 
 ## 4. TypeScript

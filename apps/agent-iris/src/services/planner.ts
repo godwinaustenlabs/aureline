@@ -15,7 +15,7 @@ export async function planConcept(
 	concept: string,
 	env: Env,
 	config: IrisConfig,
-	p_invoc_id: string,
+	pipeline_id: string,
 ): Promise<unknown> {
 	return sampleParamsFull;
 }

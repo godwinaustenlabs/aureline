@@ -49,7 +49,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 	}
 
 	if (url.pathname.startsWith("/images/")) {
-		// Everything after "/images/" is the R2 key, e.g. "iris/{p_invoc_id}.jpg".
+		// Everything after "/images/" is the R2 key, e.g. "iris/{pipeline_id}.jpg".
 		// The prefix names the engine rather than the file, because Iris and Atlas
 		// share one bucket (wrangler.jsonc r2_buckets) and the engine is now the
 		// thing that needs distinguishing.

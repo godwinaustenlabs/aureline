@@ -5,11 +5,12 @@ import { runPipeline, runImageStage } from "./pipeline";
 import { resolveConfig } from "../config";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
-import { startTextRun, failRunningRuns, startImageRun } from "../repository/do.repository";
+import { startTextRun, failRunningRuns, startImageRun, getRunRows } from "../repository/do.repository";
 import { irisRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
 import { sampleParamsFull, sampleParamsMinimal } from "../fixtures/sample-params";
 import { json } from "../http";
+import { fakeEnv } from "./test-env";
 
 // The planner, the colorizer and the storage writes are imported by
 // pipeline.ts, so mocking these modules (with a delegate that calls the real
@@ -32,63 +33,20 @@ vi.mock("../repository/do.repository", async (importOriginal) => {
 		startTextRun: vi.fn(actual.startTextRun),
 		failRunningRuns: vi.fn(actual.failRunningRuns),
 		startImageRun: vi.fn(actual.startImageRun),
+		getRunRows: vi.fn(actual.getRunRows),
 	};
 });
-
-/** The runtime config vars `resolveConfig` falls back to when KV is empty. */
-const VARS = {
-	PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
-	IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
-	AI_GATEWAY_ID: "iris",
-	MAX_RETRIES: "2",
-	RETENTION_LIMIT: "5",
-	MAX_RESUME_ATTEMPTS: "3",
-};
 
 const ORIGIN = "http://localhost:8787";
 
 const REQ: IrisRequest = {
 	concept: "art deco paisley in deep jewel tones",
 	motif_ref: "patterns/fake.jpg",
-	source_p_invoc_id: "helios-test-1",
+	design_session_id: "helios-test-1",
 };
 
-/**
- * Fake `Env` for the whole pipeline. Nothing in this ticket should reach a
- * model — both `planConcept` and `colorizeMotif` are faked function bodies
- * that never touch `env.AI` — so `AI.run` is a fake that **throws if called**.
- * A test that would silently start billing when iris-08/iris-09 land is worse
- * than no test.
- *
- * Storage, KV and R2 are stubbed. D1 (`env.DB`) is never touched:
- * `exportAndPrune` is a no-op until iris-11.
- */
-function fakeEnv() {
-	const run = vi.fn(async () => {
-		throw new Error("AI.run must never be called by the fakes in iris-05");
-	});
-
-	const patternsPut = vi.fn().mockResolvedValue({});
-
-	const env = {
-		AI: { run, gateway: vi.fn(), aiGatewayLogId: null },
-		AI_GATEWAY_ID: VARS.AI_GATEWAY_ID,
-		// Empty KV → every value resolves from the vars above.
-		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
-		PATTERNS: { put: patternsPut, get: vi.fn() },
-		DB: {},
-		PLANNER_MODEL: VARS.PLANNER_MODEL,
-		IMAGE_MODEL: VARS.IMAGE_MODEL,
-		MAX_RETRIES: VARS.MAX_RETRIES,
-		RETENTION_LIMIT: VARS.RETENTION_LIMIT,
-		MAX_RESUME_ATTEMPTS: VARS.MAX_RESUME_ATTEMPTS,
-	} as unknown as Env;
-
-	return { env, run, patternsPut };
-}
-
-async function rowsFor(db: ReturnType<typeof createTestDb>, pInvocId: string) {
-	return db.select().from(irisRuns).where(eq(irisRuns.pInvocId, pInvocId));
+async function rowsFor(db: ReturnType<typeof createTestDb>, pipelineId: string) {
+	return db.select().from(irisRuns).where(eq(irisRuns.pipelineId, pipelineId));
 }
 
 describe("runPipeline", () => {
@@ -105,31 +63,49 @@ describe("runPipeline", () => {
 		vi.mocked(startTextRun).mockReset();
 		vi.mocked(failRunningRuns).mockReset();
 		vi.mocked(startImageRun).mockReset();
+		vi.mocked(getRunRows).mockReset();
+	});
+
+	it("fails the run when the image row cannot be read back, instead of reporting no dimensions", async () => {
+		const { env } = fakeEnv();
+		// The write path silently lost the row. Before this guard existed, the
+		// read-back fell through to `width: null, height: null` and the run was
+		// reported completed — Atlas would then receive a finished-looking run with
+		// no dimensions and nothing indicating anything had gone wrong.
+		vi.mocked(getRunRows).mockResolvedValueOnce([]);
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatch(/^image:/);
+		expect(result.error).toMatch(/vanished between writing and reading it back/);
+		expect(result.width).toBeNull();
+		expect(result.height).toBeNull();
 	});
 
 	it("completes a happy path with real params, a full image url, and width/height", async () => {
 		const { env, run } = fakeEnv();
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("completed");
 		expect(result.params).toEqual(sampleParamsFull);
-		expect(result.source_p_invoc_id).toBe(REQ.source_p_invoc_id);
-		expect(result.image_url).toBe(`${ORIGIN}/images/iris/${result.p_invoc_id}.jpg`);
+		expect(result.design_session_id).toBe(REQ.design_session_id);
+		expect(result.image_url).toBe(`${ORIGIN}/images/iris/${result.pipeline_id}.jpg`);
 		expect(result.width).toBe(128);
 		expect(result.height).toBe(128);
 		expect(result.cost_usd).toBeNull();
 		expect(result.error).toBeNull();
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		const textRow = rows.find((row) => row.modality === "text");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(textRow?.status).toBe("completed");
 		expect(imageRow?.status).toBe("completed");
 		expect(imageRow?.motifRef).toBe(REQ.motif_ref);
-		expect(textRow?.sourcePInvocId).toBe(REQ.source_p_invoc_id);
-		expect(imageRow?.sourcePInvocId).toBe(REQ.source_p_invoc_id);
+		expect(textRow?.designSessionId).toBe(REQ.design_session_id);
+		expect(imageRow?.designSessionId).toBe(REQ.design_session_id);
 
 		// Nothing in this ticket reaches a model.
 		expect(run).not.toHaveBeenCalled();
@@ -142,7 +118,7 @@ describe("runPipeline", () => {
 		const { env } = fakeEnv();
 		vi.mocked(planConcept).mockResolvedValueOnce(sampleParamsMinimal);
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("completed");
 		expect(result.params).toEqual(sampleParamsMinimal);
@@ -154,7 +130,7 @@ describe("runPipeline", () => {
 		const { env } = fakeEnv();
 		vi.mocked(planConcept).mockRejectedValueOnce(new Error("boom"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.params).toBeNull();
@@ -162,7 +138,7 @@ describe("runPipeline", () => {
 		expect(result.cost_usd).toBeNull();
 		expect(result.error).toMatch(/^planner:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("failed");
 		expect(rows.find((row) => row.modality === "image")?.status).toBe("failed");
@@ -172,14 +148,14 @@ describe("runPipeline", () => {
 		const { env } = fakeEnv();
 		vi.mocked(colorizeMotif).mockRejectedValueOnce(new Error("flux down"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.params).toEqual(sampleParamsFull);
 		expect(result.image_url).toBeNull();
 		expect(result.error).toMatch(/^image:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		const textRow = rows.find((row) => row.modality === "text");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(textRow?.status).toBe("completed");
@@ -193,7 +169,7 @@ describe("runPipeline", () => {
 		// The cleanup write breaks too, and must not escape as a throw.
 		vi.mocked(failRunningRuns).mockRejectedValueOnce(new Error("cleanup down"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.error).toMatch(/^persist:/);
@@ -203,25 +179,25 @@ describe("runPipeline", () => {
 		const { env } = fakeEnv();
 		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.error).toMatch(/^image:/);
 		expect(result.params).toEqual(sampleParamsFull);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		expect(rows.find((row) => row.modality === "image")?.status).toBe("failed");
 	});
 
 	it("leaves a concurrent invocation's running row alone", async () => {
-		await insertRow(db, { pInvocId: "other-inflight", modality: "text", status: "running" });
-		await insertRow(db, { pInvocId: "other-inflight", modality: "image", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "text", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "image", status: "running" });
 		const { env } = fakeEnv();
 		vi.mocked(planConcept).mockRejectedValueOnce(new Error("boom"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 
@@ -233,7 +209,7 @@ describe("runPipeline", () => {
 
 describe("runImageStage re-entry (iris-10's /resume)", () => {
 	// iris-10 does not exist yet, so this calls runImageStage exactly the way a
-	// resume would: a fresh p_invoc_id, params read back from a prior run rather
+	// resume would: a fresh pipeline_id, params read back from a prior run rather
 	// than from the planner, and a non-empty metadataExtras carrying the markers
 	// a resume needs on the image row. runPipeline itself only ever calls this
 	// with the default {}, so without this test the merge path is unexercised.
@@ -245,17 +221,14 @@ describe("runImageStage re-entry (iris-10's /resume)", () => {
 		const newInvocId = "resumed-run-id";
 		const config = await resolveConfig(env);
 
-		const outcome = await runImageStage(
-			db as never,
-			env,
-			config,
-			newInvocId,
-			REQ.source_p_invoc_id,
-			REQ.concept,
-			REQ.motif_ref,
-			sampleParamsFull,
-			resumeMarker,
-		);
+		const outcome = await runImageStage(db, env, config, {
+			pipelineId: newInvocId,
+			designSessionId: REQ.design_session_id,
+			concept: REQ.concept,
+			motifRef: REQ.motif_ref,
+			params: sampleParamsFull,
+			metadataExtras: resumeMarker,
+		});
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
@@ -284,7 +257,7 @@ describe("HTTP layer contract (decision 3)", () => {
 		vi.mocked(planConcept).mockReset();
 		vi.mocked(planConcept).mockRejectedValueOnce(new Error("boom"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 		expect(result.status).toBe("failed");
 
 		const response = json(result);

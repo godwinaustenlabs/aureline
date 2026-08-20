@@ -63,18 +63,26 @@ export type IrisStatus = z.infer<typeof IrisStatusSchema>;
  * a much larger request, and no way to look at the input afterwards. Helios
  * returns a servable URL for the same reason.
  *
- * `source_p_invoc_id` is the Helios run that produced `motif_ref`. It is carried
- * forward onto every `iris_runs` row so a full-pipeline view is possible before
- * the per-engine databases are merged. See
+ * `design_session_id` identifies **the design**, not this call. It is minted
+ * once upstream and carried unchanged through every engine, so Helios's pattern,
+ * Iris's colouring of it and Atlas's placement of that all answer to one id. It
+ * is carried onto every `iris_runs` row, which is what makes a full-pipeline
+ * view possible before the per-engine databases are merged. See AGENTS.md §3 and
  * .scratch/shared-sprint-2/sprint-2-3-conventions.md.
  *
+ * **Required, with no fallback.** Iris will not mint one and will not accept the
+ * old `source_p_invoc_id` name: a request without it is rejected with a 400. A
+ * run that cannot be traced back to a design is worse than a run that did not
+ * happen, because it still spends money and still lands in the audit table.
+ *
  * `session_id` means what it means for Helios: it selects which Durable Object
- * instance handles the request (ADR-0005), not the invocation's identity.
+ * instance handles the request (ADR-0005), not the invocation's identity, and
+ * not the design's.
  */
 export const IrisRequestSchema = z.object({
   concept: z.string().trim().min(1).max(1000),
   motif_ref: z.string().trim().min(1).max(512),
-  source_p_invoc_id: z.string().trim().min(1).max(128),
+  design_session_id: z.string().trim().min(1).max(128),
   session_id: z.string().trim().min(1).max(128).optional(),
 });
 
@@ -84,12 +92,15 @@ export type IrisRequest = z.infer<typeof IrisRequestSchema>;
  * A request to run the image half of an existing invocation again, using the
  * params already on disk instead of calling the planner.
  *
- * Same shape and same meaning as `HeliosResumeRequestSchema`: `p_invoc_id` names
- * the run to resume, `session_id` picks the Durable Object, and the resumed run
- * gets its own new `p_invoc_id` rather than reusing this one.
+ * `pipeline_id` names the run to resume and `session_id` picks the Durable
+ * Object. The resumed run gets its own **new** `pipeline_id` rather than reusing
+ * this one — that is exactly what a pipeline id is for, and it is how "which
+ * attempt is the latest" stays answerable. Its `design_session_id` is copied
+ * from the run being resumed, so the retry stays part of the same design and is
+ * not sent again here.
  */
 export const IrisResumeRequestSchema = z.object({
-  p_invoc_id: z.string().trim().min(1).max(128),
+  pipeline_id: z.string().trim().min(1).max(128),
   session_id: z.string().trim().min(1).max(128).optional(),
 });
 
@@ -109,8 +120,10 @@ export type IrisResumeRequest = z.infer<typeof IrisResumeRequestSchema>;
  * having to fetch and decode the image first.
  */
 export const IrisResultSchema = z.object({
-  p_invoc_id: z.string(),
-  source_p_invoc_id: z.string(),
+  /** This run of Iris. A re-run of the same design gets a different one. */
+  pipeline_id: z.string(),
+  /** The design every engine's run of it shares. Atlas carries this forward. */
+  design_session_id: z.string(),
   status: IrisStatusSchema,
   params: IrisParamsSchema.nullable(),
   image_url: z.string().nullable(),
