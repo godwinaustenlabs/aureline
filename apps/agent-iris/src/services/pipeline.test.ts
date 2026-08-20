@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IrisRequest } from "@aureline/shared-types";
-import { runPipeline } from "./pipeline";
+import { runPipeline, runImageStage } from "./pipeline";
+import { resolveConfig } from "../config";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
 import { startTextRun, failRunningRuns, startImageRun } from "../repository/do.repository";
@@ -227,6 +228,52 @@ describe("runPipeline", () => {
 		const other = await rowsFor(db, "other-inflight");
 		expect(other).toHaveLength(2);
 		expect(other.every((row) => row.status === "running")).toBe(true);
+	});
+});
+
+describe("runImageStage re-entry (iris-10's /resume)", () => {
+	// iris-10 does not exist yet, so this calls runImageStage exactly the way a
+	// resume would: a fresh p_invoc_id, params read back from a prior run rather
+	// than from the planner, and a non-empty metadataExtras carrying the markers
+	// a resume needs on the image row. runPipeline itself only ever calls this
+	// with the default {}, so without this test the merge path is unexercised.
+	it("merges metadataExtras over the image row's model metadata alongside width/height", async () => {
+		const db = createTestDb();
+		const { env } = fakeEnv();
+
+		const resumeMarker = { root: "original-run-id", resumed_from: "original-run-id", attempt: 2 };
+		const newInvocId = "resumed-run-id";
+		const config = await resolveConfig(env);
+
+		const outcome = await runImageStage(
+			db as never,
+			env,
+			config,
+			newInvocId,
+			REQ.source_p_invoc_id,
+			REQ.concept,
+			REQ.motif_ref,
+			sampleParamsFull,
+			resumeMarker,
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.width).toBe(128);
+		expect(outcome.height).toBe(128);
+
+		const rows = await rowsFor(db, newInvocId);
+		expect(rows).toHaveLength(1);
+		const row = rows[0];
+		expect(row?.status).toBe("completed");
+		const metadata = row?.modelMetadata as { root?: string; resumed_from?: string; attempt?: number; width?: number };
+		// The resume markers survive...
+		expect(metadata.root).toBe("original-run-id");
+		expect(metadata.resumed_from).toBe("original-run-id");
+		expect(metadata.attempt).toBe(2);
+		// ...alongside width/height, which completeImageRun adds after the markers
+		// are already on the row.
+		expect(metadata.width).toBe(128);
 	});
 });
 
