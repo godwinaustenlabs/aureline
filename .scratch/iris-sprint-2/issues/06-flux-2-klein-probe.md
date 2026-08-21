@@ -47,7 +47,7 @@ Treat every line here as a hypothesis to be confirmed or corrected.
 
 - [ ] Write a throwaway probe. A `tests/` harness or a temporary route on the Iris worker, whichever is faster. Do not put it in `services/`. (**Ali Amir**)
 - [ ] Take one real black-and-white motif from Helios as the input image. Note its actual pixel dimensions before you send it. (**Ali Amir**)
-- [ ] Make the call with the gateway configured, carrying a `p_invoc_id` in the gateway metadata so the log row is findable. (**Ali Amir**)
+- [ ] Make the call with the gateway configured, carrying a `pipeline_id` in the gateway metadata so the log row is findable. (**Ali Amir**)
 - [ ] Fill in the "confirm or correct" column of the table above for every row. A row you did not test is written as "not tested", never left blank. (**Ali Amir**)
 - [ ] Paste the **exact** working `ai.run` call into the "What we found" section below, as code, with real field names. Not a description of it. (**Ali Amir**)
 - [ ] Paste the response shape, with the large base64 string elided but its key named and its type stated. (**Ali Amir**)

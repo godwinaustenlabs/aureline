@@ -29,11 +29,11 @@
 2. **The engine choice is explicit, not inferred from the URL.** A dropdown or a pair of radio buttons, persisted alongside the base URL. Guessing the engine from the hostname breaks the moment both workers are on `*.workers.dev`, and it breaks silently by sending the wrong request shape.
 3. **Iris's routes are the same names as Helios's**, deliberately: `POST /generate`, `POST /resume`, `GET /runs`, `GET /`. So `client.ts` needs no new functions, only a wider request type. This is why iris-05 named the entry route `/generate` rather than `/colorize`.
 4. **`motif_ref` is a reference the user pastes, not a file they upload.** A URL or an R2 key. Uploading a file would mean base64 in the request body, a bigger `ALLOWED_HEADERS` surface, and Iris accepting bytes it does not want. The realistic workflow is: run Helios, copy the `image_url` from its result, paste it into Iris. Support exactly that.
-5. **`source_p_invoc_id` is a required field on the form**, because it is required by `IrisRequestSchema`. Make it obvious where to get it: it is the `p_invoc_id` from the Helios run whose image you just pasted.
+5. **`design_session_id` is a required field on the form**, because it is required by `IrisRequestSchema`. Make it obvious where to get it: it is the `p_invoc_id` from the Helios run whose image you just pasted.
 6. **Validate with `IrisRequestSchema` before sending**, imported from `@aureline/shared-types`, the same way `validateGenerate` already imports Helios's. Do not hand-copy the rules. A hand-copied `max(512)` on `motif_ref` drifts the moment the contract moves.
 7. **The spend confirmation stays, with Iris's real number.** `client.ts` carries `GENERATE_COST_USD = 0.0029` as a literal for Helios. Iris's generate is a text call plus an image call, so it needs its own figure, from iris-08 and iris-09's measured costs. A confirmation dialog showing the wrong engine's price is worse than none.
 8. **`GET /runs` is free and must stay free.** It is the route the page calls on load, on every session switch, and after every run. Nothing on that path may reach a model. This was already a rule for Helios and it carries over unchanged.
-9. **The run-history table needs Iris's extra columns.** `iris_runs` has `source_p_invoc_id` and `motif_ref` that `helios_runs` does not. Show them when the engine is Iris, rather than a shared lowest-common-denominator table that hides exactly the two columns that make an Iris row traceable.
+9. **The run-history table needs Iris's extra columns.** `iris_runs` has `design_session_id` and `motif_ref` that `helios_runs` does not. Show them when the engine is Iris, rather than a shared lowest-common-denominator table that hides exactly the two columns that make an Iris row traceable.
 10. **Note the Atlas shape now, but do not build it.** Atlas has one image call and no text call, so its run rows have no `text` modality at all and any code assuming two rows per invocation will misread them. Leave a comment where that assumption lives. Atlas's own panel is its own ticket in the Atlas backlog.
 
 ## Agreed shapes, do not invent your own
@@ -61,7 +61,7 @@ export const IRIS_RESUME_COST_USD = /* from iris-09 */;
 ```ts
 // apps/frontend/src/domain/validate.ts
 export function validateIrisGenerate(
-  concept: string, motifRef: string, sourcePInvocId: string, sessionId: string
+  concept: string, motifRef: string, designSessionId: string, sessionId: string
 ): Validated;
 ```
 
@@ -80,7 +80,7 @@ export function validateIrisGenerate(
 
 ### The Iris input fields
 
-- [ ] Add `motif_ref` and `source_p_invoc_id` inputs, shown only when the engine is Iris. (**Maaz Ahmad**)
+- [ ] Add `motif_ref` and `design_session_id` inputs, shown only when the engine is Iris. (**Maaz Ahmad**)
 - [ ] Label them so the workflow is obvious without documentation. Something like "Motif image URL (paste the `image_url` from a Helios run)" and "Helios run id (the `p_invoc_id` that produced it)". A field called `motif_ref` with no explanation will be filled in wrong. (**Maaz Ahmad**)
 - [ ] Add a convenience action: when a Helios run is selected in the history, offer to copy its `image_url` and `p_invoc_id` straight into Iris's fields. The two engines are used together and there is no coordinator engine yet, so a human is doing this hand-off on every single run. (**Maaz Ahmad**)
 - [ ] Write `validateIrisGenerate` in `domain/validate.ts`, importing `IrisRequestSchema` (decision 6). Omit `session_id` rather than sending it empty, matching what `validateGenerate` already does and why. (**Maaz Ahmad**)
@@ -90,7 +90,7 @@ export function validateIrisGenerate(
 
 - [ ] Show the colored image from `image_url`, reusing the existing `ImageOutput` component. (**Maaz Ahmad**)
 - [ ] Show `width` and `height` from the result. They are on `IrisResult` specifically so a consumer does not have to decode the image, and seeing them on screen is how anyone notices the resize step from iris-09 misbehaving. (**Maaz Ahmad**)
-- [ ] Add `source_p_invoc_id` and `motif_ref` columns to the run history when the engine is Iris (decision 9). (**Maaz Ahmad**)
+- [ ] Add `design_session_id` and `motif_ref` columns to the run history when the engine is Iris (decision 9). (**Maaz Ahmad**)
 - [ ] Put Iris's real cost figures in the spend confirmation (decision 7). Take them from iris-08 and iris-09's measured numbers, not from Helios's. (**Maaz Ahmad**)
 - [ ] Leave a comment where the two-rows-per-invocation assumption lives, noting that Atlas has one row and no `text` modality (decision 10). Do not build Atlas's panel here. (**Maaz Ahmad**)
 - [ ] Keep the existing rules from ticket 09 intact: no credentials, no polling, no timeout, no retry, `Content-Type` as the only header. A retry is a decision a person makes by clicking, and aborting a `/generate` does not un-bill it. (**Maaz Ahmad**)
@@ -98,7 +98,7 @@ export function validateIrisGenerate(
 ### Tests
 
 - [ ] Extend the existing component and domain tests to cover the Iris path. The existing suite has tests for `App`, `ImageOutput`, `RunHistory`, `Scratchpad`, `outcome`, `runView`, `scratchpad`, `sessions` and `spend`; add to them rather than starting a parallel structure. (**Maaz Ahmad**)
-- [ ] Test that `validateIrisGenerate` rejects a missing `motif_ref` and a missing `source_p_invoc_id` **before** any request is made. That validation is what stops a paid route being called with a body it will reject. (**Maaz Ahmad**)
+- [ ] Test that `validateIrisGenerate` rejects a missing `motif_ref` and a missing `design_session_id` **before** any request is made. That validation is what stops a paid route being called with a body it will reject. (**Maaz Ahmad**)
 - [ ] Test that switching engines does not carry the other engine's base URL over. (**Maaz Ahmad**)
 
 ### Review gates
@@ -121,7 +121,7 @@ export function validateIrisGenerate(
 1. `npm run dev --workspace=apps/frontend`. The page loads, the engine control is there, and switching to Iris shows the two extra fields.
 2. With no worker running, confirm the page reports a clear connection failure rather than looking broken. `describeFetchFailure` already writes a good message naming both likely causes; make sure the Iris path reaches it too.
 3. Point at a running Iris worker, click generate with an empty `motif_ref`, and confirm the page refuses locally without sending a request. Check the network tab.
-4. A real run: colored image renders, cost shown, two rows in the history with `source_p_invoc_id` and `motif_ref` populated.
+4. A real run: colored image renders, cost shown, two rows in the history with `design_session_id` and `motif_ref` populated.
 5. Resume from the page and confirm a new, different image.
 6. Switch back to Helios and confirm it still works exactly as before. This is the regression check that matters most, since Helios is deployed.
 7. `npm test --workspace=apps/frontend` passes.
