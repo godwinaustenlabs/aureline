@@ -4,7 +4,7 @@
 
 **Objective:** Iris spends real money on a call that cannot be retried automatically. Without a resume route, a failed image call means the whole run is thrown away and the next attempt pays for the planner again. With one, the expensive half can be re-attempted on a human's decision, with a hard cap on how much any single brief can cost. In Helios's sprint this work was very nearly left until too late and then turned into the most detailed ADR in the set, which is the argument for doing it deliberately rather than discovering it.
 
-**Final result:** `POST /resume` takes a `p_invoc_id`, refuses clearly when resuming makes no sense, and otherwise generates a fresh image from the stored params under a spend cap. A run's full history, including its retries, is readable from `iris_runs` alone.
+**Final result:** `POST /resume` takes a `pipeline_id`, refuses clearly when resuming makes no sense, and otherwise generates a fresh image from the stored params under a spend cap. A run's full history, including its retries, is readable from `iris_runs` alone.
 
 **Blocked by:** iris-05 for the decision work, which can start immediately. iris-08 and iris-09 must both be merged before the route can be finished and verified.
 
@@ -27,8 +27,8 @@
 1. **Retry policy is decided per stage, based on how that specific call fails** (ADR-0009). The text stage retries automatically because a slightly-wrong JSON reply is cheap and very likely to succeed on a second attempt. The image stage never retries automatically because it is expensive, one-shot, and likely to fail the same way twice. This is not copied from Helios without thinking; it is the same conclusion reached from the same facts, and Iris's two stages happen to have the same economics.
 2. **A failed run returns HTTP 200 with a settled status in the body** (ticket 08, decision 4). Already built in iris-05. Restated here because this ticket is where it would be tempting to make a resume refusal a 500.
 3. **A refusal is a 409, not a failed result.** A refusal never became an invocation: no rows written, no model called, nothing billed. Returning a `failed` result would claim a run happened. A run that did happen and failed is still a 200.
-4. **The resumed run gets a new `p_invoc_id`.** The original is never reused. Each attempt is its own invocation with its own two rows and its own cost.
-5. **Three markers on the resumed rows: `root`, `resumed_from`, `attempt`.** `root` is the original brief's `p_invoc_id`, which is what the spend cap counts over. `resumed_from` is the immediate parent, so a chain of resumes is walkable. `attempt` is the ordinal. They go in `model_metadata`, on **both** rows of the resumed run.
+4. **The resumed run gets a new `pipeline_id`.** The original is never reused. Each attempt is its own invocation with its own two rows and its own cost.
+5. **Three markers on the resumed rows: `root`, `resumed_from`, `attempt`.** `root` is the original brief's `pipeline_id`, which is what the spend cap counts over. `resumed_from` is the immediate parent, so a chain of resumes is walkable. `attempt` is the ordinal. They go in `model_metadata`, on **both** rows of the resumed run.
 6. **`root` is what the cap counts, not `resumed_from`.** Counting the immediate parent would let a chain of resumes each start a fresh count and spend without limit. `countResumeAttempts` from iris-03 takes a root for this reason.
 7. **The cap is `config.maxResumeAttempts`**, resolved from KV, counting resumes only. Three means the original plus three retries. Every retry spends the image model, so this value is the ceiling on what one concept can cost.
 8. **Resume re-enters at `runImageStage`, never at `runPipeline`.** The planner is not called again: its params are already on disk and paying for them twice is the thing resume exists to avoid. This is why iris-05 exported `runImageStage` separately.
@@ -45,7 +45,7 @@ export type ResumeOutcome =
   | { ok: true; result: IrisResult };
 
 export async function resumeRun(
-  db: IrisDb, p_invoc_id: string, env: Env, origin: string
+  db: IrisDb, pipeline_id: string, env: Env, origin: string
 ): Promise<ResumeOutcome>;
 ```
 
@@ -64,7 +64,7 @@ The refusals, adapted from Helios's six. Each has to be a distinct message, beca
 Markers in `model_metadata`, on both rows of a resumed run:
 
 ```jsonc
-{ "root": "<original p_invoc_id>", "resumed_from": "<immediate parent>", "attempt": 2 }
+{ "root": "<original pipeline_id>", "resumed_from": "<immediate parent>", "attempt": 2 }
 ```
 
 ## Work
@@ -88,6 +88,15 @@ Markers in `model_metadata`, on both rows of a resumed run:
 - [ ] Confirm `/resume` routes to the DO by the same `scopeKey` rule `/generate` does. A run can only be resumed from the DO that holds it, so both must land in the same place. iris-02 already did this; verify it. (**Maaz Bin Asif**)
 - [ ] Confirm `exportAndPrune` runs on a resumed run's exit paths too, not just `runPipeline`'s. A resumed run's rows are as real as any other's. (**Maaz Bin Asif**)
 
+### The loop guard — written here before the code exists, not after
+
+Helios's `resume.ts` is where the runaway image loop lives, and this ticket is about to write Iris's equivalent. The three requirements below come from the Aug 20 DB bug meeting and are not optional. Iris does not have the bug yet; the point of this section is that it never gets it.
+
+- [ ] **Branch on a missing image row explicitly.** Helios's guards read `imageRow?.status === "completed"` and `imageRow?.status === "running"`, so a row that is absent — or present but corrupted, with `status` not where it is expected — matches neither and falls straight through into generating another image. Handle `undefined` as its own case, before the status checks, and refuse. `undefined` and "present but not the value I expected" are different situations and want different answers (AGENTS.md §7). (**Maaz Bin Asif**)
+- [ ] **Never pass adjacent positional strings into the image path.** `runImageStage`, `startImageRun`, `insertFailedImageRun` and `insertResumedTextRun` all take a single object now, precisely so a swap is a compile error rather than a corrupted row. Do not reintroduce a positional wrapper around them (AGENTS.md §6). (**Maaz Bin Asif**)
+- [ ] **The spend cap is the backstop, so prove it holds when the data is bad.** The cap over `root` is what bounds the damage if a guard is ever wrong. Test it against a *corrupted* row, not just a well-formed chain. (**Maaz Bin Asif**)
+- [ ] Add a test that a resume whose image row is missing entirely refuses, rather than generating. This is the single most expensive failure available in this codebase. (**Maaz Bin Asif**)
+
 ### Tests
 
 - [ ] Write `services/resume.test.ts` with one test per refusal in the table. Seven refusals, seven tests, each asserting the specific message. (**Maaz Bin Asif**)
@@ -110,8 +119,8 @@ Markers in `model_metadata`, on both rows of a resumed run:
 **Budget: about $0.003 per successful resume.** Two or three successful resumes plus hitting the cap is roughly 1 to 2 cents. Every refusal path is free by design, so test all seven of those first and exhaustively, and only then spend on the success path.
 
 1. Test all seven refusals with curl before making a single successful resume. Each returns 409 with its own message, and the gateway log stays unchanged.
-2. A real successful resume returns 200 with a new `p_invoc_id` and a new, visibly different image.
-3. `curl -s 'http://localhost:8787/runs?p_invoc_id=<resumed id>' | jq`. Both rows carry `root`, `resumed_from` and `attempt` in `model_metadata`.
+2. A real successful resume returns 200 with a new `pipeline_id` and a new, visibly different image.
+3. `curl -s 'http://localhost:8787/runs?pipeline_id=<resumed id>' | jq`. Both rows carry `root`, `resumed_from` and `attempt` in `model_metadata`.
 4. Set `max_resume_attempts` to 1 with `npm run kv:put --workspace=apps/agent-iris`, hit the cap, confirm the message. **Put it back:** `npm run config:pull:iris`.
 5. `npm test --workspace=apps/agent-iris` passes.
 

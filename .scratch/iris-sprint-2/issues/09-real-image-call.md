@@ -44,7 +44,7 @@ export async function colorizeMotif(
   params: IrisParams,
   config: IrisConfig,
   env: Env,
-  p_invoc_id: string
+  pipeline_id: string
 ): Promise<{
   image: Uint8Array;
   contentType: string;
@@ -98,7 +98,7 @@ All three dimension pairs are recorded deliberately, and they answer different q
 - [ ] The prompt comes from `buildColorPrompt(params)` (decision 8). (**Ali Amir**)
 - [ ] The model comes from `config.imageModel.model` (ADR-0008), never a literal. (**Ali Amir**)
 - [ ] Set `skipCache` on the gateway options (decision 2). Without it, a resume returns the cached first attempt and looks like the model ignored you. (**Ali Amir**)
-- [ ] Carry `p_invoc_id` in the gateway metadata, same as the text call. (**Ali Amir**)
+- [ ] Carry `pipeline_id` in the gateway metadata, same as the text call. (**Ali Amir**)
 - [ ] Call `readGatewayCost(env, "image")` immediately after the call returns. (**Ali Amir**)
 - [ ] Read the returned image's real dimensions and return them (decision 9). If the model reports them, use that; otherwise read them from the bytes. Do not assume they match the input. (**Ali Amir**)
 - [ ] Do **not** add a retry (decision 1). (**Ali Amir**)

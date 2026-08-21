@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { corsHeaders, parseAllowedOrigins, preflight, withCors } from "./cors";
+import { corsHeaders, parseAllowedOrigins, preflight, withCors, type CorsEnv } from "./cors";
 
 const ALLOWED = "http://localhost:5173";
 
-/** An `env` carrying only the var CORS reads. */
-function fakeEnv(allowedOrigins: string | undefined = ALLOWED) {
-	return { ALLOWED_ORIGINS: allowedOrigins } as unknown as Env;
+/** An `env` carrying only the var CORS reads. No cast: `CorsEnv` is exactly
+ * this shape, which is the point of it existing. */
+function fakeEnv(allowedOrigins: string | undefined = ALLOWED): CorsEnv {
+	return { ALLOWED_ORIGINS: allowedOrigins };
 }
 
 /** A request from a browser page on `origin`, or from something that sent none. */
@@ -136,6 +137,10 @@ describe("withCors", () => {
 
 	/** Its 101 cannot be reconstructed, and CORS does not govern the handshake. */
 	it("hands a websocket upgrade back as it is", () => {
+		// A documented AGENTS.md §4 exception, and the only one in this file: the
+		// Response constructor rejects status 101 outright, so a real upgrade
+		// response cannot be built in Node. The shape below is exactly what
+		// `withCors` branches on.
 		const upgrade = { status: 101, webSocket: {} } as unknown as Response;
 
 		expect(withCors(upgrade, request(ALLOWED), fakeEnv())).toBe(upgrade);

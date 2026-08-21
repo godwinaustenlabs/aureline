@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "054bdd9a-76b5-41ff-9a12-1628a586eb3c",
+  "id": "2b9c5b9d-6b3d-4891-8420-48f61cd2ac57",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "iris_runs": {
@@ -14,15 +14,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "p_invoc_id": {
-          "name": "p_invoc_id",
+        "pipeline_id": {
+          "name": "pipeline_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "source_p_invoc_id": {
-          "name": "source_p_invoc_id",
+        "design_session_id": {
+          "name": "design_session_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -90,7 +90,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "(unixepoch())"
+          "default": "(CAST(unixepoch('subsec') * 1000 AS INTEGER))"
         },
         "completed_at": {
           "name": "completed_at",

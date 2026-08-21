@@ -35,7 +35,7 @@
 7. **The retention limit comes from `config.retentionLimit`.** Not `env.RETENTION_LIMIT`, and not a hardcoded 5. In Helios's sprint this exact box was unticked at review, so it is called out here.
 8. **An export failure must not fail the run.** The run already happened and the money is already spent. Log it and carry on. The rows stay in the DO and the next invocation's export picks them up, because export is idempotent.
 9. **Iris's D1 database is its own, not Helios's.** Consolidating the three engines' databases into one is a separate joint ticket at the end of the sprint, after both squads' tables are stable. The reasoning is in `docs/sprint-2-3-conventions.md`.
-10. **`source_p_invoc_id` is what makes the eventual consolidation worth doing.** It travels with every exported row, so a full-pipeline view is already possible today by stitching three queries together, and becomes a real join once the databases are merged.
+10. **`design_session_id` is what makes the eventual consolidation worth doing.** It travels with every exported row, so a full-pipeline view is already possible today by stitching three queries together, and becomes a real join once the databases are merged.
 
 ## Agreed shapes, do not invent your own
 
@@ -56,14 +56,14 @@ const MAX_ROWS_PER_INSERT = 7;
 export async function exportRuns(d1: IrisD1Db, rows: IrisRun[]): Promise<void>;
 
 /** Reads a run's rows back out of D1. Empty array when the run is not there. */
-export async function readRun(d1: IrisD1Db, pInvocId: string): Promise<IrisRun[]>;
+export async function readRun(d1: IrisD1Db, pipelineId: string): Promise<IrisRun[]>;
 ```
 
 ```ts
 // apps/agent-iris/src/services/pipeline.ts
 // Export first, prune second. The order is the decision.
 export async function exportAndPrune(
-  db: IrisDb, env: Env, p_invoc_id: string, retentionLimit: number
+  db: IrisDb, env: Env, pipeline_id: string, retentionLimit: number
 ): Promise<void>;
 ```
 
@@ -97,8 +97,8 @@ export async function exportAndPrune(
 2. Set the retention limit low: `npm run kv:put --workspace=apps/agent-iris retention_limit 2`.
 3. Do three runs. Cheapest way: use `GET /runs` to confirm the DO already holds runs from iris-08 and iris-09, rather than generating fresh ones.
 4. `curl -s 'http://localhost:8787/runs' | jq '.runs | length'`. The DO now holds only the newest two completed runs, plus any failed ones.
-5. `npx wrangler d1 execute iris-d1 --remote --command "SELECT p_invoc_id, source_p_invoc_id, modality, status, cost_usd FROM iris_runs ORDER BY created_at"`. Every run, including the pruned ones and the failed ones, is here.
-6. Confirm `source_p_invoc_id` is populated on every exported row. That column is the whole reason the eventual consolidation is worth doing, and a null there means the chain is broken.
+5. `npx wrangler d1 execute iris-d1 --remote --command "SELECT pipeline_id, design_session_id, modality, status, cost_usd FROM iris_runs ORDER BY created_at"`. Every run, including the pruned ones and the failed ones, is here.
+6. Confirm `design_session_id` is populated on every exported row. That column is the whole reason the eventual consolidation is worth doing, and a null there means the chain is broken.
 7. Run the same export twice and confirm the D1 row count does not change.
 8. **Put the config back:** `npm run config:pull:iris`.
 
