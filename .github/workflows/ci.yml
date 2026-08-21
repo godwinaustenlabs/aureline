@@ -20,6 +20,13 @@ on:
       - dev-iris
       - dev-atlas
       - dev
+    # A PR touching only docs/tickets has nothing for install/typecheck/test to
+    # check, so skip the run rather than burning a runner on it. Safe while this
+    # workflow only reports (see the note above) — paths-ignore skips the run
+    # entirely rather than reporting green, which would block merges if this
+    # workflow is ever made a required status check.
+    paths-ignore:
+      - "**/*.md"
 
 # A new push to the same pull request cancels the run still in flight, rather
 # than queueing behind it.
