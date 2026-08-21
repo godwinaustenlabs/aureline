@@ -35,8 +35,8 @@
 	 *
 	 * The binding name stays `PATTERNS`, matching Helios's, so r2.repository.ts
 	 * reads identically in all three engines. Separation happens in the key, not
-	 * the bucket: Iris writes `iris/{p_invoc_id}.jpg` and Atlas writes
-	 * `atlas/{p_invoc_id}.jpg` (iris-05, atlas-06).
+	 * the bucket: Iris writes `iris/{pipeline_id}.jpg` and Atlas writes
+	 * `atlas/{pipeline_id}.jpg` (iris-05, atlas-06).
 	 *
 	 * `bucket_name` here must be the exact same string Atlas's wrangler.jsonc
 	 * uses. R2 bindings take the name directly, not an id — a typo does not
