@@ -1,15 +1,9 @@
+import type { IrisParams } from "@aureline/shared-types";
 import { buildColorPrompt } from "../apps/agent-iris/src/prompts/color.prompt";
 
-type IrisParams = {
-  primary_color: string;
-  secondary_color?: string;
-  accent_color?: string;
-  harmony: string;
-  saturation: string;
-  background_treatment: string;
-  mood: string;
-};
-
+// The real IrisParams, not a local restatement of it. A hand-written copy here
+// would let this harness compile against a shape the planner cannot produce,
+// which is the one thing a harness for eyeballing real prompts must not do.
 const examples: IrisParams[] = [
   {
     primary_color: "navy",

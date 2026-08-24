@@ -1,4 +1,4 @@
-import type { IrisParams } from "../../../../packages/shared-types";
+import type { IrisParams } from "@aureline/shared-types";
 import { COLOR_GLOSSARY } from "./color.glossary";
 
 /* Versioned identity. Never edit a prompt in place, bump the ID. */

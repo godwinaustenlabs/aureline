@@ -1,4 +1,4 @@
-import type { ColorName, IrisParams } from "../../../../packages/shared-types/src";
+import type { ColorName, IrisParams } from "@aureline/shared-types";
 
 /**
  * One entry per ColorName.
