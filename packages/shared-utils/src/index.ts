@@ -13,3 +13,14 @@ export type {
   ImageModelOutput,
   GetImageModelOutputOptions,
 } from "./getImageModelOutput";
+
+export {
+  getImageToImageOutput,
+  MAX_INPUT_IMAGE_DIMENSION,
+  MAX_INPUT_IMAGES,
+} from "./getImageToImageOutput";
+export type {
+  InputImage,
+  ImageToImageOutput,
+  GetImageToImageOutputOptions,
+} from "./getImageToImageOutput";

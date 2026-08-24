@@ -47,15 +47,15 @@ Treat every line here as a hypothesis to be confirmed or corrected.
 
 - [x] Write a throwaway probe. A `tests/` harness or a temporary route on the Iris worker, whichever is faster. Do not put it in `services/`. (**Ali Amir**)
 - [x] Take one real black-and-white motif from Helios as the input image. Note its actual pixel dimensions before you send it. (**Ali Amir**) — used `sample-colored.jpg` (128×128).
-- [ ] Make the call with the gateway configured, carrying a `pipeline_id` in the gateway metadata so the log row is findable. (**Ali Amir**) — blocked: gateway `iris` not configured in dashboard.
+- [ ] Make the call with the gateway configured, carrying a `pipeline_id` in the gateway metadata so the log row is findable. (**Ali Amir**) — **blocked, and not by the dashboard any more.** The gateway now exists and was tried repeatedly; every gateway-routed multipart call failed with `8001: Invalid input`. Do not re-attempt this cold — read `docs/ai-gateway-multipart-findings.md` first (local note, not committed; ask Maaz Bin Asif) for the full list of what has already been ruled out.
 - [x] Fill in the "confirm or correct" column of the table above for every row. A row you did not test is written as "not tested", never left blank. (**Ali Amir**)
 - [x] Paste the **exact** working `ai.run` call into the "What we found" section below, as code, with real field names. Not a description of it. (**Ali Amir**)
 - [x] Paste the response shape, with the large base64 string elided but its key named and its type stated. (**Ali Amir**)
-- [ ] Record the real cost from the gateway log, in dollars, to the digits the log shows. (**Ali Amir**) — blocked: gateway `iris` not configured.
-- [ ] Record whether the cost appeared on the **first** read of the log or only after a retry. (**Ali Amir**) — blocked: gateway `iris` not configured.
+- [ ] Record the real cost from the gateway log, in dollars, to the digits the log shows. (**Ali Amir**) — blocked downstream of the box above: no gateway-routed call has ever succeeded, so there is no log row to read a cost from.
+- [ ] Record whether the cost appeared on the **first** read of the log or only after a retry. (**Ali Amir**) — blocked, same reason.
 - [x] Send a deliberately oversized input image, larger than 512x512, and record exactly what happens: an error, a silent downscale, or a worse-looking result. (**Ali Amir**)
 - [x] Look at the output image. Does the model actually recolor the motif while keeping its shapes, or does it redraw the motif? (**Ali Amir**) — partially recolors: shapes preserved but adds texture; color accuracy varies by input size.
-- [ ] Delete the probe code before merging, or move it into `tests/` as a named harness. Nothing from this ticket ships in `src/`. (**Ali Amir**)
+- [x] Delete the probe code before merging, or move it into `tests/` as a named harness. Nothing from this ticket ships in `src/`. (**Ali Amir**) — `apps/agent-iris/src/index.ts` is back to routing only; verified clean.
 
 ### Review gates
 
