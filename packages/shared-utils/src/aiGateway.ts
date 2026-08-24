@@ -24,8 +24,10 @@ export interface GatewayConfig {
   /** Override the derived cache key. */
   cacheKey?: string;
   /**
-   * Attached to the Gateway log row. Use it to carry `p_invoc_id` so a log
-   * entry can be joined back to a `helios_runs` row (ADR-0001).
+   * Attached to the Gateway log row. Use it to carry the id of the run this
+   * call belongs to, so a log entry can be joined back to an audit row
+   * (ADR-0001). Iris calls that id `pipeline_id`; Helios still calls it
+   * `p_invoc_id` and joins back to `helios_runs`.
    */
   metadata?: Record<string, string | number | boolean | null>;
 }
