@@ -79,7 +79,9 @@ What lands in the text row's `model_metadata`:
 - [ ] Pass `prompt_version` into the text row's `model_metadata` alongside `model` and `usage` (decision 9). (**Ali Amir**)
 - [ ] Confirm the validate stage in `pipeline.ts` parses with `IrisParamsSchema.parse` and that a failure there is reported with the `validate:` stage prefix, not `planner:`. (**Ali Amir**)
 - [ ] Do **not** add retry logic in `planner.ts`. `getTextualModelOutput` already retries, and a second loop around it multiplies the attempts. (**Ali Amir**)
-- [ ] Update `pipeline.test.ts`'s fake `AI` binding so it returns a plausible structured reply for the text call and still **throws** for the image call. The image call is still faked at this point and must stay unbillable. (**Ali Amir**)
+- [ ] Update the fake `AI` binding so it returns a plausible structured reply for the text call and still **throws** for the image call. The image call is still faked at this point and must stay unbillable. (**Ali Amir**)
+
+  It lives in **`src/services/test-env.ts`**, not in `pipeline.test.ts` — and it is shared with `planner.test.ts`, so this is a change to a helper both suites use, not to one test file. Today `AI.run` throws unconditionally and the file's own doc comment says *"AI.run must never be called by the fakes in iris-05"*. That contract is exactly what this ticket changes: update the comment along with the code, or the next person reads a guarantee the file no longer offers. Keep the throw for the image call.
 - [ ] Add a test where the model returns invalid JSON and assert the run settles as `failed` with the stage prefix naming the failing stage, and that both rows are written. (**Ali Amir**)
 - [ ] Add a test where `readGatewayCost` returns null and assert the run still completes. Decision 5 is a contract and needs a test that would notice it changing. (**Ali Amir**)
 
@@ -105,6 +107,8 @@ What lands in the text row's `model_metadata`:
 2. `curl -s 'http://localhost:8787/runs' | jq '.runs[] | select(.modality=="text")'`. Confirm `cost_usd` is a real non-null number, `planner_params` holds the palette, and `model_metadata` carries `model`, `usage` and `prompt_version`.
 3. Force a retry: set `max_retries` low and use a concept likely to confuse the model, or temporarily corrupt the schema handed to the model. Confirm the error message distinguishes a schema failure from a call failure. Put everything back with `npm run config:pull:iris`.
 4. Force the no-gateway path: temporarily blank `AI_GATEWAY_ID`. Confirm the warning fires, the run still completes, and `cost_usd` is null. Put it back. This is worth doing once, because in production this failure is completely silent.
+
+   **`AI_GATEWAY_ID` is a `wrangler.jsonc` var, not a KV key** — it is deliberately absent from `config.ts`'s `FIELDS`, so `npm run config:pull:iris` will not touch it and you have to edit the file. That means **re-running `npm run cf-typegen` after each edit, both times** (AGENTS.md §9): `wrangler types` generates it as the *literal* type `AI_GATEWAY_ID: "iris"`, so a blanked value typechecks against a string that is no longer real, and a stale `worker-configuration.d.ts` then lies to you in the direction of everything looking fine. Put the value back and regenerate before you commit anything.
 5. `npm test --workspace=apps/agent-iris` passes.
 
 ## Two things that will waste your afternoon
