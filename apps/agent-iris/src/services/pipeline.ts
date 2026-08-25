@@ -6,7 +6,7 @@ import { readGatewayCost } from "./gatewayCost";
 import { saveColoredImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { describeConfig, resolveConfig, type IrisConfig } from "../config";
-import { IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
+import { IRIS_COLOR_PROMPT_VERSION, IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
 import {
 	startTextRun,
 	completeTextRun,
@@ -36,7 +36,10 @@ type ImageStageOutcome =
  * that was never called once `image_model` is changed in KV.
  */
 function imageModelMetadata(config: IrisConfig): Record<string, unknown> {
-	return { model: config.imageModel.model };
+	// The prompt version travels with the model, so a run's colours stay
+	// attributable to the wording that produced them. That is the entire reason
+	// iris-04 versions its prompts rather than editing them in place.
+	return { model: config.imageModel.model, prompt_version: IRIS_COLOR_PROMPT_VERSION };
 }
 
 /**
@@ -133,7 +136,21 @@ export async function runImageStage(
 			pipelineId,
 			imageR2Key,
 			costUsd,
-			modelMetadata: { width: image.width, height: image.height },
+			// Three pairs, answering different questions. `input_dimensions` and
+			// `original_dimensions` are for debugging: when an output looks wrong the
+			// first question is whether the input was mangled on the way in, and this
+			// is the only place that answer survives. They are equal today because
+			// there is no resize (iris-09 decision 3); both are recorded anyway so
+			// the shape does not change the day one lands.
+			//
+			// `output_dimensions` is not debugging. It is the durable home of the
+			// width and height `IrisResultSchema` promises Atlas, and `iris_runs` has
+			// no column for them and deliberately never will (iris-03 decision 9).
+			modelMetadata: {
+				output_dimensions: { width: image.width, height: image.height },
+				input_dimensions: image.inputDimensions,
+				original_dimensions: image.inputDimensions,
+			},
 		});
 
 		// Read back from what was just stored, rather than trusting `image.width`
@@ -151,14 +168,17 @@ export async function runImageStage(
 		if (!imageRow) {
 			throw new Error(`image row for pipeline_id ${pipelineId} vanished between writing and reading it back`);
 		}
-		const storedMetadata = (imageRow.modelMetadata ?? {}) as { width?: unknown; height?: unknown };
+		const storedMetadata = (imageRow.modelMetadata ?? {}) as {
+			output_dimensions?: { width?: unknown; height?: unknown };
+		};
+		const stored = storedMetadata.output_dimensions ?? {};
 
 		return {
 			ok: true,
 			imageR2Key,
 			costUsd,
-			width: typeof storedMetadata.width === "number" ? storedMetadata.width : null,
-			height: typeof storedMetadata.height === "number" ? storedMetadata.height : null,
+			width: typeof stored.width === "number" ? stored.width : null,
+			height: typeof stored.height === "number" ? stored.height : null,
 		};
 	} catch (cause) {
 		if (!rowOpened) {

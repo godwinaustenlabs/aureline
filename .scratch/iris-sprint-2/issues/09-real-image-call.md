@@ -64,6 +64,14 @@ export async function colorizeMotif(
   width: number;
   height: number;
   cost_usd: number | null;
+  // Added, and not in the shape agreed above. `runImageStage` has to record
+  // `original_dimensions` and never sees the motif bytes, so without this the
+  // only way to fill that field is to fetch the motif a second time purely to
+  // measure it. Null when the motif is not a JPEG: that read answers a
+  // debugging question, and failing a run that produced a good image because it
+  // could not be answered is the wrong trade. The *output* dimensions still
+  // throw, because those are what IrisResultSchema promises Atlas.
+  inputDimensions: { width: number; height: number } | null;
 }>;
 
 // No `resolveInputSize`. See decision 3: the motif is sent at its original
@@ -94,7 +102,7 @@ All three dimension pairs are recorded deliberately, and they answer different q
 
 - [x] Add a read function to `repository/r2.repository.ts` for fetching the motif. Handle both cases `motif_ref` can be: a URL, fetched over HTTP, and an R2 key. State in a comment which one Helios actually produces today and which is the fallback. Landed as `readMotif`, and the comment also carries the two-buckets trap from decision 4. (**Maaz Bin Asif**)
 - [x] Fail clearly when the motif cannot be fetched, with a message naming the ref. A run that failed because a motif was missing must not look like a model failure. Four failure paths, each naming the ref: a non-2xx, a thrown fetch, a bucket miss, and an object that exists but holds zero bytes. The last one matters most, because empty bytes would otherwise reach the model as a valid-looking part and bill. (**Maaz Bin Asif**)
-- [ ] Do this fetch **before** the model call and let a failure here happen before anything bills. Asserted in `colorizer.test.ts`, not just arranged. (**Maaz Bin Asif**)
+- [x] Do this fetch **before** the model call and let a failure here happen before anything bills. Asserted in `colorizer.test.ts`, not just arranged. (**Maaz Bin Asif**)
 
 ### Reading the output's dimensions
 
@@ -106,24 +114,24 @@ The resize step is gone (decision 3). What replaced it is the opposite problem: 
 
 ### The call
 
-- [ ] Write `colorizeMotif`'s real body, calling `getImageToImageOutput` from iris-07. Do not build the multipart form here: that is the helper's job and duplicating it means two places to fix when the model changes. (**Ali Amir**)
-- [ ] The prompt comes from `buildColorPrompt(params)` (decision 8). (**Ali Amir**)
-- [ ] The model comes from `config.imageModel.model` (ADR-0008), never a literal. (**Ali Amir**)
-- [ ] **Pass no gateway id** (decision 10), and put a comment at the call site saying why, pointing at `docs/ai-gateway-multipart-findings.md`. Without that comment the next reader sees an un-gatewayed call in a repo whose ADR-0006 says there is no such thing, and assumes it was an oversight. (**Ali Amir**)
-- [ ] Set `skipCache` and carry `pipeline_id` in the gateway options anyway (decisions 2 and 10). Both are inert while there is no id — `buildAiRunOptions` returns `undefined` — and both are correct the day there is one. Do not assert on either in a test; there is nothing observable to assert. (**Ali Amir**)
-- [ ] Call `readGatewayCost(env, "image")` immediately after the call returns. Expect `null` back today (decision 10). (**Ali Amir**)
-- [ ] Read the returned image's real dimensions and return them (decision 9). If the model reports them, use that; otherwise read them from the bytes. Do not assume they match the input. (**Ali Amir**)
-- [ ] Do **not** add a retry (decision 1). (**Ali Amir**)
-- [ ] Do **not** save to R2 inside this service (decision 5). `runImageStage` calls `saveColoredImage`. (**Ali Amir**)
+- [x] Write `colorizeMotif`'s real body, calling `getImageToImageOutput` from iris-07. Do not build the multipart form here: that is the helper's job and duplicating it means two places to fix when the model changes. (**Maaz Bin Asif**)
+- [x] The prompt comes from `buildColorPrompt(params)` (decision 8). (**Maaz Bin Asif**)
+- [x] The model comes from `config.imageModel.model` (ADR-0008), never a literal. (**Maaz Bin Asif**)
+- [x] **Pass no gateway id** (decision 10), and put a comment at the call site saying why, pointing at `docs/ai-gateway-multipart-findings.md`. Without that comment the next reader sees an un-gatewayed call in a repo whose ADR-0006 says there is no such thing, and assumes it was an oversight. (**Maaz Bin Asif**)
+- [x] Set `skipCache` and carry `pipeline_id` in the gateway options anyway (decisions 2 and 10). Both are inert while there is no id — `buildAiRunOptions` returns `undefined` — and both are correct the day there is one. Do not assert on either in a test; there is nothing observable to assert. (**Maaz Bin Asif**)
+- [x] Call `readGatewayCost(env, "image")` immediately after the call returns. Expect `null` back today (decision 10). (**Maaz Bin Asif**)
+- [x] Read the returned image's real dimensions and return them (decision 9). If the model reports them, use that; otherwise read them from the bytes. Do not assume they match the input. (**Maaz Bin Asif**)
+- [x] Do **not** add a retry (decision 1). (**Maaz Bin Asif**)
+- [x] Do **not** save to R2 inside this service (decision 5). `runImageStage` calls `saveColoredImage`. (**Maaz Bin Asif**)
 
 ### The pipeline side
 
-- [ ] Confirm `runImageStage` assigns the cost the moment the model returns, before the R2 save, so a save failure still records real spend (decision 7). This was already built in iris-05; verify it survived. (**Ali Amir**)
-- [ ] Populate `model_metadata` with the shape above, all three dimension pairs included. (**Ali Amir**)
-- [ ] Build the result's `width` and `height` by reading `output_dimensions` back out of the metadata you stored, rather than from the in-memory value the model call returned. The two should be identical, and if they ever are not, that is a bug you want failing in verification step 2 rather than surfacing months later as an Atlas placement that is quietly off. (**Ali Amir**)
-- [ ] Update `pipeline.test.ts`'s fake `AI` binding: it now returns a plausible reply for both calls. Keep the assertion that no real network call happens. (**Ali Amir**)
-- [ ] Add a test where the image call throws and assert: the run settles `failed`, the planner's params are still on the result rather than discarded, an image row exists and is `failed`, and `cost_usd` is null because nothing billed. (**Ali Amir**)
-- [ ] Add a test where the image call succeeds but the R2 save throws, and assert `cost_usd` is **non-null** on the failed row. This is the exact scenario decision 7 exists for, and it is the one nobody writes a test for until money has already been lost. (**Ali Amir**)
+- [x] Confirm `runImageStage` assigns the cost the moment the model returns, before the R2 save, so a save failure still records real spend (decision 7). This was already built in iris-05; verify it survived. (**Maaz Bin Asif**)
+- [x] Populate `model_metadata` with the shape above, all three dimension pairs included. (**Maaz Bin Asif**)
+- [x] Build the result's `width` and `height` by reading `output_dimensions` back out of the metadata you stored, rather than from the in-memory value the model call returned. The two should be identical, and if they ever are not, that is a bug you want failing in verification step 2 rather than surfacing months later as an Atlas placement that is quietly off. (**Maaz Bin Asif**)
+- [x] Update `pipeline.test.ts`'s fake `AI` binding: it now returns a plausible reply for both calls. Keep the assertion that no real network call happens. (**Maaz Bin Asif**)
+- [x] Add a test where the image call throws and assert: the run settles `failed`, the planner's params are still on the result rather than discarded, an image row exists and is `failed`, and `cost_usd` is null because nothing billed. (**Maaz Bin Asif**)
+- [x] Add a test where the image call succeeds but the R2 save throws, and assert `cost_usd` is **non-null** on the failed row. This is the exact scenario decision 7 exists for, and it is the one nobody writes a test for until money has already been lost. (**Maaz Bin Asif**)
 
 ### Review gates
 
@@ -136,7 +144,7 @@ The resize step is gone (decision 3). What replaced it is the opposite problem: 
 
 ## Verification without burning budget
 
-**Budget: about $0.003 per call, so roughly 3 cents for the ten real runs the gates above need.** Keep it to that. Specifically:
+**Budget: about $0.017 per call, so roughly 17 cents for the ten real runs the gates above need.** The earlier figure in this ticket said $0.003 and 3 cents, which was wrong by about six times. iris-06 measured it: $0.015 per output megapixel plus $0.002 per input image megapixel, so a 1024x1024 output from one small input is about $0.017. Budget accordingly, and specifically:
 
 - Debug the prompt with iris-04's harness, which costs nothing.
 - Debug the dimension reading with unit tests on `readJpegDimensions`, which costs nothing.

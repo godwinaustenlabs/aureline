@@ -258,6 +258,60 @@ describe("runPipeline", () => {
 		expect(other).toHaveLength(2);
 		expect(other.every((row) => row.status === "running")).toBe(true);
 	});
+	it("settles as failed, keeping the palette, when the image call throws", async () => {
+		const { env } = fakeEnv();
+		vi.mocked(colorizeMotif).mockRejectedValueOnce(new Error("model unavailable"));
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatch(/^image:/);
+		// The planner's work is not discarded because the image half failed. It
+		// was paid for, and `POST /resume` needs it to retry the image alone
+		// without re-running the planner (ADR-0009).
+		expect(result.params).toEqual(sampleParamsFull);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		expect(rows).toHaveLength(2);
+		const imageRow = rows.find((row) => row.modality === "image");
+		expect(imageRow?.status).toBe("failed");
+		// Nothing billed: the throw is the call itself failing.
+		expect(imageRow?.costUsd).toBeNull();
+		expect(result.cost_usd).toBeNull();
+	});
+
+	it("records what the image cost even when the R2 save fails afterwards", async () => {
+		const { env, patternsPut } = fakeEnv();
+
+		// A complete `ColorizedMotif`, built whole rather than as a partial plus a
+		// cast (AGENTS.md §5). The cost is forced because the real call returns
+		// null today — there is no gateway (iris-09 decision 10) — and this test
+		// is about what happens once there is one.
+		vi.mocked(colorizeMotif).mockResolvedValueOnce({
+			image: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+			contentType: "image/jpeg",
+			width: 1024,
+			height: 1024,
+			inputDimensions: { width: 128, height: 128 },
+			cost_usd: 0.0171,
+		});
+		patternsPut.mockRejectedValueOnce(new Error("R2 unavailable"));
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		const imageRow = rows.find((row) => row.modality === "image");
+		expect(imageRow?.status).toBe("failed");
+		// The whole point of decision 7. The model billed before the save was
+		// attempted, so a null here would be a run that spent money and recorded
+		// none of it -- and nobody writes this test until that has already
+		// happened once.
+		expect(imageRow?.costUsd).toBe(0.0171);
+		expect(result.cost_usd).toBe(0.0171);
+	});
+
 });
 
 describe("runImageStage re-entry (iris-10's /resume)", () => {
@@ -292,14 +346,25 @@ describe("runImageStage re-entry (iris-10's /resume)", () => {
 		expect(rows).toHaveLength(1);
 		const row = rows[0];
 		expect(row?.status).toBe("completed");
-		const metadata = row?.modelMetadata as { root?: string; resumed_from?: string; attempt?: number; width?: number };
+		const metadata = row?.modelMetadata as {
+			root?: string;
+			resumed_from?: string;
+			attempt?: number;
+			model?: string;
+			prompt_version?: string;
+			output_dimensions?: { width?: number; height?: number };
+		};
 		// The resume markers survive...
 		expect(metadata.root).toBe("original-run-id");
 		expect(metadata.resumed_from).toBe("original-run-id");
 		expect(metadata.attempt).toBe(2);
-		// ...alongside width/height, which completeImageRun adds after the markers
-		// are already on the row.
-		expect(metadata.width).toBe(128);
+		// ...and so does what `startImageRun` wrote, because `completeImageRun`
+		// merges rather than replaces.
+		expect(metadata.model).toBe("@cf/black-forest-labs/flux-2-klein-9b");
+		expect(metadata.prompt_version).toBe("iris-color-v1");
+		// ...alongside the dimensions, which completeImageRun adds after the
+		// markers are already on the row.
+		expect(metadata.output_dimensions).toEqual({ width: 128, height: 128 });
 	});
 });
 
