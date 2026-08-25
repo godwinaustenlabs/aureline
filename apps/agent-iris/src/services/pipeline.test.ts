@@ -84,7 +84,7 @@ describe("runPipeline", () => {
 	});
 
 	it("completes a happy path with real params, a full image url, and width/height", async () => {
-		const { env, run } = fakeEnv();
+		const { env } = fakeEnv();
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
@@ -107,8 +107,11 @@ describe("runPipeline", () => {
 		expect(textRow?.designSessionId).toBe(REQ.design_session_id);
 		expect(imageRow?.designSessionId).toBe(REQ.design_session_id);
 
-		// Nothing in this ticket reaches a model.
-		expect(run).not.toHaveBeenCalled();
+		// iris-08: text row metadata carries model, usage, and prompt_version
+		const textMeta = textRow?.modelMetadata as Record<string, unknown>;
+		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
+		expect(textMeta).toHaveProperty("usage");
 	});
 
 	it("accepts params carrying only the required primary_color, with no secondary or accent color", async () => {
@@ -116,7 +119,7 @@ describe("runPipeline", () => {
 		// all three optional color fields, this one covers none of them. Both have
 		// to clear the validate stage, not just be schema-valid in isolation.
 		const { env } = fakeEnv();
-		vi.mocked(planConcept).mockResolvedValueOnce(sampleParamsMinimal);
+		vi.mocked(planConcept).mockResolvedValueOnce({ data: sampleParamsMinimal, model: "test", usage: {} });
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
