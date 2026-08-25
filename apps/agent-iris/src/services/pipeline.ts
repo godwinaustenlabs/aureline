@@ -223,11 +223,14 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		const plannerCost = await readGatewayCost(env, "planner");
 
 		stage = "validate";
-		params = IrisParamsSchema.parse((planned as { data: unknown }).data);
+		params = IrisParamsSchema.parse(planned.data);
 
+		// `model` comes from what the call reported, not from `config.textModel`:
+		// a row naming the configured model rather than the one that answered is
+		// the lying audit row ADR-0001 exists to prevent.
 		const textModelMetadata = {
-			model: (planned as { model: string }).model,
-			usage: (planned as { usage: unknown }).usage,
+			model: planned.model,
+			usage: planned.usage,
 			prompt_version: IRIS_PLANNER_PROMPT_VERSION,
 		};
 

@@ -22,8 +22,20 @@ import { sampleParamsFull } from "../fixtures/sample-params";
  * (`@cf/black-forest-labs/...`). The image call is still faked at this point
  * and must stay unbillable — iris-09 replaces this throw with the real image
  * generation.
+ *
+ * The two gateway fields are overridable because `readGatewayCost` is the one
+ * service that reads them and needs them to differ per test: `aiGatewayLogId`
+ * decides whether it calls the gateway at all, and `getLog` is what it retries
+ * against. Overriding them here rather than assembling a second `Env` in
+ * `gatewayCost.test.ts` is the whole reason this file exists — a local fake
+ * there would mean a third cast in an app whose count is stated two paragraphs
+ * up.
+ *
+ * @param overrides - `aiGatewayLogId` defaults to `""`, which is the value a
+ *   call that never routed through the gateway leaves behind. `getLog` defaults
+ *   to a mock nothing calls.
  */
-export function fakeEnv() {
+export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: ReturnType<typeof vi.fn> } = {}) {
 	const run = vi.fn(async (model: string) => {
 		if (model.startsWith("@cf/black-forest-labs")) {
 			throw new Error("AI.run: image call not faked yet (iris-09)");
@@ -36,8 +48,11 @@ export function fakeEnv() {
 
 	const patternsPut = vi.fn().mockResolvedValue({});
 
+	const getLog = overrides.getLog ?? vi.fn();
+	const gateway = vi.fn().mockReturnValue({ getLog });
+
 	const env = {
-		AI: { run, gateway: vi.fn(), aiGatewayLogId: "" },
+		AI: { run, gateway, aiGatewayLogId: overrides.aiGatewayLogId ?? "" },
 		AI_GATEWAY_ID: "",
 		// Empty KV → every value resolves from the vars below.
 		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
@@ -50,5 +65,5 @@ export function fakeEnv() {
 		MAX_RESUME_ATTEMPTS: "3",
 	} as unknown as Env;
 
-	return { env, run, patternsPut };
+	return { env, run, patternsPut, getLog };
 }

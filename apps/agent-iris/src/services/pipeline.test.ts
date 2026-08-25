@@ -5,6 +5,7 @@ import { runPipeline, runImageStage } from "./pipeline";
 import { resolveConfig } from "../config";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
+import { readGatewayCost } from "./gatewayCost";
 import { startTextRun, failRunningRuns, startImageRun, getRunRows } from "../repository/do.repository";
 import { irisRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
@@ -24,6 +25,15 @@ vi.mock("./planner", async (importOriginal) => {
 vi.mock("./colorizer", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./colorizer")>();
 	return { ...actual, colorizeMotif: vi.fn(actual.colorizeMotif) };
+});
+
+// The cost read is the one thing here with no observable behaviour of its own —
+// against a fake env it always returns null, so every test would exercise the
+// same path and none would prove the number ever reaches a row. The delegate
+// keeps that default and lets two tests below force a real value.
+vi.mock("./gatewayCost", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./gatewayCost")>();
+	return { ...actual, readGatewayCost: vi.fn(actual.readGatewayCost) };
 });
 
 vi.mock("../repository/do.repository", async (importOriginal) => {
@@ -64,6 +74,7 @@ describe("runPipeline", () => {
 		vi.mocked(failRunningRuns).mockReset();
 		vi.mocked(startImageRun).mockReset();
 		vi.mocked(getRunRows).mockReset();
+		vi.mocked(readGatewayCost).mockReset();
 	});
 
 	it("fails the run when the image row cannot be read back, instead of reporting no dimensions", async () => {
@@ -112,6 +123,45 @@ describe("runPipeline", () => {
 		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
 		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
 		expect(textMeta).toHaveProperty("usage");
+	});
+
+	it("records what the planner call cost on the text row", async () => {
+		const { env } = fakeEnv();
+		// A real figure, not a round number: a test asserting 1 would still pass
+		// against code that wrote a hardcoded 1, and this is the only assertion
+		// anywhere that the gateway's number reaches a row at all.
+		vi.mocked(readGatewayCost).mockResolvedValueOnce(0.00087);
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		const textRow = rows.find((row) => row.modality === "text");
+		expect(textRow?.costUsd).toBe(0.00087);
+
+		// It belongs to the text row only. `result.cost_usd` is the image's, and
+		// the image call is still faked, so conflating the two would show up here.
+		expect(result.cost_usd).toBeNull();
+	});
+
+	it("completes the run when the planner cost cannot be read", async () => {
+		const { env } = fakeEnv();
+		// `readGatewayCost` returns null on all three of its failure paths — no log
+		// id, a throw, a log carrying no cost. Cost is an audit concern, and a run
+		// that produced a good palette must not fail because a log row was slow
+		// (iris-08 decision 5).
+		vi.mocked(readGatewayCost).mockResolvedValueOnce(null);
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		expect(result.params).toEqual(sampleParamsFull);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		const textRow = rows.find((row) => row.modality === "text");
+		expect(textRow?.status).toBe("completed");
+		expect(textRow?.costUsd).toBeNull();
 	});
 
 	it("accepts params carrying only the required primary_color, with no secondary or accent color", async () => {

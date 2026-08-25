@@ -35,12 +35,15 @@ const READ_BACKOFF_MS = [400, 1600];
  * **Only the last attempt is visible.** When the planner retries, each attempt
  * is its own gateway call and this returns the cost of the final one, not the
  * sum. A run whose planner retried therefore under-reports slightly. The
- * neuron figure it replaced had exactly the same limitation, so this is parity
- * rather than a regression, and both are recorded in
- * docs/helios-runs-conventions.md.
+ * neuron figure it replaced in Helios had exactly the same limitation, so this
+ * is parity rather than a regression. Stated here rather than cross-referenced:
+ * Helios records it in docs/helios-runs-conventions.md, and the Iris equivalent
+ * does not yet carry it, so a pointer would be the wrong claim in this copy.
  *
  * A missing, failed or unlogged cost is always tolerated as `null`. Cost is an
- * audit concern and must never fail a run that otherwise worked (ticket 06).
+ * audit concern and must never fail a run that otherwise worked (iris-08
+ * decision 5). Today the Iris image stage always lands here: that call passes
+ * no gateway id, so there is no log id and no cost to read.
  * Every path to that null logs first, though. The three ways it can happen —
  * no log id, a throw, a log with no cost on it — are indistinguishable from
  * the outside, and a silent null in a cost report reads as a free run.

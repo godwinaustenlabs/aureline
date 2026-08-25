@@ -1,13 +1,18 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { planConcept } from "./planner";
 import { fakeEnv } from "./test-env";
 import { resolveConfig } from "../config";
 import { sampleParamsFull } from "../fixtures/sample-params";
 
-vi.mock("./gatewayCost", () => ({
-	readGatewayCost: vi.fn().mockResolvedValue(null),
-}));
-
+/**
+ * The planner stage against a faked `AI` binding. No network, no model, no cost
+ * (AGENTS.md §5).
+ *
+ * There is deliberately no `readGatewayCost` mock here: `planConcept` does not
+ * read the cost. The pipeline does, on the line after this returns, because
+ * `aiGatewayLogId` holds only the most recent routed call. The tests for that
+ * live in `pipeline.test.ts`, where the behaviour actually is.
+ */
 describe("planConcept", () => {
 	let env: Env;
 	let config: Awaited<ReturnType<typeof resolveConfig>>;
@@ -21,33 +26,31 @@ describe("planConcept", () => {
 	it("returns a TextualModelOutput carrying data, usage, and model from the text call", async () => {
 		const result = await planConcept("deep navy and gold paisley", env, config, "pipeline-test-1");
 
-		expect(result).toHaveProperty("data");
-		expect(result).toHaveProperty("model");
+		// `data` is typed `IrisParams`, so this reads it directly. The envelope is
+		// the contract: the pipeline needs `model` and `usage` for the text row and
+		// can only get them from here.
+		expect(result.data).toEqual(sampleParamsFull);
+		expect(result.model).toBe("@cf/openai/gpt-oss-120b");
 		expect(result).toHaveProperty("usage");
-		expect((result as { data: unknown }).data).toEqual(sampleParamsFull);
 	});
 
 	it("propagates a schema validation failure from getTextualModelOutput", async () => {
-		const { run } = fakeEnv();
-		// Return a valid JSON object that does NOT match IrisParamsSchema.
-		// Use mockResolvedValue (not Once) so every retry attempt also returns
-		// wrong data, guaranteeing the function exhausts all retries.
+		// One `fakeEnv()`, so the mock and the env handed to `planConcept` are the
+		// same object. Building a second env to harvest its `run` and then writing
+		// that over the first one's needs a cast to reach in, and a cast here would
+		// be doing the opposite of what this test is for.
+		const { env: failingEnv, run } = fakeEnv();
+
+		// Valid JSON that is not `IrisParams`. `mockResolvedValue`, not `...Once`,
+		// so every retry attempt also comes back wrong and the helper exhausts its
+		// budget rather than succeeding on the second try.
 		run.mockResolvedValue({
 			choices: [{ message: { content: JSON.stringify({ completely: "wrong" }) } }],
 			usage: { prompt_tokens: 100, completion_tokens: 50 },
 		});
-		(env as unknown as { AI: { run: typeof run } }).AI.run = run;
 
-		await expect(
-			planConcept("some concept", env, config, "pipeline-test-2"),
-		).rejects.toThrow("schema validation failed");
-	});
-
-	it("still completes when readGatewayCost returns null (decision 5)", async () => {
-		// readGatewayCost is already mocked to return null in the module mock.
-		const result = await planConcept("concept", env, config, "pipeline-test-3");
-
-		expect(result).toHaveProperty("data");
-		expect((result as { data: unknown }).data).toEqual(sampleParamsFull);
+		await expect(planConcept("some concept", failingEnv, config, "pipeline-test-2")).rejects.toThrow(
+			"schema validation failed",
+		);
 	});
 });
