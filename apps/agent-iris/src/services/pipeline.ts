@@ -2,9 +2,11 @@ import type { IrisDb } from "../db/client";
 import { IrisParamsSchema, type IrisParams, type IrisRequest, type IrisResult } from "@aureline/shared-types";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
+import { readGatewayCost } from "./gatewayCost";
 import { saveColoredImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { describeConfig, resolveConfig, type IrisConfig } from "../config";
+import { IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
 import {
 	startTextRun,
 	completeTextRun,
@@ -216,14 +218,24 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		stage = "planner";
 		const planned = await planConcept(req.concept, env, config, pipelineId);
 
+		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
+		// on this binding, so the image stage would overwrite it.
+		const plannerCost = await readGatewayCost(env, "planner");
+
 		stage = "validate";
-		params = IrisParamsSchema.parse(planned);
+		params = IrisParamsSchema.parse(planned.data);
 
-		const textModelMetadata = { model: config.textModel.model };
+		// `model` comes from what the call reported, not from `config.textModel`:
+		// a row naming the configured model rather than the one that answered is
+		// the lying audit row ADR-0001 exists to prevent.
+		const textModelMetadata = {
+			model: planned.model,
+			usage: planned.usage,
+			prompt_version: IRIS_PLANNER_PROMPT_VERSION,
+		};
 
-		// Planner succeeded — settle the text row before the image row opens. No
-		// real cost yet: the planner call is faked in this ticket.
-		await completeTextRun(db, pipelineId, params, textModelMetadata, null);
+		// Planner succeeded — settle the text row before the image row opens.
+		await completeTextRun(db, pipelineId, params, textModelMetadata, plannerCost);
 
 		stage = "image";
 		const outcome = await runImageStage(db, env, config, {

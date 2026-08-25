@@ -1,64 +1,56 @@
-import { describe, expect, it } from "vitest";
-import { IrisParamsSchema } from "@aureline/shared-types";
+import { describe, expect, it, beforeEach } from "vitest";
 import { planConcept } from "./planner";
-import { colorizeMotif } from "./colorizer";
+import { fakeEnv } from "./test-env";
 import { resolveConfig } from "../config";
 import { sampleParamsFull } from "../fixtures/sample-params";
-import { fakeEnv } from "./test-env";
 
 /**
- * Contract tests for the two faked model stages.
+ * The planner stage against a faked `AI` binding. No network, no model, no cost
+ * (AGENTS.md §5).
  *
- * Both bodies are placeholders that iris-08 and iris-09 replace, so there is
- * nothing behaviourally interesting to assert yet. What is worth pinning is the
- * shape each one promises the pipeline, because that shape is what the real
- * implementations have to keep: these tests should still pass, unchanged, once
- * the fakes become real model calls.
- *
- * They also prove the fakes reach no model — `fakeEnv`'s `AI.run` throws.
+ * There is deliberately no `readGatewayCost` mock here: `planConcept` does not
+ * read the cost. The pipeline does, on the line after this returns, because
+ * `aiGatewayLogId` holds only the most recent routed call. The tests for that
+ * live in `pipeline.test.ts`, where the behaviour actually is.
  */
-
 describe("planConcept", () => {
-	it("returns params the validate stage accepts", async () => {
-		const { env, run } = fakeEnv();
-		const config = await resolveConfig(env);
+	let env: Env;
+	let config: Awaited<ReturnType<typeof resolveConfig>>;
 
-		const planned = await planConcept("art deco paisley", env, config, "run-a");
-
-		// Typed `unknown` on purpose — a real model cannot promise a shape — so the
-		// pipeline's validate stage is what makes it trusted. That is the contract
-		// worth asserting, not the fixture's identity.
-		expect(IrisParamsSchema.safeParse(planned).success).toBe(true);
-		expect(run).not.toHaveBeenCalled();
-	});
-});
-
-describe("colorizeMotif", () => {
-	it("returns bytes plus the dimensions and content type the pipeline records", async () => {
-		const { env, run } = fakeEnv();
-		const config = await resolveConfig(env);
-
-		const image = await colorizeMotif("patterns/motif.jpg", sampleParamsFull, config, env, "run-a");
-
-		expect(image.image).toBeInstanceOf(Uint8Array);
-		expect(image.image.byteLength).toBeGreaterThan(0);
-		expect(image.contentType).toBe("image/jpeg");
-		// Width and height come back from the stage because model_metadata is their
-		// only durable home — there is no column for them (iris-03 decision 9).
-		expect(image.width).toBeGreaterThan(0);
-		expect(image.height).toBeGreaterThan(0);
-		expect(run).not.toHaveBeenCalled();
+	beforeEach(async () => {
+		const fake = fakeEnv();
+		env = fake.env;
+		config = await resolveConfig(env);
 	});
 
-	it("decodes to a real JPEG, not arbitrary bytes", async () => {
-		const { env } = fakeEnv();
-		const config = await resolveConfig(env);
+	it("returns a TextualModelOutput carrying data, usage, and model from the text call", async () => {
+		const result = await planConcept("deep navy and gold paisley", env, config, "pipeline-test-1");
 
-		const image = await colorizeMotif("patterns/motif.jpg", sampleParamsFull, config, env, "run-a");
+		// `data` is typed `IrisParams`, so this reads it directly. The envelope is
+		// the contract: the pipeline needs `model` and `usage` for the text row and
+		// can only get them from here.
+		expect(result.data).toEqual(sampleParamsFull);
+		expect(result.model).toBe("@cf/openai/gpt-oss-120b");
+		expect(result).toHaveProperty("usage");
+	});
 
-		// The fixture has to survive being written to R2, served back through
-		// GET /images/*, and displayed in a browser. Random bytes would pass every
-		// other assertion here and fail the one thing the fixture exists for.
-		expect([...image.image.slice(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+	it("propagates a schema validation failure from getTextualModelOutput", async () => {
+		// One `fakeEnv()`, so the mock and the env handed to `planConcept` are the
+		// same object. Building a second env to harvest its `run` and then writing
+		// that over the first one's needs a cast to reach in, and a cast here would
+		// be doing the opposite of what this test is for.
+		const { env: failingEnv, run } = fakeEnv();
+
+		// Valid JSON that is not `IrisParams`. `mockResolvedValue`, not `...Once`,
+		// so every retry attempt also comes back wrong and the helper exhausts its
+		// budget rather than succeeding on the second try.
+		run.mockResolvedValue({
+			choices: [{ message: { content: JSON.stringify({ completely: "wrong" }) } }],
+			usage: { prompt_tokens: 100, completion_tokens: 50 },
+		});
+
+		await expect(planConcept("some concept", failingEnv, config, "pipeline-test-2")).rejects.toThrow(
+			"schema validation failed",
+		);
 	});
 });
