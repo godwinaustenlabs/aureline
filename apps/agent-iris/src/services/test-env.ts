@@ -1,5 +1,13 @@
 import { vi } from "vitest";
 import { sampleParamsFull } from "../fixtures/sample-params";
+import { SAMPLE_COLORED_JPG_BASE64 } from "../fixtures/sample-colored";
+
+/**
+ * The part of `R2ObjectBody` that `readMotif` reads. Declared, not inferred, so
+ * a test can queue a `null` for the miss case without the fake's return type
+ * having quietly excluded it.
+ */
+type FakeR2Object = { arrayBuffer: () => Promise<ArrayBuffer>; httpMetadata?: { contentType?: string } };
 
 /**
  * A fake `Env` for the service-layer suites.
@@ -17,11 +25,17 @@ import { sampleParamsFull } from "../fixtures/sample-params";
  * their bodies with calls that reach `env.AI`, and narrowing now would only have
  * to be widened again then.
  *
- * `AI.run` is a fake that returns a plausible structured reply for text calls
- * (`@cf/openai/gpt-oss-120b`) and throws for image calls
- * (`@cf/black-forest-labs/...`). The image call is still faked at this point
- * and must stay unbillable — iris-09 replaces this throw with the real image
- * generation.
+ * `AI.run` answers both calls now: a plausible structured reply for text
+ * (`@cf/openai/gpt-oss-120b`), and the sample JPEG for image
+ * (`@cf/black-forest-labs/...`). It returns the real fixture rather than a stub
+ * string because `colorizeMotif` decodes the reply and reads its dimensions out
+ * of the frame header — a stub would decode to bytes that are not a JPEG and
+ * fail there for the wrong reason.
+ *
+ * `PATTERNS.get` returns a motif for the same reason. `colorizeMotif` now calls
+ * `readMotif` before it calls the model, so a bucket that answers `undefined`
+ * fails every pipeline test at the motif read rather than at whatever the test
+ * was about.
  *
  * The two gateway fields are overridable because `readGatewayCost` is the one
  * service that reads them and needs them to differ per test: `aiGatewayLogId`
@@ -36,17 +50,35 @@ import { sampleParamsFull } from "../fixtures/sample-params";
  *   to a mock nothing calls.
  */
 export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: ReturnType<typeof vi.fn> } = {}) {
-	const run = vi.fn(async (model: string) => {
-		if (model.startsWith("@cf/black-forest-labs")) {
-			throw new Error("AI.run: image call not faked yet (iris-09)");
-		}
-		return {
-			choices: [{ message: { content: JSON.stringify(sampleParamsFull) } }],
-			usage: { prompt_tokens: 100, completion_tokens: 50 },
-		};
-	});
+	// All three parameters are declared, and the return is `unknown`, because
+	// that is `Ai.run`'s real shape. Letting the signature be inferred from the
+	// body narrows it to one argument and one of two literal reply shapes, and a
+	// test that reads `run.mock.calls[0][2]` or queues a different reply then
+	// fails to compile against a fake that is merely under-described.
+	const run = vi.fn(
+		async (model: string, _input?: unknown, _options?: unknown): Promise<unknown> => {
+			if (model.startsWith("@cf/black-forest-labs")) {
+				return { image: SAMPLE_COLORED_JPG_BASE64 };
+			}
+			return {
+				choices: [{ message: { content: JSON.stringify(sampleParamsFull) } }],
+				usage: { prompt_tokens: 100, completion_tokens: 50 },
+			};
+		},
+	);
 
 	const patternsPut = vi.fn().mockResolvedValue({});
+
+	// Shaped like the part of `R2ObjectBody` that `readMotif` reads. The same
+	// fixture the model returns, so a test can tell input from output only by
+	// what it asserts, not by the bytes -- which is fine here: nothing in the
+	// pipeline is supposed to distinguish them.
+	const patternsGet = vi.fn(
+		async (): Promise<FakeR2Object | null> => ({
+			arrayBuffer: async () => decodeFixture().slice().buffer,
+			httpMetadata: { contentType: "image/jpeg" },
+		}),
+	);
 
 	const getLog = overrides.getLog ?? vi.fn();
 	const gateway = vi.fn().mockReturnValue({ getLog });
@@ -56,7 +88,7 @@ export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: Re
 		AI_GATEWAY_ID: "",
 		// Empty KV → every value resolves from the vars below.
 		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
-		PATTERNS: { put: patternsPut, get: vi.fn() },
+		PATTERNS: { put: patternsPut, get: patternsGet },
 		DB: {},
 		PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
 		IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
@@ -65,5 +97,13 @@ export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: Re
 		MAX_RESUME_ATTEMPTS: "3",
 	} as unknown as Env;
 
-	return { env, run, patternsPut, getLog };
+	return { env, run, patternsPut, patternsGet, getLog };
+}
+
+/** The sample JPEG as bytes. The same `atob` decode the services use. */
+function decodeFixture(): Uint8Array {
+	const binary = atob(SAMPLE_COLORED_JPG_BASE64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
 }

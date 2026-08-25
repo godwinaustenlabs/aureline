@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { readColoredImage, saveColoredImage } from "./r2.repository";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readColoredImage, readMotif, saveColoredImage } from "./r2.repository";
 
 /**
  * A fake `R2Bucket` backed by a Map.
@@ -17,7 +17,19 @@ function fakeBucket() {
 		return {};
 	});
 
-	const get = vi.fn(async (key: string) => store.get(key) ?? null);
+	const get = vi.fn(async (key: string) => {
+		const stored = store.get(key);
+		if (!stored) return null;
+
+		// Shaped like the part of `R2ObjectBody` this repository actually uses:
+		// `arrayBuffer()` for the bytes and `httpMetadata.contentType` for the type.
+		// `readMotif` reads both, so a fake that only held the bytes would let a
+		// content-type bug through unnoticed.
+		return {
+			arrayBuffer: async () => stored.body.slice().buffer,
+			httpMetadata: stored.contentType ? { contentType: stored.contentType } : undefined,
+		};
+	});
 
 	return { bucket: { put, get } as unknown as R2Bucket, put, get, store };
 }
@@ -72,5 +84,116 @@ describe("readColoredImage", () => {
 		// `GET /images/*` turns this into a 404. A throw here would surface as a
 		// 500 for what is an ordinary missing-image request.
 		expect(await readColoredImage(bucket, "iris/never-written.jpg")).toBeNull();
+	});
+});
+
+describe("readMotif", () => {
+	/**
+	 * Replaces the global `fetch` for one test and restores it afterwards.
+	 *
+	 * `readMotif` reaches the network on the URL branch, and AGENTS.md §5 is
+	 * explicit that tests never do. Returning a real `Response` rather than a
+	 * hand-shaped object matters here: the code reads `ok`, `status`,
+	 * `headers.get("content-type")` and `arrayBuffer()`, and a fake implementing
+	 * only the ones it calls today would stop catching a change to which ones it
+	 * calls.
+	 */
+	function stubFetch(response: Response | Error) {
+		const fetchMock = vi.fn(async () => {
+			if (response instanceof Error) throw response;
+			return response;
+		});
+
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("fetches a URL ref and returns its bytes and declared content type", async () => {
+		const { bucket } = fakeBucket();
+		const fetchMock = stubFetch(new Response(IMAGE, { status: 200, headers: { "content-type": "image/jpeg" } }));
+
+		const motif = await readMotif(bucket, "https://example.com/images/patterns/a.jpg");
+
+		expect(fetchMock).toHaveBeenCalledWith("https://example.com/images/patterns/a.jpg");
+		// Byte-for-byte, not just a length: this is the payload that reaches the
+		// model, and a truncation or a re-encode here would be invisible until an
+		// output came back wrong.
+		expect([...motif.bytes]).toEqual([...IMAGE]);
+		expect(motif.contentType).toBe("image/jpeg");
+	});
+
+	it("falls back to image/jpeg when the response declares no content type", async () => {
+		const { bucket } = fakeBucket();
+		stubFetch(new Response(IMAGE, { status: 200 }));
+
+		const motif = await readMotif(bucket, "https://example.com/a.jpg");
+
+		// Not application/octet-stream: these bytes become a multipart part for an
+		// image model, which has no reason to treat arbitrary binary as an image.
+		expect(motif.contentType).toBe("image/jpeg");
+	});
+
+	it("throws naming the ref and the status when the fetch 404s", async () => {
+		const { bucket } = fakeBucket();
+		stubFetch(new Response("nope", { status: 404 }));
+
+		// The ref has to be in the message. A run that failed because a motif was
+		// missing must not read like a model failure.
+		await expect(readMotif(bucket, "https://example.com/gone.jpg")).rejects.toThrow(
+			/https:\/\/example\.com\/gone\.jpg.*404/,
+		);
+	});
+
+	it("throws naming the ref when the fetch itself throws", async () => {
+		const { bucket } = fakeBucket();
+		stubFetch(new Error("getaddrinfo ENOTFOUND"));
+
+		// A refused connection arrives as a throw rather than a status, and the
+		// bare cause does not say which motif was being read.
+		await expect(readMotif(bucket, "https://nowhere.invalid/a.jpg")).rejects.toThrow(
+			/nowhere\.invalid\/a\.jpg.*ENOTFOUND/,
+		);
+	});
+
+	it("reads a non-URL ref from the bucket, bytes and content type intact", async () => {
+		const { bucket } = fakeBucket();
+		await saveColoredImage(bucket, "run-a", IMAGE, "image/png");
+
+		const motif = await readMotif(bucket, "iris/run-a.jpg");
+
+		expect([...motif.bytes]).toEqual([...IMAGE]);
+		expect(motif.contentType).toBe("image/png");
+	});
+
+	it("does not reach the network for a key-shaped ref", async () => {
+		const { bucket } = fakeBucket();
+		await saveColoredImage(bucket, "run-a", IMAGE, "image/jpeg");
+		const fetchMock = stubFetch(new Response(IMAGE, { status: 200 }));
+
+		await readMotif(bucket, "iris/run-a.jpg");
+
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("throws for a key that is not in Iris's bucket, and says why that can happen", async () => {
+		const { bucket } = fakeBucket();
+
+		// The Helios-written case: identical binding name, different bucket. The
+		// message has to say so, or the next person reads a plain "not found" and
+		// goes looking for a deleted object that was never there.
+		await expect(readMotif(bucket, "patterns/motif.jpg")).rejects.toThrow(/different bucket/);
+	});
+
+	it("throws for an object that exists but is empty", async () => {
+		const { bucket } = fakeBucket();
+		await saveColoredImage(bucket, "run-empty", new Uint8Array(), "image/jpeg");
+
+		// Zero bytes would otherwise go to the model as a valid-looking empty part
+		// and bill for a result that could not possibly be right.
+		await expect(readMotif(bucket, "iris/run-empty.jpg")).rejects.toThrow(/empty/);
 	});
 });
