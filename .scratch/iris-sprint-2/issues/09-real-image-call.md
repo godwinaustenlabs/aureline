@@ -10,7 +10,9 @@
 
 **Status:** ready. iris-07 has landed. Note decision 10 before starting: the cost half of this ticket cannot be verified today.
 
-**Owner:** Ali Amir. **Reviewer:** Maaz Bin Asif.
+**Owner:** Maaz Bin Asif. **Reviewer:** Ali Amir.
+
+> Swapped from the original assignment. iris-08 and iris-09 were scheduled back to back for one person; this one was built in parallel while iris-08 was in flight, so the author and the reviewer trade places. The review gates below move with the reviewer, because the last one of them says nobody approves their own work.
 
 **Duration:** 2 days. **Scheduled:** Tue Sep 1 to Wed Sep 2.
 
@@ -135,11 +137,11 @@ The resize step is gone (decision 3). What replaced it is the opposite problem: 
 
 ### Review gates
 
-- [ ] Look at at least five real outputs across different palettes and different motifs. Does the motif keep its shape, or does the model redraw it? iris-06 answered this once for one image; five is enough to know whether that answer holds. (**Maaz Bin Asif**)
-- [ ] Confirm `input_dimensions` and `original_dimensions` are equal on a real row, and that `output_dimensions` is neither. With no resize the first two are the same pair by definition (decision 3); recording both anyway is what keeps the metadata shape stable for the day a resize lands. (**Maaz Bin Asif**)
-- [ ] ~~Confirm the gateway log's cost matches `cost_usd` on the image row, for a real run.~~ **Blocked by decision 10** — this call does not route through the gateway, so there is no log row to compare against and `cost_usd` is null by construction. Reinstate this gate the day the gateway carries a multipart body. (**Maaz Bin Asif**)
-- [ ] ~~Confirm `skipCache` is set, by running the same concept and motif twice and checking that two gateway log rows appear with two costs.~~ **Blocked by decision 10** — no gateway means no gateway cache, so there is nothing to skip and nothing to observe. Instead: confirm by reading the code that `skipCache` is passed, so it takes effect the day the id is. (**Maaz Bin Asif**)
-- [ ] Confirm decision 3's rejected alternatives are named at the call site, not only in this ticket. If they are not, the next person adds a resize without knowing why there is none. (**Maaz Bin Asif**)
+- [ ] Look at at least five real outputs across different palettes and different motifs. Does the motif keep its shape, or does the model redraw it? iris-06 answered this once for one image; five is enough to know whether that answer holds. (**Ali Amir**)
+- [ ] Confirm `input_dimensions` and `original_dimensions` are equal on a real row, and that `output_dimensions` is neither. With no resize the first two are the same pair by definition (decision 3); recording both anyway is what keeps the metadata shape stable for the day a resize lands. (**Ali Amir**)
+- [ ] ~~Confirm the gateway log's cost matches `cost_usd` on the image row, for a real run.~~ **Blocked by decision 10** — this call does not route through the gateway, so there is no log row to compare against and `cost_usd` is null by construction. Reinstate this gate the day the gateway carries a multipart body. (**Ali Amir**)
+- [ ] ~~Confirm `skipCache` is set, by running the same concept and motif twice and checking that two gateway log rows appear with two costs.~~ **Blocked by decision 10** — no gateway means no gateway cache, so there is nothing to skip and nothing to observe. Instead: confirm by reading the code that `skipCache` is passed, so it takes effect the day the id is. (**Ali Amir**)
+- [ ] Confirm decision 3's rejected alternatives are named at the call site, not only in this ticket. If they are not, the next person adds a resize without knowing why there is none. (**Ali Amir**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget
