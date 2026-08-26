@@ -73,7 +73,11 @@ export const ENGINE_SPECS: Record<Engine, EngineSpec> = {
 		id: 'iris',
 		label: 'Iris',
 		tagline: 'pattern → coloured pattern',
-		defaultBaseUrl: 'http://localhost:8788',
+		// Iris is deployed, so the default points at the live worker rather than a
+		// local dev server nobody is running. `localhost:5173` is in its
+		// ALLOWED_ORIGINS, so the playground reaches it from a dev build with no
+		// tunnel and no extra config. Override the field for local work.
+		defaultBaseUrl: 'https://agent-iris.aureline.workers.dev',
 		resultIdField: 'pipeline_id',
 		rowIdField: 'pipelineId',
 		resumeIdField: 'pipeline_id',
