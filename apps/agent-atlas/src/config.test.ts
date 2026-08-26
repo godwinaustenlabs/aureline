@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { CONFIG_CACHE_TTL, describeConfig, resolveConfig } from "./config";
+import { fakeEnv } from "./test-env";
 
 /**
  * Adapted from `apps/agent-helios/src/config.test.ts`.
@@ -24,9 +25,9 @@ const ALL_KEYS = ["image_model", "max_retries", "retention_limit", "max_resume_a
  * Only the fields `resolveConfig` touches are present, so this needs no Worker
  * runtime and makes no model calls.
  */
-function fakeEnv(kv: Record<string, string> = {}, overrides: Partial<typeof VARS> = {}) {
+function testEnv(kv: Record<string, string> = {}, overrides: Partial<typeof VARS> = {}) {
 	const get = vi.fn(async (keys: string[]) => new Map(keys.map((key) => [key, kv[key] ?? null])));
-	return { env: { ...VARS, ...overrides, CONFIG: { get } } as unknown as Env, get };
+	return { env: fakeEnv({ ...VARS, ...overrides, CONFIG: { get } }), get };
 }
 
 /** The shape actually stored in the ATLAS_CONFIG namespace. */
@@ -49,7 +50,7 @@ afterEach(() => {
 
 describe("resolveConfig", () => {
 	it("takes every value from KV when all the keys are present and valid", async () => {
-		const { env } = fakeEnv(FULL_KV);
+		const { env } = testEnv(FULL_KV);
 
 		const config = await resolveConfig(env);
 
@@ -66,7 +67,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("asks for exactly the four keys, and never for text_model", async () => {
-		const { env, get } = fakeEnv(FULL_KV);
+		const { env, get } = testEnv(FULL_KV);
 
 		await resolveConfig(env);
 
@@ -75,7 +76,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("reads KV once per invocation, in one batched call", async () => {
-		const { env, get } = fakeEnv(FULL_KV);
+		const { env, get } = testEnv(FULL_KV);
 
 		await resolveConfig(env);
 
@@ -83,7 +84,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("falls back to every var on a fresh clone with an empty store", async () => {
-		const { env } = fakeEnv({});
+		const { env } = testEnv({});
 
 		const config = await resolveConfig(env);
 
@@ -96,7 +97,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("falls back per field, not all-or-nothing", async () => {
-		const { env } = fakeEnv({ retention_limit: "42" });
+		const { env } = testEnv({ retention_limit: "42" });
 
 		const config = await resolveConfig(env);
 
@@ -106,7 +107,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("accepts a bare model id, because the dashboard is hand-edited", async () => {
-		const { env } = fakeEnv({ image_model: "  @cf/some/other-model  " });
+		const { env } = testEnv({ image_model: "  @cf/some/other-model  " });
 
 		const config = await resolveConfig(env);
 
@@ -117,7 +118,7 @@ describe("resolveConfig", () => {
 	it("strips unknown fields inside the model object rather than rejecting it", async () => {
 		// A field added in the dashboard ahead of the code that reads it should be
 		// ignored, not invalidate the whole value.
-		const { env } = fakeEnv({ image_model: '{ "model": "m", "guidance": 7 }' });
+		const { env } = testEnv({ image_model: '{ "model": "m", "guidance": 7 }' });
 
 		const config = await resolveConfig(env);
 
@@ -126,7 +127,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("falls back on malformed JSON in a model key", async () => {
-		const { env } = fakeEnv({ image_model: '{ "model": ' });
+		const { env } = testEnv({ image_model: '{ "model": ' });
 
 		const config = await resolveConfig(env);
 
@@ -136,7 +137,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("falls back on a model object with no model id", async () => {
-		const { env } = fakeEnv({ image_model: '{ "steps": 4 }' });
+		const { env } = testEnv({ image_model: '{ "steps": 4 }' });
 
 		expect((await resolveConfig(env)).source.imageModel).toBe("var");
 	});
@@ -148,7 +149,7 @@ describe("resolveConfig", () => {
 		["fractional", "2.5"],
 		["empty", ""],
 	])("falls back when max_retries is %s", async (_label, value) => {
-		const { env } = fakeEnv({ max_retries: value });
+		const { env } = testEnv({ max_retries: value });
 
 		const config = await resolveConfig(env);
 
@@ -157,7 +158,7 @@ describe("resolveConfig", () => {
 	});
 
 	it("caps max_resume_attempts at 20, so a fat-fingered edit cannot authorise an unbounded bill", async () => {
-		const { env } = fakeEnv({ max_resume_attempts: "5000" });
+		const { env } = testEnv({ max_resume_attempts: "5000" });
 
 		const config = await resolveConfig(env);
 
@@ -166,17 +167,17 @@ describe("resolveConfig", () => {
 	});
 
 	it("caps retention_limit at 100", async () => {
-		const { env } = fakeEnv({ retention_limit: "101" });
+		const { env } = testEnv({ retention_limit: "101" });
 
 		expect((await resolveConfig(env)).source.retentionLimit).toBe("var");
 	});
 
 	it("never throws when KV itself is down", async () => {
 		// Config is policy, not a dependency the pipeline cannot run without.
-		const env = {
+		const env = fakeEnv({
 			...VARS,
 			CONFIG: { get: vi.fn(async () => { throw new Error("KV unavailable"); }) },
-		} as unknown as Env;
+		});
 
 		const config = await resolveConfig(env);
 
@@ -189,7 +190,7 @@ describe("resolveConfig", () => {
 		// Only reachable if wrangler.jsonc is wrong. `resolveConfig` runs outside
 		// runPipeline's try block, so throwing here would escape as an opaque 500
 		// instead of a settled result.
-		const { env } = fakeEnv({}, { RETENTION_LIMIT: "not-a-number" });
+		const { env } = testEnv({}, { RETENTION_LIMIT: "not-a-number" });
 
 		const config = await resolveConfig(env);
 
@@ -198,10 +199,10 @@ describe("resolveConfig", () => {
 	});
 
 	it("treats a null KV value exactly like a missing key", async () => {
-		const env = {
+		const env = fakeEnv({
 			...VARS,
 			CONFIG: { get: vi.fn(async (keys: string[]) => new Map(keys.map((k) => [k, null]))) },
-		} as unknown as Env;
+		});
 
 		expect((await resolveConfig(env)).source.imageModel).toBe("var");
 	});
@@ -209,7 +210,7 @@ describe("resolveConfig", () => {
 
 describe("describeConfig", () => {
 	it("names every value and where it came from", async () => {
-		const { env } = fakeEnv(FULL_KV);
+		const { env } = testEnv(FULL_KV);
 
 		const line = describeConfig(await resolveConfig(env));
 
@@ -220,7 +221,7 @@ describe("describeConfig", () => {
 	});
 
 	it("reports (var) four times on a fresh clone", async () => {
-		const { env } = fakeEnv({});
+		const { env } = testEnv({});
 
 		const line = describeConfig(await resolveConfig(env));
 
@@ -228,7 +229,7 @@ describe("describeConfig", () => {
 	});
 
 	it("never mentions text_model", async () => {
-		const { env } = fakeEnv(FULL_KV);
+		const { env } = testEnv(FULL_KV);
 
 		expect(describeConfig(await resolveConfig(env))).not.toContain("text_model");
 	});

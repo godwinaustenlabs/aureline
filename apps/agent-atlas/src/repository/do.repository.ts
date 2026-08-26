@@ -24,32 +24,50 @@ import { atlasRuns, type AtlasRun, type NewAtlasRun } from "../db/schema";
 type ModelMetadata = NewAtlasRun["modelMetadata"];
 
 /**
+ * Everything an `atlas_runs` row needs that the caller decides.
+ *
+ * **One object, not six positional arguments.** Four of these are adjacent
+ * strings, and nothing in the type system tells one string from another at a
+ * call site — so swapping `patternRef` and `garmentRef` in a refactor would
+ * compile, run, and silently write the garment URL into `pattern_ref`. That is
+ * not hypothetical: the same shape of bug in another engine's `resume.ts`
+ * corrupted a row, which then matched neither settled branch of a later guard
+ * and fell through into generating another image, unbounded, at real cost.
+ *
+ * Field order matches the column order in `db/schema.ts`, so a call site can be
+ * checked by reading it rather than by counting positions.
+ */
+export interface RowSeed {
+	pipelineId: string;
+	designSessionId: string;
+	patternRef: string;
+	garmentRef: string;
+	/** Stored in the `garment_regions` column. */
+	placement: AtlasPlacement;
+	modelMetadata: ModelMetadata;
+}
+
+/**
  * Opens the run's row as `running`, before the image call, so a crash mid-call
  * still leaves an inspectable audit trail.
  *
  * One row, not two: Atlas has a single billable call (ADR-ATLAS-0001).
  */
-export async function startRun(
-	db: AtlasDb,
-	pipelineId: string,
-	designSessionId: string,
-	patternRef: string,
-	garmentRef: string,
-	placement: AtlasPlacement,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
-	await db.insert(atlasRuns).values({
-		pipelineId,
-		designSessionId,
-		status: "running",
-		patternRef,
-		garmentRef,
-		garmentRegions: placement,
-		modelMetadata,
-	});
+export async function startRun(db: AtlasDb, seed: RowSeed): Promise<void> {
+	const { placement, ...columns } = seed;
+	await db.insert(atlasRuns).values({ ...columns, status: "running", garmentRegions: placement });
 }
 
-/** Settles the row with its R2 key, cost and final metadata. */
+/**
+ * Settles the row with its R2 key, cost and final metadata.
+ *
+ * **Reads the row first and throws when it is absent**, rather than running an
+ * UPDATE that matches nothing. A blind update on a missing row succeeds, writes
+ * nothing, and reports success — so an invocation that already spent money on a
+ * billed image call would return `completed` with no `image_r2_key` and no cost
+ * recorded anywhere. Failing loudly here puts it on the pipeline's failure path
+ * instead, where it is reported as the failure it is.
+ */
 export async function completeRun(
 	db: AtlasDb,
 	pipelineId: string,
@@ -57,6 +75,13 @@ export async function completeRun(
 	costUsd: number | null,
 	modelMetadata: ModelMetadata,
 ): Promise<void> {
+	const existing = await getRun(db, pipelineId);
+	if (!existing) {
+		throw new Error(
+			`completeRun: no atlas_runs row for pipeline_id ${pipelineId}. The image call already billed, so this is a lost write rather than a missing run.`,
+		);
+	}
+
 	await db
 		.update(atlasRuns)
 		.set({ status: "completed", imageR2Key, costUsd, modelMetadata, completedAt: new Date() })
@@ -75,23 +100,12 @@ export async function completeRun(
  * Inserted already `failed` rather than opened and then settled, since the
  * thing being recorded has already happened.
  */
-export async function insertFailedRun(
-	db: AtlasDb,
-	pipelineId: string,
-	designSessionId: string,
-	patternRef: string,
-	garmentRef: string,
-	placement: AtlasPlacement,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
+export async function insertFailedRun(db: AtlasDb, seed: RowSeed): Promise<void> {
+	const { placement, ...columns } = seed;
 	await db.insert(atlasRuns).values({
-		pipelineId,
-		designSessionId,
+		...columns,
 		status: "failed",
-		patternRef,
-		garmentRef,
 		garmentRegions: placement,
-		modelMetadata,
 		completedAt: new Date(),
 	});
 }
@@ -103,6 +117,12 @@ export async function insertFailedRun(
  * model call already billed and a later step broke. **Do not have it write
  * null**: the image call bills before the R2 save and the row update, so a
  * failure in either has to record money that already left the account.
+ *
+ * **Unlike `completeRun`, matching zero rows here is correct and must not
+ * throw.** This is best-effort cleanup on the failure path: the row may already
+ * have settled, or may never have opened at all (which is what `insertFailedRun`
+ * exists to cover). Throwing would replace the real failure with a symptom of
+ * it, from inside a catch block.
  */
 export async function failRunningRuns(
 	db: AtlasDb,

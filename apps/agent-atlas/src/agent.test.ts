@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestDb } from "./repository/test-db";
-import type { AtlasDb } from "./db/client";
+import { asDb, createTestDb } from "./repository/test-db";
+import { fakeEnv } from "./test-env";
 
 /**
  * Tests `onRequest` at the HTTP level: a real `Request` in, a real `Response`
@@ -39,12 +39,9 @@ let testDb: ReturnType<typeof createTestDb>;
 
 vi.mock("./db/client", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./db/client")>();
-	// Drizzle's sqlite-proxy driver is declared `mode: "async"` and the
-	// durable-sqlite one `mode: "sync"`, so the two database types are not
-	// assignable even though both are Drizzle over sqlite-core and both run the
-	// same SQL. That difference is the untyped boundary here; every query in
-	// this file is a real one against a real in-memory SQLite.
-	return { ...actual, getDb: () => testDb as unknown as AtlasDb };
+	// `asDb` is the single documented driver cast, in test-db.ts. Reused here
+	// rather than repeated, so this file adds no cast of its own.
+	return { ...actual, getDb: () => asDb(testDb) };
 });
 
 const { AtlasAgent } = await import("./agent");
@@ -62,7 +59,7 @@ const aiRun = vi.fn(async () => {
 });
 
 /** The bindings the controller actually reaches, and nothing else. */
-function fakeEnv(): Env {
+function testEnv(): Env {
 	const env: Record<string, unknown> = {
 		...VARS,
 		AI: { run: aiRun },
@@ -70,11 +67,7 @@ function fakeEnv(): Env {
 		PATTERNS: { put: vi.fn(async () => ({})), get: vi.fn(async () => null) },
 		DB: { prepare: vi.fn(() => { throw new Error("D1 unavailable in tests"); }) },
 	};
-	// `Env` is generated from wrangler.jsonc and describes real platform bindings;
-	// a test double cannot structurally satisfy `R2Bucket` or `Ai`. This is the
-	// untyped-boundary exception, and it is confined to this one helper rather
-	// than scattered through the assertions.
-	return env as unknown as Env;
+	return fakeEnv(env);
 }
 
 /**
@@ -91,7 +84,7 @@ function fakeCtx(): DurableObjectState {
 
 /** A real agent instance, constructed rather than cast onto. */
 function agent() {
-	return new AtlasAgent(fakeCtx(), fakeEnv());
+	return new AtlasAgent(fakeCtx(), testEnv());
 }
 
 const post = (path: string, body: unknown) =>

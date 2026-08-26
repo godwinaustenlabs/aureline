@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as schema from "../db/schema";
 import { atlasRuns } from "../db/schema";
+import type { AtlasDb } from "../db/client";
 
 /**
  * A real in-memory SQLite database behind the same Drizzle schema the DO and
@@ -61,6 +62,22 @@ export function createTestDb() {
 		},
 		{ schema },
 	);
+}
+
+/**
+ * The harness typed as the client the repository takes.
+ *
+ * **This is the one cast in the test suite, and it lives here on purpose.**
+ * Drizzle declares the sqlite-proxy driver `mode: "async"` and the
+ * durable-sqlite driver `mode: "sync"`, so the two database types are not
+ * assignable even though both are Drizzle over sqlite-core and both execute the
+ * same SQL against a real database. Doing it once, here, means every call site
+ * in every suite uses a fully-typed object with no cast of its own — so a test
+ * that feeds a repository function the wrong shape fails to compile instead of
+ * quietly passing.
+ */
+export function asDb(db: ReturnType<typeof createTestDb>): AtlasDb {
+	return db as unknown as AtlasDb;
 }
 
 /** Inserts one row directly, bypassing the do.repository write helpers so each

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { fakeEnv } from "./test-env";
 import { corsHeaders, parseAllowedOrigins, preflight, withCors } from "./cors";
 
 const ALLOWED = "http://localhost:5173";
 
 /** An `env` carrying only the var CORS reads. */
-function fakeEnv(allowedOrigins: string | undefined = ALLOWED) {
-	return { ALLOWED_ORIGINS: allowedOrigins } as unknown as Env;
+function testEnv(allowedOrigins: string | undefined = ALLOWED) {
+	return fakeEnv({ ALLOWED_ORIGINS: allowedOrigins });
 }
 
 /** A request from a browser page on `origin`, or from something that sent none. */
@@ -37,14 +38,14 @@ describe("parseAllowedOrigins", () => {
 
 describe("corsHeaders", () => {
 	it("grants the requesting origin when it is on the list", () => {
-		const headers = corsHeaders(request(ALLOWED), fakeEnv());
+		const headers = corsHeaders(request(ALLOWED), testEnv());
 
 		expect(headers["Access-Control-Allow-Origin"]).toBe(ALLOWED);
 		expect(headers["Access-Control-Allow-Methods"]).toBe("GET, POST, OPTIONS");
 	});
 
 	it("grants nothing to an origin that is not on the list", () => {
-		expect(corsHeaders(request("https://evil.test"), fakeEnv())["Access-Control-Allow-Origin"]).toBeUndefined();
+		expect(corsHeaders(request("https://evil.test"), testEnv())["Access-Control-Allow-Origin"]).toBeUndefined();
 	});
 
 	/**
@@ -53,15 +54,15 @@ describe("corsHeaders", () => {
 	 * and allow everyone. This pins the check rather than the echo.
 	 */
 	it("never answers with an origin other than the one that asked", () => {
-		const headers = corsHeaders(request("https://evil.test"), fakeEnv("https://evil.test.attacker.test"));
+		const headers = corsHeaders(request("https://evil.test"), testEnv("https://evil.test.attacker.test"));
 
 		expect(headers["Access-Control-Allow-Origin"]).toBeUndefined();
 	});
 
 	/** The reply differs by origin, so a cache must not reuse one for another. */
 	it("varies on Origin whether or not it granted anything", () => {
-		expect(corsHeaders(request(ALLOWED), fakeEnv()).Vary).toBe("Origin");
-		expect(corsHeaders(request("https://evil.test"), fakeEnv()).Vary).toBe("Origin");
+		expect(corsHeaders(request(ALLOWED), testEnv()).Vary).toBe("Origin");
+		expect(corsHeaders(request("https://evil.test"), testEnv()).Vary).toBe("Origin");
 	});
 
 	/**
@@ -69,13 +70,13 @@ describe("corsHeaders", () => {
 	 * Answering this header would invite a config where it does.
 	 */
 	it("never allows credentials", () => {
-		expect(corsHeaders(request(ALLOWED), fakeEnv())["Access-Control-Allow-Credentials"]).toBeUndefined();
+		expect(corsHeaders(request(ALLOWED), testEnv())["Access-Control-Allow-Credentials"]).toBeUndefined();
 	});
 });
 
 describe("preflight", () => {
 	it("answers an allowed origin with 204 and a cacheable permission", () => {
-		const response = preflight(request(ALLOWED, "OPTIONS"), fakeEnv());
+		const response = preflight(request(ALLOWED, "OPTIONS"), testEnv());
 
 		expect(response.status).toBe(204);
 		expect(response.headers.get("Access-Control-Allow-Origin")).toBe(ALLOWED);
@@ -87,7 +88,7 @@ describe("preflight", () => {
 	 * and a named refusal is a much shorter afternoon than a bare CORS failure.
 	 */
 	it("refuses an unlisted origin with 403 and says why", async () => {
-		const response = preflight(request("https://evil.test", "OPTIONS"), fakeEnv());
+		const response = preflight(request("https://evil.test", "OPTIONS"), testEnv());
 
 		expect(response.status).toBe(403);
 		expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
@@ -102,7 +103,7 @@ describe("withCors", () => {
 			headers: { "Content-Type": "application/json" },
 		});
 
-		const wrapped = withCors(original, request(ALLOWED), fakeEnv());
+		const wrapped = withCors(original, request(ALLOWED), testEnv());
 
 		expect(wrapped.status).toBe(200);
 		expect(wrapped.headers.get("Content-Type")).toBe("application/json");
@@ -117,18 +118,18 @@ describe("withCors", () => {
 	it("copes with a response whose headers cannot be mutated", () => {
 		const immutable = Response.redirect("https://helios.example/", 302);
 
-		expect(() => withCors(immutable, request(ALLOWED), fakeEnv())).not.toThrow();
+		expect(() => withCors(immutable, request(ALLOWED), testEnv())).not.toThrow();
 	});
 
 	it("carries a failure status through untouched", () => {
-		const wrapped = withCors(new Response("Not found", { status: 404 }), request(ALLOWED), fakeEnv());
+		const wrapped = withCors(new Response("Not found", { status: 404 }), request(ALLOWED), testEnv());
 
 		expect(wrapped.status).toBe(404);
 		expect(wrapped.headers.get("Access-Control-Allow-Origin")).toBe(ALLOWED);
 	});
 
 	it("leaves a response alone when the origin is not allowed", () => {
-		const wrapped = withCors(new Response("ok"), request("https://evil.test"), fakeEnv());
+		const wrapped = withCors(new Response("ok"), request("https://evil.test"), testEnv());
 
 		expect(wrapped.headers.get("Access-Control-Allow-Origin")).toBeNull();
 		expect(wrapped.headers.get("Vary")).toBe("Origin");
@@ -138,6 +139,6 @@ describe("withCors", () => {
 	it("hands a websocket upgrade back as it is", () => {
 		const upgrade = { status: 101, webSocket: {} } as unknown as Response;
 
-		expect(withCors(upgrade, request(ALLOWED), fakeEnv())).toBe(upgrade);
+		expect(withCors(upgrade, request(ALLOWED), testEnv())).toBe(upgrade);
 	});
 });

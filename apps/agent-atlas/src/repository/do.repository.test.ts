@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AtlasPlacement } from "@aureline/shared-types";
-import { createTestDb, insertRow } from "./test-db";
+import type { RowSeed } from "./do.repository";
+import { asDb, createTestDb, insertRow } from "./test-db";
 import {
 	startRun,
 	completeRun,
@@ -14,7 +15,20 @@ import {
 	getSettledRows,
 	pruneCompletedRuns,
 } from "./do.repository";
-import type { AtlasDb } from "../db/client";
+
+/** A complete, valid seed. Tests override one field at a time rather than
+ *  building a partial object and casting it past the compiler. */
+function seed(overrides: Partial<RowSeed> = {}): RowSeed {
+	return {
+		pipelineId: "p1",
+		designSessionId: "design-1",
+		patternRef: "iris/p.jpg",
+		garmentRef: "https://e.com/s.jpg",
+		placement: PLACEMENT,
+		modelMetadata: {},
+		...overrides,
+	};
+}
 
 const PLACEMENT: AtlasPlacement = {
 	garment_type: "tshirt",
@@ -23,11 +37,6 @@ const PLACEMENT: AtlasPlacement = {
 	pattern_scale: "medium",
 	prompt_version: "atlas-placement-v1",
 };
-
-/** `createTestDb` returns a sqlite-proxy instance; the repository takes the DO
- * client. Both are Drizzle over sqlite-core, which is the whole point of the
- * harness — this cast is what lets one database stand in for both. */
-const asDb = (db: ReturnType<typeof createTestDb>) => db as unknown as AtlasDb;
 
 /** The column names declared inside a `CREATE TABLE atlas_runs (...)`, in
  * order. Works on both the generated migration (backticked) and the harness's
@@ -80,7 +89,7 @@ describe("the test harness matches production", () => {
 describe("startRun / completeRun", () => {
 	it("opens one row as running and settles it", async () => {
 		const db = createTestDb();
-		await startRun(asDb(db), "p1", "design-1", "iris/p.jpg", "https://e.com/s.jpg", PLACEMENT, { model: "m" });
+		await startRun(asDb(db), seed({ modelMetadata: { model: "m" } }));
 
 		let run = await getRun(asDb(db), "p1");
 		expect(run?.status).toBe("running");
@@ -99,7 +108,7 @@ describe("startRun / completeRun", () => {
 
 	it("writes exactly one row per invocation, never two", async () => {
 		const db = createTestDb();
-		await startRun(asDb(db), "p1", "design-1", "iris/p.jpg", "https://e.com/s.jpg", PLACEMENT, {});
+		await startRun(asDb(db), seed());
 		await completeRun(asDb(db), "p1", "atlas/p1.jpg", 0.003, {});
 
 		// The regression guard for somebody reintroducing a second row out of
@@ -109,12 +118,65 @@ describe("startRun / completeRun", () => {
 
 	it("records both refs and the design it belongs to", async () => {
 		const db = createTestDb();
-		await startRun(asDb(db), "p1", "design-42", "iris/x.jpg", "https://e.com/shirt.jpg", PLACEMENT, {});
+		await startRun(asDb(db), seed({ designSessionId: "design-42", patternRef: "iris/x.jpg", garmentRef: "https://e.com/shirt.jpg" }));
 
 		const run = await getRun(asDb(db), "p1");
 		expect(run?.designSessionId).toBe("design-42");
 		expect(run?.patternRef).toBe("iris/x.jpg");
 		expect(run?.garmentRef).toBe("https://e.com/shirt.jpg");
+	});
+});
+
+describe("the four bugs found in agent-iris, as regressions", () => {
+	it("records each seed field in its own column, so a swap would be visible", async () => {
+		const db = createTestDb();
+
+		// Problem 2. These four were adjacent string parameters until they became
+		// one object. Swapping any two used to compile, run, and silently write
+		// the garment URL into pattern_ref. Now a swap is a compile error — and
+		// this asserts the mapping the object form is supposed to guarantee.
+		await startRun(asDb(db), {
+			pipelineId: "swap-check",
+			designSessionId: "design-D",
+			patternRef: "PATTERN",
+			garmentRef: "https://example.com/GARMENT.jpg",
+			placement: PLACEMENT,
+			modelMetadata: {},
+		});
+
+		const run = await getRun(asDb(db), "swap-check");
+		expect(run?.designSessionId).toBe("design-D");
+		expect(run?.patternRef).toBe("PATTERN");
+		expect(run?.garmentRef).toBe("https://example.com/GARMENT.jpg");
+		// The two most confusable: each must be in its own column, not the other's.
+		expect(run?.patternRef).not.toBe(run?.garmentRef);
+	});
+
+	it("throws rather than silently updating nothing when the row is gone", async () => {
+		const db = createTestDb();
+
+		// Problem 4. A blind UPDATE on a missing row succeeds, matches zero rows
+		// and reports success — so a run that already paid for an image would
+		// settle as `completed` with no key and no cost recorded anywhere.
+		await expect(
+			completeRun(asDb(db), "never-opened", "atlas/never-opened.jpg", 0.003, {}),
+		).rejects.toThrow(/no atlas_runs row for pipeline_id never-opened/);
+	});
+
+	it("names the id it could not settle, so the failure is actionable", async () => {
+		const db = createTestDb();
+
+		await expect(completeRun(asDb(db), "abc-123", "atlas/abc-123.jpg", null, {})).rejects.toThrow(/abc-123/);
+	});
+
+	it("lets failRunningRuns match zero rows without throwing", async () => {
+		const db = createTestDb();
+
+		// The deliberate asymmetry with completeRun. This runs inside a catch on
+		// the failure path, where the row may already have settled or may never
+		// have opened. Throwing here would replace the real failure with a
+		// symptom of it.
+		await expect(failRunningRuns(asDb(db), "never-existed", 0.003)).resolves.toBeUndefined();
 	});
 });
 
@@ -128,7 +190,7 @@ describe("getRun", () => {
 describe("insertFailedRun", () => {
 	it("leaves a failed row behind when opening the row is what failed", async () => {
 		const db = createTestDb();
-		await insertFailedRun(asDb(db), "p1", "design-1", "iris/p.jpg", "https://e.com/s.jpg", PLACEMENT, {});
+		await insertFailedRun(asDb(db), seed());
 
 		const run = await getRun(asDb(db), "p1");
 		// Atlas has one row per invocation, so without this rescue a failed
@@ -142,7 +204,7 @@ describe("insertFailedRun", () => {
 describe("failRunningRuns", () => {
 	it("writes the already-spent cost through onto the failed row", async () => {
 		const db = createTestDb();
-		await startRun(asDb(db), "p1", "design-1", "iris/p.jpg", "https://e.com/s.jpg", PLACEMENT, {});
+		await startRun(asDb(db), seed());
 
 		// The call billed, then the R2 save broke. The money left the account and
 		// has to be recorded, or a spent call reads as having cost nothing.

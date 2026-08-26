@@ -10,6 +10,7 @@ import { exportRuns } from "../repository/d1.repository";
 import {
 	startRun,
 	completeRun,
+	type RowSeed,
 	insertFailedRun,
 	failRunningRuns,
 	getSettledRows,
@@ -87,6 +88,16 @@ export async function exportAndPrune(
 }
 
 /**
+ * What one placement run is working on.
+ *
+ * **One object, not four adjacent strings.** Nothing in the type system tells
+ * one string parameter from another at a call site, so a swapped pair here
+ * would compile, run, and write the garment URL into `pattern_ref`. Field order
+ * matches `RowSeed` and the schema, so a call site reads rather than counts.
+ */
+export type PlacementRun = Omit<RowSeed, "modelMetadata">;
+
+/**
  * Everything from the row opening to the row settling: the row, the placement
  * call, the R2 save, and the row update.
  *
@@ -114,13 +125,10 @@ export async function runImageStage(
 	db: AtlasDb,
 	env: Env,
 	config: AtlasConfig,
-	pipeline_id: string,
-	designSessionId: string,
-	patternRef: string,
-	garmentRef: string,
-	placement: AtlasPlacement,
+	run: PlacementRun,
 	metadataExtras: Record<string, unknown> = {},
 ): Promise<ImageStageOutcome> {
+	const { pipelineId, designSessionId, patternRef, garmentRef, placement } = run;
 	// Assigned the moment the call returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
@@ -134,15 +142,15 @@ export async function runImageStage(
 	let rowOpened = false;
 
 	try {
-		await startRun(db, pipeline_id, designSessionId, patternRef, garmentRef, placement, modelMetadata);
+		await startRun(db, { ...run, modelMetadata });
 		rowOpened = true;
 
-		const output = await placePattern(patternRef, garmentRef, placement, config, env, pipeline_id);
+		const output = await placePattern(patternRef, garmentRef, placement, config, env, pipelineId);
 		costUsd = output.cost_usd;
 
-		const imageR2Key = await saveGarmentImage(env.PATTERNS, pipeline_id, output.image, output.contentType);
+		const imageR2Key = await saveGarmentImage(env.PATTERNS, pipelineId, output.image, output.contentType);
 
-		await completeRun(db, pipeline_id, imageR2Key, costUsd, modelMetadata);
+		await completeRun(db, pipelineId, imageR2Key, costUsd, modelMetadata);
 
 		return { ok: true, imageR2Key, width: output.width, height: output.height, costUsd };
 	} catch (cause) {
@@ -152,11 +160,9 @@ export async function runImageStage(
 			// Nothing can be recorded then, and `cause` is still the failure worth
 			// reporting.
 			try {
-				await insertFailedRun(
-					db, pipeline_id, designSessionId, patternRef, garmentRef, placement, modelMetadata,
-				);
+				await insertFailedRun(db, { ...run, modelMetadata });
 			} catch (rescueCause) {
-				console.error(`could not record the unopened row for ${pipeline_id}:`, describeError(rescueCause));
+				console.error(`could not record the unopened row for ${pipelineId}:`, describeError(rescueCause));
 			}
 		}
 
@@ -219,10 +225,13 @@ export async function runPipeline(
 		});
 
 		stage = "image";
-		const outcome = await runImageStage(
-			db, env, config, pipeline_id,
-			req.design_session_id, req.pattern_ref, req.garment_ref, placement,
-		);
+		const outcome = await runImageStage(db, env, config, {
+			pipelineId: pipeline_id,
+			designSessionId: req.design_session_id,
+			patternRef: req.pattern_ref,
+			garmentRef: req.garment_ref,
+			placement,
+		});
 
 		// Recorded before anything can throw, so the catch below reports what the
 		// image actually cost rather than null.

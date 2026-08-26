@@ -3,7 +3,8 @@ import { AtlasResultSchema, type AtlasPlacement, type AtlasRequest } from "@aure
 import { runPipeline, runImageStage } from "./pipeline";
 import { placePattern } from "./placer";
 import { startRun, listRuns, getRun } from "../repository/do.repository";
-import { createTestDb } from "../repository/test-db";
+import { asDb, createTestDb } from "../repository/test-db";
+import { fakeEnv } from "../test-env";
 import type { AtlasDb } from "../db/client";
 import { resolveConfig } from "../config";
 
@@ -50,14 +51,14 @@ const REQ: AtlasRequest = {
  * The D1 binding throws by default so `exportAndPrune`'s try/catch swallows it,
  * matching "a failed export does not fail the run".
  */
-function fakeEnv(overrides: { patternsPut?: "ok" | "fail" } = {}) {
-	return {
+const aiRun = vi.fn(async () => {
+	throw new Error("the AI binding must never be reached in atlas-06");
+});
+
+function testEnv(overrides: { patternsPut?: "ok" | "fail" } = {}) {
+	return fakeEnv({
 		...VARS,
-		AI: {
-			run: vi.fn(async () => {
-				throw new Error("the AI binding must never be reached in atlas-06");
-			}),
-		},
+		AI: { run: aiRun },
 		CONFIG: { get: vi.fn(async (keys: string[]) => new Map(keys.map((k) => [k, null]))) },
 		PATTERNS: {
 			put: vi.fn(async () => {
@@ -71,10 +72,8 @@ function fakeEnv(overrides: { patternsPut?: "ok" | "fail" } = {}) {
 				throw new Error("D1 unavailable in tests");
 			}),
 		},
-	} as unknown as Env;
+	});
 }
-
-const asDb = (db: ReturnType<typeof createTestDb>) => db as unknown as AtlasDb;
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -87,7 +86,7 @@ describe("runPipeline, the happy path", () => {
 	it("returns a completed AtlasResult that validates against the schema", async () => {
 		const db = createTestDb();
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		expect(() => AtlasResultSchema.parse(result)).not.toThrow();
 		expect(result.status).toBe("completed");
@@ -103,7 +102,7 @@ describe("runPipeline, the happy path", () => {
 	it("writes exactly ONE row per invocation", async () => {
 		const db = createTestDb();
 
-		await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		// The guard against somebody reintroducing a second row out of symmetry
 		// with Iris. ADR-ATLAS-0001.
@@ -113,7 +112,7 @@ describe("runPipeline, the happy path", () => {
 	it("records the placement, both refs and the upstream run on the row", async () => {
 		const db = createTestDb();
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 		const run = await getRun(asDb(db), result.pipeline_id);
 
 		expect(run?.status).toBe("completed");
@@ -133,8 +132,8 @@ describe("runPipeline, the happy path", () => {
 	it("mints a fresh pipeline_id per invocation, not one per Durable Object", async () => {
 		const db = createTestDb();
 
-		const a = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
-		const b = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const a = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
+		const b = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		// One DO accumulates many invocations (ADR-0005).
 		expect(a.pipeline_id).not.toBe(b.pipeline_id);
@@ -143,11 +142,9 @@ describe("runPipeline, the happy path", () => {
 
 	it("never reaches the AI binding", async () => {
 		const db = createTestDb();
-		const env = fakeEnv();
+		await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
-		await runPipeline(asDb(db), REQ, env, ORIGIN);
-
-		expect((env.AI as unknown as { run: ReturnType<typeof vi.fn> }).run).not.toHaveBeenCalled();
+		expect(aiRun).not.toHaveBeenCalled();
 	});
 });
 
@@ -158,7 +155,7 @@ describe("runPipeline refuses an impossible request before anything bills", () =
 		const result = await runPipeline(
 			asDb(db),
 			{ ...REQ, garment_type: "scarf", regions: ["sleeve"] },
-			fakeEnv(),
+			testEnv(),
 			ORIGIN,
 		);
 
@@ -170,7 +167,7 @@ describe("runPipeline refuses an impossible request before anything bills", () =
 	it("never opens a row for a refused request", async () => {
 		const db = createTestDb();
 
-		await runPipeline(asDb(db), { ...REQ, garment_type: "scarf", regions: ["sleeve"] }, fakeEnv(), ORIGIN);
+		await runPipeline(asDb(db), { ...REQ, garment_type: "scarf", regions: ["sleeve"] }, testEnv(), ORIGIN);
 
 		// Nothing ran, so nothing is left behind — and in particular nothing is
 		// left `running`.
@@ -181,7 +178,7 @@ describe("runPipeline refuses an impossible request before anything bills", () =
 	it("does not reach the image stage", async () => {
 		const db = createTestDb();
 
-		await runPipeline(asDb(db), { ...REQ, garment_type: "dress", regions: ["sleeve"] }, fakeEnv(), ORIGIN);
+		await runPipeline(asDb(db), { ...REQ, garment_type: "dress", regions: ["sleeve"] }, testEnv(), ORIGIN);
 
 		expect(vi.mocked(placePattern)).not.toHaveBeenCalled();
 	});
@@ -192,7 +189,7 @@ describe("runPipeline on failure", () => {
 		const db = createTestDb();
 		vi.mocked(placePattern).mockRejectedValueOnce(new Error("model exploded"));
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.error).toBe("image: model exploded");
@@ -204,7 +201,7 @@ describe("runPipeline on failure", () => {
 		const db = createTestDb();
 		vi.mocked(placePattern).mockRejectedValueOnce(new Error("model exploded"));
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		expect(result.placement).not.toBeNull();
 		expect(result.placement?.prompt_version).toBe("atlas-placement-v1");
@@ -214,7 +211,7 @@ describe("runPipeline on failure", () => {
 		const db = createTestDb();
 		vi.mocked(placePattern).mockRejectedValueOnce(new Error("model exploded"));
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		const rows = await listRuns(asDb(db));
 		expect(rows).toHaveLength(1);
@@ -235,7 +232,7 @@ describe("runPipeline on failure", () => {
 			cost_usd: 0.0031,
 		});
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv({ patternsPut: "fail" }), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv({ patternsPut: "fail" }), ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.cost_usd).toBe(0.0031);
@@ -246,7 +243,7 @@ describe("runPipeline on failure", () => {
 		const db = createTestDb();
 		vi.mocked(startRun).mockRejectedValueOnce(new Error("DO storage unavailable"));
 
-		const result = await runPipeline(asDb(db), REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(asDb(db), REQ, testEnv(), ORIGIN);
 
 		expect(result.status).toBe("failed");
 		// Atlas has one row per invocation, so without the rescue insert a failed
@@ -258,6 +255,10 @@ describe("runPipeline on failure", () => {
 
 	it("returns a settled result rather than throwing when storage is entirely unavailable", async () => {
 		const db = createTestDb();
+		// A database whose every method throws, to prove runPipeline still settles.
+		// Drizzle's client is a builder chain that cannot be produced in a broken
+		// state by any legitimate construction, so this is the untyped boundary —
+		// and the four methods below are every one the pipeline actually calls.
 		const broken = {
 			insert: () => { throw new Error("storage gone"); },
 			update: () => { throw new Error("storage gone"); },
@@ -267,7 +268,7 @@ describe("runPipeline on failure", () => {
 
 		// The HTTP layer only ever deals with settled outcomes, so this must not
 		// escape as an opaque 500.
-		const result = await runPipeline(broken, REQ, fakeEnv(), ORIGIN);
+		const result = await runPipeline(broken, REQ, testEnv(), ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(() => AtlasResultSchema.parse(result)).not.toThrow();
@@ -277,7 +278,7 @@ describe("runPipeline on failure", () => {
 describe("runImageStage is separately re-enterable, for atlas-08's resume", () => {
 	it("can be called on its own with a placement read back from storage", async () => {
 		const db = createTestDb();
-		const env = fakeEnv();
+		const env = testEnv();
 		const config = await resolveConfig(env);
 		const placement: AtlasPlacement = {
 			garment_type: "tshirt",
@@ -288,8 +289,16 @@ describe("runImageStage is separately re-enterable, for atlas-08's resume", () =
 		};
 
 		const outcome = await runImageStage(
-			asDb(db), env, config, "resumed-1", "design-abc",
-			"iris/iris-abc.jpg", "https://example.com/shirt.jpg", placement,
+			asDb(db),
+			env,
+			config,
+			{
+				pipelineId: "resumed-1",
+				designSessionId: "design-abc",
+				patternRef: "iris/iris-abc.jpg",
+				garmentRef: "https://example.com/shirt.jpg",
+				placement,
+			},
 			// The resume markers, which have to land on this row because it is the
 			// only row there is.
 			{ root: "orig", resumed_from: "orig", attempt: 1 },
@@ -302,15 +311,23 @@ describe("runImageStage is separately re-enterable, for atlas-08's resume", () =
 
 	it("returns an outcome rather than throwing, so the caller decides", async () => {
 		const db = createTestDb();
-		const env = fakeEnv();
+		const env = testEnv();
 		const config = await resolveConfig(env);
 		vi.mocked(placePattern).mockRejectedValueOnce(new Error("nope"));
 
-		const outcome = await runImageStage(
-			asDb(db), env, config, "p1", "design-abc",
-			"iris/p.jpg", "https://example.com/s.jpg",
-			{ garment_type: "tshirt", regions: ["back"], coverage: "allover", pattern_scale: "medium", prompt_version: "v1" },
-		);
+		const outcome = await runImageStage(asDb(db), env, config, {
+			pipelineId: "p1",
+			designSessionId: "design-abc",
+			patternRef: "iris/p.jpg",
+			garmentRef: "https://example.com/s.jpg",
+			placement: {
+				garment_type: "tshirt",
+				regions: ["back"],
+				coverage: "allover",
+				pattern_scale: "medium",
+				prompt_version: "v1",
+			},
+		});
 
 		expect(outcome.ok).toBe(false);
 	});
