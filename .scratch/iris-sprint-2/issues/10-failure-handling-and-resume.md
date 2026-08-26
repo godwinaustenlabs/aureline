@@ -20,7 +20,7 @@
 - `apps/agent-helios/src/services/resume.ts` (198 lines). Six refusals, a spend cap counted over the root brief, a resumed text row, and then a re-entry into the image stage. It is its own file because it is a second entry point into the pipeline rather than a step within it.
 - `.scratch/helios-sprint-1/issues/08-failure-handling.md`, particularly decisions 4, 5, 6 and 15. Those four are the contract Iris is keeping.
 - `docs/helios-runs-conventions.md`, for what the resume markers mean on a row.
-- `docs/Project Wide/Considerations for Sprint 2.md`. Two open notes in there belong to this ticket and are listed in the work below.
+- `.scratch/shared-sprint-2/sprint-2-3-conventions.md`, the retry paragraph. Two open notes in there belong to this ticket and are listed in the work below. (This originally cited `docs/Project Wide/Considerations for Sprint 2.md`, which does not exist in any branch — that directory is empty and untracked. The two notes survive verbatim in the conventions file.)
 
 ## Decisions
 
@@ -35,6 +35,17 @@
 9. **Re-validate the stored params before using them.** `planner_params` is a JSON column typed `unknown`. It was valid when written, but the schema may have changed since. Parse it with `IrisParamsSchema` and refuse with a clear message if it no longer fits, rather than sending something malformed to a billed call.
 10. **Resume must not be able to produce a second image for a run that already has one.** That is a paid call producing a duplicate nobody asked for. Refuse it.
 11. **Answer the two open sprint-2 considerations here, in the ADR, rather than leaving them open.** They are: whether to build more complete retry logic for a model returning an unusual or empty response, and whether to use the AI Gateway's own built-in retry instead of our own. Both are retry-policy questions and this is the retry-policy ticket. A decision to not do something is still a decision and still gets written down.
+
+## Recorded during the build
+
+- **shared-04's ADR directories landed in this change**, not separately. `docs/adr/` was still flat and `docs/adr/iris/` did not exist, so the ADR had nowhere to go; writing it flat as `0011` would have recreated exactly the collision with atlas-04 that shared-04 exists to prevent. `docs/adr/{iris,atlas,shared}/` and `docs/adr/README.md` are here, no existing ADR moved, and shared-04's boxes are ticked in its own file.
+- **A ninth refusal, not the seven in the table.** The table's seven, plus a corrupted image row whose `status` is not a value the enum can hold. `undefined` and "present but not the value I expected" are different situations and want different answers (AGENTS.md §7), and collapsing them is half the reason Helios's fall-through exists.
+- **The ADR also settles `root` versus `design_session_id`**, which this ticket does not mention and neither does iris-11. They overlap enough to be confused: `design_session_id` spans engines and is minted upstream, `root` spans the retries of one brief inside Iris. The cap counts `root` and must never count `design_session_id`, because one design session can hold several unrelated briefs.
+- **`exportAndPrune` is called on both of resume's exits and is still a no-op.** iris-11 fills the body; the call sites are in place so that ticket changes a function body rather than hunting for two new call sites.
+- **Verified live against `wrangler dev`.** All nine refusals return 409 with their own distinct message, and the cap refusal was checked against a row count taken before and after: 20 rows both times, so a refusal writes nothing. One real resume then returned 200 with a fresh `pipeline_id`, a genuine 1024x1024 crimson-and-gold recolor at 967 KB, `root`/`resumed_from`/`attempt` on **both** rows, `design_session_id` inherited, the resumed text row `completed` at a null cost carrying the parent's model and `planner_skipped`, and the original left exactly as it was (`completed` text, `failed` image). `cost_usd` is null, as decision 10 of iris-09 predicts while no gateway id is passed. Ali Amir's review gates are deliberately left unticked: nobody approves their own work.
+- **Five refusals cannot be reached through the public API**, because no route writes a half-run or a corrupted status. They were curled behind a temporary `POST /debug/seed` route that wrote one row verbatim, which was removed before the PR and is in no commit. A reviewer wanting to re-run those five needs to reinstate something equivalent, or read `resume.test.ts`, which covers all nine.
+- **The missing-image-row guard is mutation-tested.** Swapping the explicit `undefined` branch back to Helios's `imageRow?.status` shape makes the missing-row test fail, which is what proves the guard sits before the model call rather than after it. Re-run it that way if the guard is ever edited.
+- **`fakeEnv` gained a `maxResumeAttempts` override**, so the cap tests can set a low limit instead of seeding a long chain of rows first. It overrides the var, not the KV key, so it travels the same fallback path production takes when KV is empty.
 
 ## Agreed shapes, do not invent your own
 
@@ -71,39 +82,39 @@ Markers in `model_metadata`, on both rows of a resumed run:
 
 ### The decision, first, before any code
 
-- [ ] Write the ADR at `docs/adr/iris/0001-...`, cited as `ADR-IRIS-0001`, following shared-04's per-engine directory scheme and the format of the existing ten in `docs/adr/`. If `docs/adr/iris/` does not exist yet, shared-04 has not landed and this box waits on it. It must state, per stage, what retries and what does not, and why, for Iris specifically. Where the answer matches ADR-0009, say so and say why the reasoning transfers, rather than only citing it. (**Maaz Bin Asif**)
-- [ ] In the same ADR, answer the more-complete-retry-logic question from `Considerations for Sprint 2.md`. What happens when a model returns a well-formed but empty or nonsense response? Does that count as a schema failure worth retrying, or a real failure? Decide it. (**Maaz Bin Asif**)
-- [ ] In the same ADR, answer the AI-Gateway-built-in-retry question. If the answer is no, say what our own retry does that the gateway's does not, because otherwise this question returns every sprint. (**Maaz Bin Asif**)
-- [ ] Name one Iris-specific failure Helios does not have: the motif reference is unfetchable. Decide whether that is recoverable (retry the fetch) or not (refuse), and record it. This is the failure most likely to actually happen in practice, because it depends on another engine's storage. (**Maaz Bin Asif**)
+- [x] Write the ADR at `docs/adr/iris/0001-...`, cited as `ADR-IRIS-0001`, following shared-04's per-engine directory scheme and the format of the existing ten in `docs/adr/`. If `docs/adr/iris/` does not exist yet, shared-04 has not landed and this box waits on it. It must state, per stage, what retries and what does not, and why, for Iris specifically. Where the answer matches ADR-0009, say so and say why the reasoning transfers, rather than only citing it. (**Maaz Bin Asif**)
+- [x] In the same ADR, answer the more-complete-retry-logic question from `sprint-2-3-conventions.md`. What happens when a model returns a well-formed but empty or nonsense response? Does that count as a schema failure worth retrying, or a real failure? Decide it. (**Maaz Bin Asif**)
+- [x] In the same ADR, answer the AI-Gateway-built-in-retry question. If the answer is no, say what our own retry does that the gateway's does not, because otherwise this question returns every sprint. (**Maaz Bin Asif**)
+- [x] Name one Iris-specific failure Helios does not have: the motif reference is unfetchable. Decide whether that is recoverable (retry the fetch) or not (refuse), and record it. This is the failure most likely to actually happen in practice, because it depends on another engine's storage. (**Maaz Bin Asif**)
 
 ### The route
 
-- [ ] Write `src/services/resume.ts`, its own file because it is a second entry point into the pipeline rather than a step within it. (**Maaz Bin Asif**)
-- [ ] Implement every refusal in the table above, each with its own message. A single generic "cannot resume" is useless to a caller and worse than no route. (**Maaz Bin Asif**)
-- [ ] Count the cap over `root` using `countResumeAttempts` (decisions 6 and 7). (**Maaz Bin Asif**)
-- [ ] Re-validate the stored params with `IrisParamsSchema.parse` and refuse with `firstIssueMessage` on failure (decision 9). (**Maaz Bin Asif**)
-- [ ] Write the resumed text row with `insertResumedTextRun`, carrying the three markers, and **no planner call**. Its `cost_usd` is null because nothing was spent on it. (**Maaz Bin Asif**)
-- [ ] Call `runImageStage` with the markers as `metadataExtras`, so they land on the image row too. That row is the one carrying `cost_usd` and `image_r2_key`, and therefore the one every cost query reads (ticket 08, decision 15). Markers only on the text row would make the retries invisible to any cost report. (**Maaz Bin Asif**)
-- [ ] Wire `POST /resume` in `agent.ts`: validate with `IrisResumeRequestSchema`, 400 on a malformed body, 409 on a refusal, 200 with the result otherwise. Replace iris-05's not-implemented stub. (**Maaz Bin Asif**)
-- [ ] Confirm `/resume` routes to the DO by the same `scopeKey` rule `/generate` does. A run can only be resumed from the DO that holds it, so both must land in the same place. iris-02 already did this; verify it. (**Maaz Bin Asif**)
-- [ ] Confirm `exportAndPrune` runs on a resumed run's exit paths too, not just `runPipeline`'s. A resumed run's rows are as real as any other's. (**Maaz Bin Asif**)
+- [x] Write `src/services/resume.ts`, its own file because it is a second entry point into the pipeline rather than a step within it. (**Maaz Bin Asif**)
+- [x] Implement every refusal in the table above, each with its own message. A single generic "cannot resume" is useless to a caller and worse than no route. (**Maaz Bin Asif**)
+- [x] Count the cap over `root` using `countResumeAttempts` (decisions 6 and 7). (**Maaz Bin Asif**)
+- [x] Re-validate the stored params with `IrisParamsSchema.parse` and refuse with `firstIssueMessage` on failure (decision 9). (**Maaz Bin Asif**)
+- [x] Write the resumed text row with `insertResumedTextRun`, carrying the three markers, and **no planner call**. Its `cost_usd` is null because nothing was spent on it. (**Maaz Bin Asif**)
+- [x] Call `runImageStage` with the markers as `metadataExtras`, so they land on the image row too. That row is the one carrying `cost_usd` and `image_r2_key`, and therefore the one every cost query reads (ticket 08, decision 15). Markers only on the text row would make the retries invisible to any cost report. (**Maaz Bin Asif**)
+- [x] Wire `POST /resume` in `agent.ts`: validate with `IrisResumeRequestSchema`, 400 on a malformed body, 409 on a refusal, 200 with the result otherwise. Replace iris-05's not-implemented stub. (**Maaz Bin Asif**)
+- [x] Confirm `/resume` routes to the DO by the same `scopeKey` rule `/generate` does. A run can only be resumed from the DO that holds it, so both must land in the same place. iris-02 already did this; verify it. (**Maaz Bin Asif**)
+- [x] Confirm `exportAndPrune` runs on a resumed run's exit paths too, not just `runPipeline`'s. A resumed run's rows are as real as any other's. (**Maaz Bin Asif**)
 
 ### The loop guard — written here before the code exists, not after
 
 Helios's `resume.ts` is where the runaway image loop lives, and this ticket is about to write Iris's equivalent. The three requirements below come from the Aug 20 DB bug meeting and are not optional. Iris does not have the bug yet; the point of this section is that it never gets it.
 
-- [ ] **Branch on a missing image row explicitly.** Helios's guards read `imageRow?.status === "completed"` and `imageRow?.status === "running"`, so a row that is absent — or present but corrupted, with `status` not where it is expected — matches neither and falls straight through into generating another image. Handle `undefined` as its own case, before the status checks, and refuse. `undefined` and "present but not the value I expected" are different situations and want different answers (AGENTS.md §7). (**Maaz Bin Asif**)
-- [ ] **Never pass adjacent positional strings into the image path.** `runImageStage`, `startImageRun`, `insertFailedImageRun` and `insertResumedTextRun` all take a single object now, precisely so a swap is a compile error rather than a corrupted row. Do not reintroduce a positional wrapper around them (AGENTS.md §6). (**Maaz Bin Asif**)
-- [ ] **The spend cap is the backstop, so prove it holds when the data is bad.** The cap over `root` is what bounds the damage if a guard is ever wrong. Test it against a *corrupted* row, not just a well-formed chain. (**Maaz Bin Asif**)
-- [ ] Add a test that a resume whose image row is missing entirely refuses, rather than generating. This is the single most expensive failure available in this codebase. (**Maaz Bin Asif**)
+- [x] **Branch on a missing image row explicitly.** Helios's guards read `imageRow?.status === "completed"` and `imageRow?.status === "running"`, so a row that is absent — or present but corrupted, with `status` not where it is expected — matches neither and falls straight through into generating another image. Handle `undefined` as its own case, before the status checks, and refuse. `undefined` and "present but not the value I expected" are different situations and want different answers (AGENTS.md §7). (**Maaz Bin Asif**)
+- [x] **Never pass adjacent positional strings into the image path.** `runImageStage`, `startImageRun`, `insertFailedImageRun` and `insertResumedTextRun` all take a single object now, precisely so a swap is a compile error rather than a corrupted row. Do not reintroduce a positional wrapper around them (AGENTS.md §6). (**Maaz Bin Asif**)
+- [x] **The spend cap is the backstop, so prove it holds when the data is bad.** The cap over `root` is what bounds the damage if a guard is ever wrong. Test it against a *corrupted* row, not just a well-formed chain. (**Maaz Bin Asif**)
+- [x] Add a test that a resume whose image row is missing entirely refuses, rather than generating. This is the single most expensive failure available in this codebase. (**Maaz Bin Asif**)
 
 ### Tests
 
-- [ ] Write `services/resume.test.ts` with one test per refusal in the table. Seven refusals, seven tests, each asserting the specific message. (**Maaz Bin Asif**)
-- [ ] Test the cap counting over `root` across a **chain**: original, resume, resume-of-resume. Assert the third is refused when the cap is two. A cap that counts `resumed_from` passes a single-level test and fails this one, which is exactly why this test exists. (**Maaz Bin Asif**)
-- [ ] Assert the markers land on **both** rows of a resumed run. (**Maaz Bin Asif**)
-- [ ] Assert a refusal writes **no rows at all** and never touches the fake `AI` binding. A refusal that quietly bills is the worst outcome this ticket can produce. (**Maaz Bin Asif**)
-- [ ] Assert a resume does not call the planner, by using a fake that throws if the text path is reached. (**Maaz Bin Asif**)
+- [x] Write `services/resume.test.ts` with one test per refusal in the table. Seven refusals, seven tests, each asserting the specific message. (**Maaz Bin Asif**)
+- [x] Test the cap counting over `root` across a **chain**: original, resume, resume-of-resume. Assert the third is refused when the cap is two. A cap that counts `resumed_from` passes a single-level test and fails this one, which is exactly why this test exists. (**Maaz Bin Asif**)
+- [x] Assert the markers land on **both** rows of a resumed run. (**Maaz Bin Asif**)
+- [x] Assert a refusal writes **no rows at all** and never touches the fake `AI` binding. A refusal that quietly bills is the worst outcome this ticket can produce. (**Maaz Bin Asif**)
+- [x] Assert a resume does not call the planner, by using a fake that throws if the text path is reached. (**Maaz Bin Asif**)
 
 ### Review gates
 

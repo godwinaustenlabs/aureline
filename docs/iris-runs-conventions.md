@@ -43,7 +43,7 @@ The image row duplicates `planner_params` and `motif_ref` from its text sibling 
 | `failed` | `failed` | the planner or its validation failed. Nothing to resume |
 | `completed` | `running` | in flight, image being made |
 | `completed` | `completed` | success |
-| `completed` | `failed` | the image failed. **This is what `POST /resume` will recover** (iris-10) |
+| `completed` | `failed` | the image failed. **This is the only state `POST /resume` will act on** |
 
 Anything else is a bug worth reporting — in particular a `failed` text row next to a `completed` image row, or any invocation with one row.
 
@@ -61,7 +61,27 @@ Anything else is a bug worth reporting — in particular a `failed` text row nex
 
 **`completed_at`** is set when a row settles, on both success and failure.
 
-**`model_metadata`** is free-form JSON, and is the **only durable home for the image's `width` and `height`** — there is no column for them and deliberately never will be (iris-03 decision 9). It also carries the model actually called, and, once iris-10 lands, a resume's `root`, `resumed_from` and `attempt` markers. `countResumeAttempts` reads `root` out of it, which is how the cap on spend per concept is enforced.
+**`model_metadata`** is free-form JSON, and is the **only durable home for the image's `width` and `height`** — there is no column for them and deliberately never will be (iris-03 decision 9). It also carries the model actually called and, on a resumed run, the `root`, `resumed_from` and `attempt` markers described below. `countResumeAttempts` reads `root` out of it, which is how the cap on spend per concept is enforced.
+
+A text row carries `{ model, usage, prompt_version }`. A resumed text row carries `{ model, root, resumed_from, attempt, planner_skipped: true }` instead, with `model` copied from the parent, because no planner ran for this row and naming the currently configured one would credit a model that was never called. An image row carries `{ model, prompt_version }` plus the three dimension pairs once it settles; a resumed image row adds the same three markers.
+
+## What a resume is
+
+A resume is a **new invocation**, never a rewrite of the old one. It gets a fresh `pipeline_id` and its own two rows, and it inherits the parent's `design_session_id` unchanged, because it is still an attempt at the same design. The original failed run is left exactly as it was: that failure record is the point.
+
+The resumed run's text row is inserted already `completed`, with the copied params and **`cost_usd: null`**. Nothing was re-planned, and a phantom planner cost would corrupt every cost report built on this table.
+
+**The marker is three fields, and it goes on both rows.** `resumed_from` points at the **immediate parent**, so a chain reads back one step at a time. `attempt` is depth from the original, so the first retry is `attempt: 2` and a retry of that retry is `attempt: 3`. `root` is the original the whole chain descends from, inherited unchanged however deep or wide it goes. An original run carries none of the three, which is what makes it an original.
+
+**Both rows, not just the text row.** The image row is the one carrying `cost_usd` and `image_r2_key`, so it is the row every cost query reads. Mark only the text row and a query grouped on image rows cannot tell a retry from an original, which is the entire question the markers answer. This is why `runImageStage` takes `metadataExtras`.
+
+**Use `root`, not `attempt`, to answer anything about a brief.** Retries form a tree rather than a line: one failed run can be resumed more than once, so two retries of it are siblings that both read `attempt: 2`. Depth is not a count. Everything about "how many attempts has this brief had and what did they cost" is a filter on `root`, plus the original itself, which carries no `root` and is found by its own `pipeline_id`.
+
+**`root` is not `design_session_id`, and the cap counts `root`.** `design_session_id` spans engines and is minted upstream; `root` spans the retries of one brief inside Iris and is minted here. One design session can hold several unrelated briefs, so capping on `design_session_id` would refuse a brief that has never been retried because a different one in the same session was. `ADR-IRIS-0001` has the full reasoning.
+
+**Retries are capped.** `max_resume_attempts` in KV, default 3, counted over image rows sharing a `root`. Originals carry no `root` and so do not count, which means 3 is an original plus three retries. A resume past the limit is a 409 and spends nothing. The count is over what the Durable Object still holds, which is accurate where it matters: failed runs are never pruned, and a successful resume ends the chain anyway because the guard refuses a run that already has an image.
+
+The markers live in `model_metadata` rather than in columns of their own. Promoting them to real `root` / `resumed_from` / `attempt` columns is a legitimate upgrade path and costs a migration on both schemas, plus a recount of `MAX_ROWS_PER_INSERT`.
 
 ## Things that will surprise you
 
