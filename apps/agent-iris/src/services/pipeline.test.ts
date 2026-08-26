@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IrisRequest } from "@aureline/shared-types";
 import { runPipeline, runImageStage } from "./pipeline";
+import { getD1Db } from "../db/client";
 import { resolveConfig } from "../config";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
@@ -123,6 +124,23 @@ describe("runPipeline", () => {
 		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
 		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
 		expect(textMeta).toHaveProperty("usage");
+	});
+
+	it("leaves both rows in D1 on the way out, design_session_id and all", async () => {
+		const { env, d1 } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		// The export runs inside `exportAndPrune`, which swallows everything it
+		// catches. Until `test-env.ts` backed `DB` with a database that really
+		// writes, this assertion could not exist and a broken export looked
+		// exactly like a working one.
+		const exported = await getD1Db(d1).select().from(irisRuns).where(eq(irisRuns.pipelineId, result.pipeline_id));
+		expect(exported).toHaveLength(2);
+		expect(exported.map((row) => row.modality).sort()).toEqual(["image", "text"]);
+		// The column the eventual cross-engine consolidation depends on. A null
+		// here means the chain from Helios through Iris is broken.
+		expect(exported.every((row) => row.designSessionId === REQ.design_session_id)).toBe(true);
 	});
 
 	it("records what the planner call cost on the text row", async () => {

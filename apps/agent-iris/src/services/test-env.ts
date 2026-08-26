@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { sampleParamsFull } from "../fixtures/sample-params";
 import { SAMPLE_COLORED_JPG_BASE64 } from "../fixtures/sample-colored";
+import { createFailingD1, createTestD1 } from "../repository/test-db";
 
 /**
  * The part of `R2ObjectBody` that `readMotif` reads. Declared, not inferred, so
@@ -45,6 +46,15 @@ type FakeR2Object = { arrayBuffer: () => Promise<ArrayBuffer>; httpMetadata?: { 
  * there would mean a third cast in an app whose count is stated two paragraphs
  * up.
  *
+ * `DB` is a **real** in-memory D1 (`createTestD1`), not an empty object. It used
+ * to be `{}`, which worked only while `exportAndPrune` had a no-op body: the
+ * moment it had a real one, every pipeline and resume test reached
+ * `getD1Db(env.DB)`, `{}.prepare` threw, and `exportAndPrune`'s catch swallowed
+ * it. The suite stayed green while nothing was ever exported. A fake that
+ * cannot write turns an export failure into a passing test, so this one writes.
+ * `throwingD1` is the deliberate opposite, for the one test that proves the
+ * swallow is still there.
+ *
  * `maxResumeAttempts` is overridable for the same class of reason: `resume.ts`
  * is the one service whose behaviour turns on it, and its cap tests need a
  * value low enough to hit without seeding a long chain of rows first. It is the
@@ -61,6 +71,7 @@ export function fakeEnv(
 		aiGatewayLogId?: string | null;
 		getLog?: ReturnType<typeof vi.fn>;
 		maxResumeAttempts?: string;
+		throwingD1?: boolean;
 	} = {},
 ) {
 	// All three parameters are declared, and the return is `unknown`, because
@@ -96,13 +107,15 @@ export function fakeEnv(
 	const getLog = overrides.getLog ?? vi.fn();
 	const gateway = vi.fn().mockReturnValue({ getLog });
 
+	const d1 = overrides.throwingD1 ? createFailingD1() : createTestD1();
+
 	const env = {
 		AI: { run, gateway, aiGatewayLogId: overrides.aiGatewayLogId ?? "" },
 		AI_GATEWAY_ID: "",
 		// Empty KV → every value resolves from the vars below.
 		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
 		PATTERNS: { put: patternsPut, get: patternsGet },
-		DB: {},
+		DB: d1,
 		PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
 		IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 		MAX_RETRIES: "2",
@@ -110,7 +123,9 @@ export function fakeEnv(
 		MAX_RESUME_ATTEMPTS: overrides.maxResumeAttempts ?? "3",
 	} as unknown as Env;
 
-	return { env, run, patternsPut, patternsGet, getLog };
+	// `d1` comes back so a suite can read what the export actually wrote, which
+	// is the only way an assertion can tell an export from a swallowed failure.
+	return { env, run, patternsPut, patternsGet, getLog, d1 };
 }
 
 /** The sample JPEG as bytes. The same `atob` decode the services use. */
