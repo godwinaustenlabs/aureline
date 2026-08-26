@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Helios Playground</title>
+		<meta
+			name="description"
+			content="Internal debug console for the Helios pattern engine. Every generate spends real money."
+		/>
+		<meta name="color-scheme" content="dark" />
+
+		<!--
+			Two faces, both chosen for how long people stare at this page rather than
+			for character.
+
+			**Literata** carries every sentence. It was engineered for extended
+			screen reading — large x-height, sturdy serifs that hold their shape at
+			small sizes — and this console is mostly prose: warnings, reasons, and
+			five paragraphs explaining what the engine does not record.
+
+			**JetBrains Mono** carries every figure. It was drawn specifically to
+			reduce eye strain over long reading sessions, and its tall x-height makes
+			a UUID legible at 13px.
+
+			Loaded with `display=swap` behind a full fallback stack, so a machine with
+			no network gets a readable console rather than a broken one.
+		-->
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600;7..72,700&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/src/main.tsx"></script>
+	</body>
+</html>

@@ -248,27 +248,40 @@ Two behaviours worth knowing:
 
 ### Frontend
 
-- [ ] Branch `feature/09-frontend` cut from `dev` — **Maaz Ahmad**
-- [ ] `apps/frontend` scaffolded in the workspace, depending on `@aureline/shared-types`, deploying as a worker named `frontend` — **Maaz Ahmad**
-- [ ] Input region: concept, session id, reference image, base URL — **Maaz Ahmad**
-- [ ] Session id: free text, a randomiser, and a picker of ids from `localStorage`, with switching one reloading the history from that DO — **Maaz Ahmad**
-- [ ] Concept validated with `HeliosRequestSchema` before submitting — **Maaz Ahmad**
-- [ ] `POST /generate` wired, with the spend confirm, the in-flight disable and the running tally — **Maaz Ahmad**
-- [ ] **`status` drives success or failure, not the HTTP code.** The one that catches the trap at the top — **Maaz Ahmad**
-- [ ] Image output plus always-visible raw JSON — **Maaz Ahmad**
-- [ ] Scratchpad built from `GET /runs`, including the real total cost across both rows — **Maaz Ahmad**
-- [ ] Scratchpad shows the four "not captured" rows with their reasons — **Maaz Ahmad**
-- [ ] Run history table from `GET /runs` — **Maaz Ahmad**
-- [ ] Resume wired from the history table, with its own confirm — **Maaz Ahmad**
-- [ ] A 409 renders as a refusal showing the backend's reason verbatim, not as an error and not as a failed run — **Maaz Ahmad**
-- [ ] The reference image is discarded and carries its label — **Ali Amir** 
-- [ ] Raw `HeliosResult` and the image both render — **Ali Amir** 
+- [x] Branch `feature/09-frontend` cut from `dev` — **Maaz Ahmad**
+- [x] `apps/frontend` scaffolded in the workspace, depending on `@aureline/shared-types`, deploying as a worker named `frontend` — **Maaz Ahmad**
+- [x] Input region: concept, session id, reference image, base URL — `components/InputPanel.tsx` — **Maaz Ahmad**
+- [x] Session id: free text, a randomiser, and a picker of ids from `localStorage`, with switching one reloading the history from that DO — `state/sessions.ts` — **Maaz Ahmad**
+- [x] Concept validated with `HeliosRequestSchema` before submitting — `domain/validate.ts` — **Maaz Ahmad**
+- [x] `POST /generate` wired, with the spend confirm, the in-flight disable and the running tally — **Maaz Ahmad**
+- [x] **`status` drives success or failure, not the HTTP code.** The one that catches the trap at the top — settled once in `domain/outcome.ts` as a three-way `CallOutcome`; nothing downstream ever sees a `Response` — **Maaz Ahmad**
+- [x] Image output plus always-visible raw JSON — `components/ImageOutput.tsx` — **Maaz Ahmad**
+- [x] Scratchpad built from `GET /runs`, including the real total cost across both rows — `domain/scratchpad.ts` — **Maaz Ahmad**
+- [x] Scratchpad shows the "not captured" rows with their reasons — all five from the table above, `domain/notCaptured.ts` — **Maaz Ahmad**
+- [x] Run history table from `GET /runs` — `components/RunHistory.tsx` — **Maaz Ahmad**
+- [x] Resume wired from the history table, with its own confirm — **Maaz Ahmad**
+- [x] A 409 renders as a refusal showing the backend's reason verbatim, not as an error and not as a failed run — **Maaz Ahmad**
+- [x] The reference image is discarded and carries its label — **Ali Amir** — *implemented on the frontend branch rather than by Ali. The file is held inside `InputPanel` and never lifted into app state, so it has nowhere to be sent from; the label is permanent, not conditional on a file being picked.*
+- [x] Raw `HeliosResult` and the image both render — **Ali Amir** — *implemented on the frontend branch rather than by Ali. The raw body is kept as the string from `response.text()` and rendered unmodified; `image_url` is used as-is rather than rebuilt. Both covered by `components/ImageOutput.test.tsx`.*
 
 ### Review gates
 
+**Left open deliberately. Everything below has been exercised at least partly, and the evidence is recorded here so a reviewer can check rather than repeat — but no gate is ticked by the person who wrote the code.**
+
 - [ ] One real `POST /generate` through the page, about $0.0029, and the scratchpad's numbers checked against the stored rows rather than assumed — **TBD**
+  - **Partly done.** Session `test-plain-cinder-b210`. The generate itself **failed** — `c6e43fb4-cd45-4b2e-a721-6ec5a011ef73`, $0.001274, killed at the image stage by a production KV bug (see below). A later resume produced a real image, so the happy path is proven, but **no successful `POST /generate` has completed through the page**. That is what is still owed.
+  - The cost arithmetic **was** checked against `GET /runs` rather than assumed: planner $0.001274, image null, real total $0.001274 on the failed run; planner null, image $0.0019008, real total $0.0019008 on the resume. The response's `cost_usd` matched the image row alone in both.
+
 - [ ] One forced failure and one resume through the page, showing a failed run renders as failed and a second resume renders the 409 reason — **TBD**
+  - **Failure: done.** `c6e43fb4…` rendered as `failed` on an HTTP 200, with non-null `params`, a `completed` text row beside a `failed` image row, and a Resume offered. The trap at the top of this ticket is caught.
+  - **Resume: done, twice.** `849778fa…` and `0714644d…`, both new `p_invoc_id`s with `root`/`resumed_from` pointing at the original, both `attempt 2` (siblings, not a chain), original left untouched.
+  - **409: not seen on screen.** No refusal has been rendered live. It is covered by tests at both the classifier and the render level (`domain/outcome.test.ts`, `components/ImageOutput.test.tsx`), but that is not the same as watching it. The reachable route is the resume cap: 2 of 3 attempts are used on `c6e43fb4…`, so one more resume (~$0.0019) makes the next one a free refusal.
+
 - [ ] Nobody ticks a gate on their own work. Tickets 03 and 07 both had gates ticked by their implementer and both got unticked at review — **both**
+
+### Found while testing, not this ticket's work
+
+**Production image generation was broken** and every `POST /generate` failed with `5006: Additional or unevaluated properties '/width, /height' at '/' not allowed`. The `image_model` key in the `HELIOS_CONFIG` KV namespace carried `width` and `height`, which `@cf/black-forest-labs/flux-1-schnell` does not accept, and `imageGenerator.ts:68-69` forwards whatever config defines. Patched in KV; **the code guard is still missing.** `resolveSteps` clamps `steps` for exactly this reason and the dimensions have no equivalent, so the next dashboard edit re-breaks it. Belongs to `agent-helios`, ticket 06 territory.
 
 ## Verification without burning budget
 
