@@ -8,9 +8,11 @@
 
 **Blocked by:** iris-02 (the D1 database and its migrations directory), iris-03 (the schema and `getSettledRows`), and **iris-05**, which creates `services/pipeline.ts` and leaves the no-op `exportAndPrune` body this ticket fills in. That file does not exist before iris-05 lands, so the ticket cannot start until then.
 
-**Status:** blocked, waiting on iris-05.
+**Status:** done, pending review. iris-05 landed long ago and left the no-op `exportAndPrune` body this ticket fills in, so the old `blocked, waiting on iris-05` was stale.
 
-**Owner:** Arham Zahid. **Reviewer:** Hashir Rauf, with the D1 migration apply reviewed by Saad Naik.
+**Owner:** Maaz Bin Asif. **Reviewer:** Hashir Rauf and Arham Zahid, with the D1 migration apply reviewed by Saad Naik.
+
+Owner changed from Arham Zahid to match who actually built it, the same correction iris-09 needed. Arham Zahid moves to the review side rather than off the ticket.
 
 **Duration:** 1 day. **Scheduled:** Mon Aug 24 to Mon Aug 24.
 
@@ -20,7 +22,7 @@
 - `apps/agent-helios/src/repository/d1.repository.ts` (38 lines). Two functions and one constant, and the constant's comment explains the arithmetic you have to redo for Iris.
 - `apps/agent-helios/src/services/pipeline.ts:71-98`, `exportAndPrune`. Note that it is called on **both** the success and the failure exits of `runPipeline`.
 - `apps/agent-helios/src/repository/do.repository.test.ts` (233 lines), for how the pruning boundaries and export idempotency are tested.
-- `docs/sprint-2-3-conventions.md`, the paragraph on why Iris has its own D1 database and the joint consolidation ticket planned for the end of the sprint.
+- `.scratch/shared-sprint-2/sprint-2-3-conventions.md`, the paragraph on why Iris has its own D1 database and the joint consolidation ticket planned for the end of the sprint.
 
 ## Decisions
 
@@ -34,7 +36,7 @@
 6. **`exportAndPrune` runs on every exit path**, success and failure, in `runPipeline` and in `resumeRun`. A failed run's rows need exporting just as much as a successful one's.
 7. **The retention limit comes from `config.retentionLimit`.** Not `env.RETENTION_LIMIT`, and not a hardcoded 5. In Helios's sprint this exact box was unticked at review, so it is called out here.
 8. **An export failure must not fail the run.** The run already happened and the money is already spent. Log it and carry on. The rows stay in the DO and the next invocation's export picks them up, because export is idempotent.
-9. **Iris's D1 database is its own, not Helios's.** Consolidating the three engines' databases into one is a separate joint ticket at the end of the sprint, after both squads' tables are stable. The reasoning is in `docs/sprint-2-3-conventions.md`.
+9. **Iris's D1 database is its own, not Helios's.** Consolidating the three engines' databases into one is a separate joint ticket at the end of the sprint, after both squads' tables are stable. The reasoning is in `.scratch/shared-sprint-2/sprint-2-3-conventions.md`.
 10. **`design_session_id` is what makes the eventual consolidation worth doing.** It travels with every exported row, so a full-pipeline view is already possible today by stitching three queries together, and becomes a real join once the databases are merged.
 
 ## Agreed shapes, do not invent your own
@@ -69,16 +71,16 @@ export async function exportAndPrune(
 
 ## Work
 
-- [ ] Write `src/repository/d1.repository.ts` with `exportRuns` and `readRun`. Reproduce the parameter-cap comment with **Iris's** arithmetic, thirteen columns and seven rows, not Helios's. (**Arham Zahid**)
-- [ ] Fill in `exportAndPrune`'s body in `services/pipeline.ts`. iris-05 left the call sites in place with a no-op body; replace the body only. (**Arham Zahid**)
-- [ ] `exportAndPrune` calls `getSettledRows`, then `exportRuns`, then `pruneCompletedRuns`, in that order, with the export awaited to completion before the prune starts (decision 1). (**Arham Zahid**)
-- [ ] Wrap the whole thing so a failure logs and returns rather than throwing (decision 8). It is called from inside `runPipeline`'s try and from its catch, and a throw from the catch would escape the function. (**Arham Zahid**)
-- [ ] Pass `config.retentionLimit` through from the caller. Do not read `env` inside the repository or the service (decision 7). (**Arham Zahid**)
-- [ ] Confirm `exportAndPrune` is called on `runPipeline`'s success exit, on its failure exit, and on `resumeRun`'s exits (decision 6). Grep for the call sites and count them. (**Arham Zahid**)
-- [ ] Make sure `readRun` has a caller. In Helios's sprint this function shipped with no callers and no tests and was unticked at review. Either wire it into a debug read or cover it in a test that proves a round trip, and say which you did. (**Arham Zahid**)
-- [ ] Add tests to `do.repository.test.ts` or a new `d1.repository.test.ts` covering: export idempotency (export the same rows twice, row count unchanged); chunking (export fifteen rows and assert they all land, which exercises the seven-row boundary); a `running` row being excluded; a failed run surviving a prune; and the pruning boundary exactly at the limit and one past it. (**Arham Zahid**)
-- [ ] Write a test asserting the **order**: with a fake that makes the export fail, the prune must not have run. This is the one test that protects ADR-0010's actual rule, as opposed to testing the two halves separately. (**Arham Zahid**)
-- [ ] Apply the D1 migration to `iris-d1` for real. `npx wrangler d1 migrations apply iris-d1 --remote` from inside `apps/agent-iris`. iris-03 generated it and deliberately left it unapplied. (**Arham Zahid**, with **Saad Naik** on the apply)
+- [x] Write `src/repository/d1.repository.ts` with `exportRuns` and `readRun`. Reproduce the parameter-cap comment with **Iris's** arithmetic, thirteen columns and seven rows, not Helios's. (**Maaz Bin Asif**)
+- [x] Fill in `exportAndPrune`'s body in `services/pipeline.ts`. iris-05 left the call sites in place with a no-op body; replace the body only. (**Maaz Bin Asif**)
+- [x] `exportAndPrune` calls `getSettledRows`, then `exportRuns`, then `pruneCompletedRuns`, in that order, with the export awaited to completion before the prune starts (decision 1). (**Maaz Bin Asif**)
+- [x] Wrap the whole thing so a failure logs and returns rather than throwing (decision 8). It is called from inside `runPipeline`'s try and from its catch, and a throw from the catch would escape the function. (**Maaz Bin Asif**)
+- [x] Pass `config.retentionLimit` through from the caller. Do not read `env` inside the repository or the service (decision 7). (**Maaz Bin Asif**)
+- [x] Confirm `exportAndPrune` is called on `runPipeline`'s success exit, on its failure exit, and on `resumeRun`'s exits (decision 6). Grep for the call sites and count them. (**Maaz Bin Asif**)
+- [x] Make sure `readRun` has a caller. In Helios's sprint this function shipped with no callers and no tests and was unticked at review. Either wire it into a debug read or cover it in a test that proves a round trip, and say which you did. (**Maaz Bin Asif**)
+- [x] Add tests to `do.repository.test.ts` or a new `d1.repository.test.ts` covering: export idempotency (export the same rows twice, row count unchanged); chunking (export fifteen rows and assert they all land, which exercises the seven-row boundary); a `running` row being excluded; a failed run surviving a prune; and the pruning boundary exactly at the limit and one past it. (**Maaz Bin Asif**)
+- [x] Write a test asserting the **order**: with a fake that makes the export fail, the prune must not have run. This is the one test that protects ADR-0010's actual rule, as opposed to testing the two halves separately. (**Maaz Bin Asif**)
+- [x] Apply the D1 migration to `iris-d1` for real. `npx wrangler d1 migrations apply iris-d1 --remote` from inside `apps/agent-iris`. iris-03 generated it and deliberately left it unapplied. (**Maaz Bin Asif**, with **Saad Naik** on the apply)
 
 ### Review gates
 
@@ -107,3 +109,33 @@ export async function exportAndPrune(
 **The dev server holds the local D1 file open.** A migration that will not apply, or a `wrangler d1 execute` that seems to run against nothing, is almost always this. Stop the dev server first. This one trap caught people in both ticket 07 and ticket 08 of Helios's sprint, which is why it is listed here in advance.
 
 **Copying Helios's `MAX_ROWS_PER_INSERT = 9` is the mistake this ticket is most likely to ship.** It is one line, it looks right, all your small tests pass, and it breaks the first time an export carries eight or more rows, which is exactly when there is real history worth not losing. Thirteen columns times eight rows is 104 bound parameters. The chunking test with fifteen rows exists specifically to catch this, so write it with a real count rather than a token two.
+
+## Recorded during the build
+
+- **The chunking test does not actually catch a copied 9, and the ticket was wrong to say it would.** It was written with fifteen rows as instructed, then mutation-tested by setting the constant to 9: all eleven tests still passed. The suite runs against `node:sqlite`, which has no hundred-parameter cap, so fifteen rows land whichever chunk size is in force. What the fifteen-row test really proves is that the chunking loop runs more than once and drops nothing, which is worth having but is not the guard the ticket wanted.
+
+  So `MAX_ROWS_PER_INSERT` and a new `D1_BOUND_PARAMETER_LIMIT` are exported, and a test re-derives the arithmetic from the schema with drizzle's `getTableColumns`: a full chunk must stay at or under 100 bound parameters, and one more row must cross it. That fails on a copied 9 (13 x 9 = 117) and it fails the day someone adds a column without recomputing, which is the failure the constant's comment warns about and nothing else was checking.
+
+- **`services/test-env.ts` set `DB: {}`, and that would have made this ticket ship untested.** The moment `exportAndPrune` had a real body, every pipeline and resume test reached `getD1Db(env.DB)`, `{}.prepare` threw, and `exportAndPrune`'s catch swallowed it exactly as designed. The suite stays green while nothing is ever exported. This is not in the ticket and it is the trap most likely to waste an afternoon here.
+
+  Fixed with `createTestD1()` in `repository/test-db.ts`: a real `D1Database` over in-memory `node:sqlite`, implementing the small surface `drizzle-orm/d1` reaches (`prepare` / `bind` / `run` / `all` / `raw` / `batch`). The `CREATE TABLE` DDL was factored out and is now shared with `createTestDb`, so there is one copy to keep in step with `schema.ts` rather than two. `createFailingD1()` is the deliberate opposite, and one test uses it to prove the swallow is still there.
+
+- **`readRun` is covered by a round-trip test, not by a caller.** The ticket allows either and asks which. `d1.repository.test.ts` exports rows, reads them back by `pipeline_id`, and asserts whole-row equality against the originals, plus one-run scoping and an empty array for an unknown id. Whole-row rather than a field or two, because the JSON columns and the millisecond timestamps are the parts most likely to survive a write and come back wrong.
+
+- **The pruning boundary and the failed-run-survives-a-prune cases were already covered**, in `do.repository.test.ts` from iris-03, along with `getSettledRows` excluding running rows. They are not duplicated in the new file. What the new file adds on that theme is the D1-side half: that a `running` row never reaches D1 when the two functions are composed for real.
+
+- **The order test was mutation-tested.** Swapping the `exportRuns` and `pruneCompletedRuns` lines makes it fail, which is the whole reason it exists: two adjacent lines are exactly what someone reorders while tidying up, and testing the halves separately would never notice.
+
+- **All four call sites confirmed by grep**, unchanged since iris-10: `pipeline.ts:276` and `:316` for `runPipeline`'s two exits, `resume.ts:204` and `:231` for `resumeRun`'s.
+
+- **One new cast in the app**, the `as unknown as D1Database` at the end of `createTestD1`, documented in the same style as the two that were already there. A Workers binding cannot be constructed outside a Worker; asserting it once is what keeps every call site checked against the real type.
+
+- **The live check ran against a real database, and every number was predicted before it ran.** The migration is applied to the remote `iris-d1` (`iris_runs` present, 0 rows) and to the local one. With `retention_limit` at 2, one real `POST /generate` produced exactly the predicted result: D1 went to **27 rows** and the DO down to **23**, with 0 `running` rows exported and 0 null `design_session_id`. All three runs the prune deleted (`0e420c20`, `23bde030`, `r-noimage`) are still in D1, which is the export-then-prune order holding against something other than a test double.
+
+  A second run, deliberately failing at the motif read, proved idempotency: the 27 rows already there re-exported with **zero** duplicate ids and zero duplicate `(pipeline_id, modality)` pairs, and only the 2 new rows were added. That run also exercised `runPipeline`'s **failure** exit, so two of the four call sites are now verified live rather than only in the suite. Its failed rows were not pruned.
+
+  **The rows landed in local D1, not remote.** `npm run dev` is plain `wrangler dev`, so D1, KV and R2 are local emulations while the `AI` binding still bills for real — the ticket's step 5 assumes remote bindings and would read 0 rows. The remote table was created by the same migration, so the schema is identical; what is not proven is that hosted D1 accepts the same statements. Anyone wanting that must run `wrangler dev --remote`, which also means editing production KV.
+
+- **`r-noimage` was on the prune list, and it is worth looking at.** It is a lone `completed` text row with no image sibling, so `pruneCompletedRuns` reads the whole run as completed and deletes it. That is exactly the hazard ADR-0001's two-rows-per-invocation rule exists to prevent: a half-written invocation looks like a success and gets pruned like one. Here it was leftover debug seed data and deleting it was correct, but it is a live demonstration of why the rule is a rule.
+
+- **`wrangler.jsonc` still carries `TODO(iris-02): replace with the real id`** above `database_id`, and the same above the KV namespace id, but both now hold real-looking UUIDs. That is iris-02's box, not this ticket's, so it is flagged rather than fixed here.

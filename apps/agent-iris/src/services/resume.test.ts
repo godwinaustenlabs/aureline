@@ -4,6 +4,7 @@ import { resumeRun } from "./resume";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
 import { irisRuns } from "../db/schema";
+import { getD1Db } from "../db/client";
 import { createTestDb, insertRow } from "../repository/test-db";
 import { sampleParamsFull } from "../fixtures/sample-params";
 import { fakeEnv } from "./test-env";
@@ -404,6 +405,24 @@ describe("resumeRun success", () => {
 		for (const row of await rowsFor(db, outcome.result.pipeline_id)) {
 			expect(row.designSessionId).toBe(DESIGN);
 		}
+	});
+
+	it("exports the resumed run to D1, alongside the parent it retried", async () => {
+		const { env, d1 } = fakeEnv();
+		await seedResumableRun(db);
+
+		const outcome = await resumeRun(db, PARENT, env, ORIGIN);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+
+		// `exportAndPrune` exports the whole DO rather than just this invocation,
+		// so the failed parent travels too. That is what stops a later run's
+		// successful export pruning away rows nobody ever copied (ADR-0010).
+		const exported = await getD1Db(d1).select().from(irisRuns);
+		const byRun = new Set(exported.map((row) => row.pipelineId));
+		expect(byRun).toContain(outcome.result.pipeline_id);
+		expect(byRun).toContain(PARENT);
+		expect(exported.every((row) => row.designSessionId === DESIGN)).toBe(true);
 	});
 
 	it("settles as failed at 200 when the image call throws, keeping the params", async () => {

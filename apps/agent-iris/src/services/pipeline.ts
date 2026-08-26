@@ -1,4 +1,4 @@
-import type { IrisDb } from "../db/client";
+import { getD1Db, type IrisDb } from "../db/client";
 import { IrisParamsSchema, type IrisParams, type IrisRequest, type IrisResult } from "@aureline/shared-types";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
@@ -15,7 +15,10 @@ import {
 	completeImageRun,
 	failRunningRuns,
 	getRunRows,
+	getSettledRows,
+	pruneCompletedRuns,
 } from "../repository/do.repository";
+import { exportRuns } from "../repository/d1.repository";
 
 type Stage = "persist" | "planner" | "validate" | "image";
 
@@ -45,13 +48,26 @@ function imageModelMetadata(config: IrisConfig): Record<string, unknown> {
 /**
  * Exports settled rows to D1 and prunes the DO down to the retention limit.
  *
- * A no-op for now — iris-11 owns the real D1 export and pruning — but the call
- * site is in place at both the success and the failure exit, exactly where
- * iris-11 needs it, so that ticket changes a function body rather than having
- * to find two new call sites first.
+ * **Export first, prune second, and that order is the decision** (ADR-0010).
+ * Pruning before exporting destroys the only copy of a run, and there is no way
+ * to notice until someone goes looking for it and it exists nowhere.
  *
- * Never throws. Export is an audit concern, not something that should cost the
- * caller their result after they already waited on the pipeline.
+ * It exports the **whole DO** rather than just this invocation's rows, because
+ * pruning deletes from the whole DO. Exporting less than it prunes means a run
+ * whose own export failed and was swallowed here sits unexported until some
+ * later run's successful export prunes it away, losing it from both stores.
+ * Doing both over the same set makes the invariant exact: prune only ever runs
+ * once everything prunable is confirmed in D1. `pipelineId` is used **only** in
+ * the error log below; the operation itself is DO-wide.
+ *
+ * `getSettledRows` is what keeps `running` rows out, and there is deliberately
+ * no second filter here — two places to get it wrong is one too many.
+ *
+ * Never throws. It is called from inside `runPipeline`'s try *and* from its
+ * catch, and a throw from a catch escapes the function. The run already
+ * happened and the money is already spent; an export failure must not cost the
+ * caller their result. The rows stay in the DO and the next invocation's export
+ * sweeps them up, because export is idempotent.
  */
 export async function exportAndPrune(
 	db: IrisDb,
@@ -59,7 +75,15 @@ export async function exportAndPrune(
 	pipelineId: string,
 	retentionLimit: number,
 ): Promise<void> {
-	// iris-11: export getSettledRows(db) to D1, then pruneCompletedRuns(db, retentionLimit).
+	try {
+		const rows = await getSettledRows(db);
+		await exportRuns(getD1Db(env.DB), rows);
+		// `retentionLimit` is the caller's argument and never `env.RETENTION_LIMIT`:
+		// config is read once per request in `config.ts` and nowhere else (ADR-0008).
+		await pruneCompletedRuns(db, retentionLimit);
+	} catch (cause) {
+		console.error(`d1 export failed for ${pipelineId}:`, describeError(cause));
+	}
 }
 
 /**
