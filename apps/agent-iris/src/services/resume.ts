@@ -140,7 +140,9 @@ export async function resumeRun(
 	} catch (cause) {
 		return {
 			ok: false,
-			reason: `the motif for this run can no longer be read: ${describeError(cause)}. Resuming would fail at the same point after opening two rows`,
+			// `describeError` already ends its own sentences, so the message runs
+			// straight on rather than adding a second full stop.
+			reason: `the motif for this run can no longer be read, so resuming would fail at the same point after opening two rows: ${describeError(cause)}`,
 		};
 	}
 

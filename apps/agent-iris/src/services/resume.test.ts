@@ -249,7 +249,10 @@ describe("resumeRun refusals", () => {
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) return;
-		expect(outcome.reason).toContain("the motif for this run can no longer be read:");
+		expect(outcome.reason).toContain("the motif for this run can no longer be read");
+		// The underlying cause is named, not swallowed: the ref is what the person
+		// reading the 409 has to go and look for.
+		expect(outcome.reason).toContain(MOTIF);
 		expect(run).not.toHaveBeenCalled();
 		// The point of pre-checking rather than letting runImageStage throw: a
 		// refusal never became an invocation, so it writes no rows.
