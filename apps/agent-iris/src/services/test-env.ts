@@ -45,11 +45,24 @@ type FakeR2Object = { arrayBuffer: () => Promise<ArrayBuffer>; httpMetadata?: { 
  * there would mean a third cast in an app whose count is stated two paragraphs
  * up.
  *
+ * `maxResumeAttempts` is overridable for the same class of reason: `resume.ts`
+ * is the one service whose behaviour turns on it, and its cap tests need a
+ * value low enough to hit without seeding a long chain of rows first. It is the
+ * var and not the KV key, so it travels the same fallback path production takes
+ * when KV is empty.
+ *
  * @param overrides - `aiGatewayLogId` defaults to `""`, which is the value a
  *   call that never routed through the gateway leaves behind. `getLog` defaults
- *   to a mock nothing calls.
+ *   to a mock nothing calls. `maxResumeAttempts` defaults to `"3"`, matching
+ *   `wrangler.jsonc`.
  */
-export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: ReturnType<typeof vi.fn> } = {}) {
+export function fakeEnv(
+	overrides: {
+		aiGatewayLogId?: string | null;
+		getLog?: ReturnType<typeof vi.fn>;
+		maxResumeAttempts?: string;
+	} = {},
+) {
 	// All three parameters are declared, and the return is `unknown`, because
 	// that is `Ai.run`'s real shape. Letting the signature be inferred from the
 	// body narrows it to one argument and one of two literal reply shapes, and a
@@ -94,7 +107,7 @@ export function fakeEnv(overrides: { aiGatewayLogId?: string | null; getLog?: Re
 		IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 		MAX_RETRIES: "2",
 		RETENTION_LIMIT: "5",
-		MAX_RESUME_ATTEMPTS: "3",
+		MAX_RESUME_ATTEMPTS: overrides.maxResumeAttempts ?? "3",
 	} as unknown as Env;
 
 	return { env, run, patternsPut, patternsGet, getLog };

@@ -4,6 +4,7 @@ import migrations from "../drizzle/migrations";
 import { IrisRequestSchema, IrisResumeRequestSchema } from "@aureline/shared-types";
 import { getDb } from "./db/client";
 import { runPipeline } from "./services/pipeline";
+import { resumeRun } from "./services/resume";
 import { getRunRows, listRuns } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
 import { json, error } from "./http";
@@ -51,7 +52,12 @@ export class IrisAgent extends Agent<Env> {
 				return error(firstIssueMessage(parsed.error), 400);
 			}
 
-			return notImplemented("POST /resume");
+			// 409 and not a `failed` result: a refusal never became an invocation,
+			// so nothing was written and nothing was billed, and returning a
+			// settled result would claim a run happened. A run that did happen
+			// and failed is still a 200, same as `/generate`.
+			const outcome = await resumeRun(db, parsed.data.pipeline_id, this.env, url.origin);
+			return outcome.ok ? json(outcome.result) : error(outcome.reason, 409);
 		}
 
 		const parsed = IrisRequestSchema.safeParse(body);
@@ -64,13 +70,4 @@ export class IrisAgent extends Agent<Env> {
 		const result = await runPipeline(db, parsed.data, this.env, url.origin);
 		return json(result);
 	}
-}
-
-/**
- * A stub route, marked loudly enough that nobody mistakes it for a real 501.
- * Validation above it is already real, so a 501 here means the request was
- * well-formed and only the work is missing.
- */
-function notImplemented(route: string): Response {
-	return error(`not implemented: ${route} lands in iris-10`, 501);
 }
