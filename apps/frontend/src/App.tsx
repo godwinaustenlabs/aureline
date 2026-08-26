@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GENERATE_COST_USD, RESUME_COST_USD, generate, listRuns, ping, resume } from './api/client';
+import { generate, listRuns, ping, resume } from './api/client';
 import type { RunRow } from './api/runs';
 import type { CallOutcome } from './domain/outcome';
 import { usd } from './domain/format';
 import { briefHistory, describeBriefHistory, groupRows } from './domain/runView';
 import { buildScratchpad } from './domain/scratchpad';
-import { validateGenerate } from './domain/validate';
+import { validateAtlasGenerate, validateHeliosGenerate, validateIrisGenerate } from './domain/validate';
+import { ENGINE_SPECS, type Engine } from './domain/engines';
+import type { EngineFieldValues } from './components/EngineFields';
 import { effectiveSession, forget, loadSessions, normaliseSessionId, remember, saveSessions, type RememberedSession } from './state/sessions';
-import { DEFAULT_BASE_URL, loadBaseUrl, saveBaseUrl } from './state/settings';
+import { loadBaseUrl, loadEngine, saveBaseUrl, saveEngine } from './state/settings';
 import { NO_SPEND, recordCall } from './state/spend';
 import { ConfirmSpend, type SpendRequest } from './components/ConfirmSpend';
 import { ImageOutput } from './components/ImageOutput';
@@ -30,8 +32,20 @@ import { Scratchpad } from './components/Scratchpad';
  *    makes and the only one that fires on a session switch.
  */
 export function App() {
-	const [baseUrl, setBaseUrl] = useState(loadBaseUrl);
+	const [engine, setEngine] = useState<Engine>(loadEngine);
+	const [baseUrl, setBaseUrl] = useState(() => loadBaseUrl(loadEngine()));
 	const [concept, setConcept] = useState('');
+	const [fields, setFields] = useState<EngineFieldValues>({
+		concept: '',
+		motifRef: '',
+		patternRef: '',
+		garmentRef: '',
+		designSessionId: '',
+		garmentType: 'tshirt',
+		regions: ['back'],
+		coverage: 'allover',
+		patternScale: 'medium',
+	});
 	const [sessionField, setSessionField] = useState('');
 	const [sessions, setSessions] = useState<RememberedSession[]>(loadSessions);
 
@@ -63,7 +77,25 @@ export function App() {
 	const baseUrlRef = useRef(baseUrl);
 	baseUrlRef.current = baseUrl;
 
-	useEffect(() => saveBaseUrl(baseUrl), [baseUrl]);
+	useEffect(() => saveBaseUrl(engine, baseUrl), [engine, baseUrl]);
+	useEffect(() => saveEngine(engine), [engine]);
+
+	/**
+	 * Switching engines swaps in that engine's own base URL.
+	 *
+	 * Sharing one URL across all three is the mistake that costs a wrong-engine
+	 * call: you switch to Iris, the field still holds Helios's URL, you click
+	 * generate, and Helios receives a body with `motif_ref` in it. Zod strips
+	 * unknown keys, so it does not error — it runs a normal Helios generate and
+	 * bills you for it.
+	 */
+	function switchEngine(next: Engine) {
+		setEngine(next);
+		setBaseUrl(loadBaseUrl(next));
+		setOutcome(null);
+		setSelectedId(null);
+		setValidationError(null);
+	}
 	useEffect(() => saveSessions(sessions), [sessions]);
 
 	/**
@@ -98,26 +130,28 @@ export function App() {
 	// Free and read-only, which is why it is allowed to be an effect at all.
 	useEffect(() => {
 		void refreshRuns(target);
-	}, [target, refreshRuns]);
+	}, [target, engine, refreshRuns]);
 
-	const groups = useMemo(() => groupRows(rows), [rows]);
-	const selected = groups.find((group) => group.pInvocId === selectedId) ?? null;
+	const groups = useMemo(() => groupRows(engine, rows), [engine, rows]);
+	const selected = groups.find((group) => group.runId === selectedId) ?? null;
 
 	/** The result belongs in the scratchpad only when it is the run being shown —
 	 *  clicking a history row swaps the rows out from under it. Selecting a run
 	 *  costs nothing: its rows are already in `groups` from the last `GET /runs`. */
-	const scratchResult = outcome?.kind === 'run' && outcome.result.p_invoc_id === selectedId ? outcome.result : null;
+	const scratchResult = outcome?.kind === 'run' && outcome.runId === selectedId ? outcome.result : null;
 
 	const sections = useMemo(() => {
 		if (!selectedId) return null;
 
 		return buildScratchpad({
+			engine,
+			runId: outcome?.kind === 'run' ? outcome.runId : null,
 			result: scratchResult,
 			group: selected,
 			wallClockMs: scratchResult ? wallClockMs : null,
 			rowsUnavailableReason: rowsUnavailableReason(rowsError, Boolean(selectedId), Boolean(selected)),
 		});
-	}, [selectedId, selected, scratchResult, wallClockMs, rowsError]);
+	}, [engine, outcome, selectedId, selected, scratchResult, wallClockMs, rowsError]);
 
 	async function runBilledCall(session: string, call: () => Promise<CallOutcome>) {
 		setInFlight({ startedAt: Date.now() });
@@ -136,10 +170,10 @@ export function App() {
 		if (result.kind === 'run') {
 			// Only a run wrote anything. A 409 refusal and a transport error both
 			// left the store exactly as it was and billed nothing.
-			setSelectedId(result.result.p_invoc_id);
+			setSelectedId(result.runId);
 
 			const refreshed = await refreshRuns(session);
-			const group = refreshed ? (groupRows(refreshed).find((it) => it.pInvocId === result.result.p_invoc_id) ?? null) : null;
+			const group = refreshed ? (groupRows(engine, refreshed).find((it) => it.runId === result.runId) ?? null) : null;
 
 			// The real total from the rows, not the image-only figure the response
 			// carries. Null when the rows could not be read, which marks the tally
@@ -150,40 +184,69 @@ export function App() {
 		setInFlight(null);
 	}
 
+	/** Builds this engine's request from its own schema, never a hand-copied rule. */
+	function validateForEngine() {
+		const session = normaliseSessionId(sessionField);
+
+		if (engine === 'helios') return validateHeliosGenerate(concept, session);
+		if (engine === 'iris') return validateIrisGenerate(concept, fields.motifRef, fields.designSessionId, session);
+
+		return validateAtlasGenerate(
+			fields.patternRef,
+			fields.garmentRef,
+			fields.designSessionId,
+			fields.garmentType,
+			fields.regions,
+			fields.coverage,
+			fields.patternScale,
+			session,
+		);
+	}
+
 	function requestGenerate() {
-		const validated = validateGenerate(concept, normaliseSessionId(sessionField));
+		const validated = validateForEngine();
 		if (!validated.ok) {
 			setValidationError(validated.message);
 			return;
 		}
 		setValidationError(null);
 
+		const spec = ENGINE_SPECS[engine];
+		const request = validated.request;
+
 		askToSpend({
-			title: 'Generate a pattern',
-			costUsd: GENERATE_COST_USD,
-			detail: `One planner call plus one image call, against the Durable Object named "${target}". About $0.001 of it is the planner and about $0.0019 the image.`,
-			confirmLabel: 'Spend it',
-			run: () => runBilledCall(target, () => generate(baseUrlRef.current, validated.request)),
+			title: `Generate with ${spec.label}`,
+			costUsd: spec.generateCostUsd,
+			detail:
+				spec.costIsEstimated ??
+				`Against the Durable Object named "${target}". ${
+					engine === 'iris'
+						? 'One planner call plus one image-to-image call. The image half is about $0.017 — roughly six times a Helios run, so this is not the price you may be used to.'
+						: 'One planner call plus one image call.'
+				}`,
+			confirmLabel: spec.generateCostUsd === 0 ? 'Run it' : 'Spend it',
+			run: () => runBilledCall(target, () => generate(engine, baseUrlRef.current, request)),
 		});
 	}
 
-	function requestResume(pInvocId: string) {
+	function requestResume(runId: string) {
 		const sessionId = normaliseSessionId(sessionField);
+		const spec = ENGINE_SPECS[engine];
 
 		// What this brief has already bought. A run whose own image failed stays
 		// resumable even after a resume of it succeeded, so without this the dialog
 		// would read identically whether it is the first attempt or the third.
-		const spentSoFar = describeBriefHistory(briefHistory(groups, pInvocId));
+		const spentSoFar = describeBriefHistory(briefHistory(groups, runId));
 
 		askToSpend({
-			title: 'Resume this run',
-			costUsd: RESUME_COST_USD,
-			detail: `Runs the image half again from the stored params, against "${target}". The planner is never called, so the params come back identical. This is additional spend on a run that was already paid for, and it produces a new p_invoc_id — the original is left exactly as it was.${spentSoFar ? ` Note: ${spentSoFar}.` : ''}`,
-			confirmLabel: 'Spend it again',
-			run: () =>
-				runBilledCall(target, () =>
-					resume(baseUrlRef.current, { p_invoc_id: pInvocId, ...(sessionId ? { session_id: sessionId } : {}) }),
-				),
+			title: `Resume this ${spec.label} run`,
+			costUsd: spec.resumeCostUsd,
+			detail: `${
+				spec.costIsEstimated ??
+				`Runs the image call again from what is already stored, against "${target}". This is additional spend on a run that was already paid for.`
+			} It produces a new run id — the original is left exactly as it was.${spentSoFar ? ` Note: ${spentSoFar}.` : ''}`,
+			confirmLabel: spec.resumeCostUsd === 0 ? 'Run it again' : 'Spend it again',
+			run: () => runBilledCall(target, () => resume(engine, baseUrlRef.current, runId, sessionId)),
 		});
 	}
 
@@ -197,6 +260,27 @@ export function App() {
 		});
 	}
 
+	/**
+	 * Carries the run on screen forward into this engine's input fields.
+	 *
+	 * There is no coordinator engine, so a person does this hand-off at every hop
+	 * — twice per full chain. Offered only when the result on screen actually has
+	 * an image to pass on.
+	 */
+	const upstreamImageUrl = outcome?.kind === 'run' ? (outcome.result.image_url ?? null) : null;
+	const upstreamDesignId = outcome?.kind === 'run' ? (typeof outcome.result.design_session_id === 'string' ? outcome.result.design_session_id : null) : null;
+
+	const copyFromUpstream =
+		engine !== 'helios' && upstreamImageUrl
+			? () =>
+					setFields((current) => ({
+						...current,
+						...(engine === 'iris' ? { motifRef: upstreamImageUrl } : { patternRef: upstreamImageUrl }),
+						// Helios predates the design id, so a Helios run has none to carry.
+						designSessionId: upstreamDesignId ?? current.designSessionId,
+					}))
+			: null;
+
 	async function checkConnection() {
 		setConnection(await ping(baseUrlRef.current));
 		void refreshRuns(target);
@@ -206,10 +290,9 @@ export function App() {
 	// the field has moved since this result arrived, its button no longer applies.
 	const sessionMoved = outcome?.kind === 'run' && outcomeSession !== null && outcomeSession !== target;
 
-	const resultGroup = outcome?.kind === 'run' ? (groups.find((group) => group.pInvocId === outcome.result.p_invoc_id) ?? null) : null;
+	const resultGroup = outcome?.kind === 'run' ? (groups.find((group) => group.runId === outcome.runId) ?? null) : null;
 	const resultResumable =
-		outcome?.kind === 'run' &&
-		(resultGroup ? resultGroup.resumable : outcome.result.status === 'failed' && outcome.result.params !== null);
+		outcome?.kind === 'run' && (resultGroup ? resultGroup.resumable : outcome.result.status === 'failed');
 
 	return (
 		<div className="app">
@@ -224,6 +307,11 @@ export function App() {
 
 			<div className="column">
 				<InputPanel
+					engine={engine}
+					onEngine={switchEngine}
+					fields={fields}
+					onField={(key, value) => setFields((current) => ({ ...current, [key]: value }))}
+					onCopyFromUpstream={copyFromUpstream}
 					concept={concept}
 					onConcept={setConcept}
 					sessionField={sessionField}
@@ -239,21 +327,22 @@ export function App() {
 					connection={connection}
 				/>
 				<p className="hint">
-					Default base URL is <code>{DEFAULT_BASE_URL}</code>. <code>GET /runs</code>, <code>GET /</code> and the image bytes are all
+					Default base URL for {ENGINE_SPECS[engine].label} is <code>{ENGINE_SPECS[engine].defaultBaseUrl}</code>, remembered per engine. <code>GET /runs</code>, <code>GET /</code> and the image bytes are all
 					free; only <code>/generate</code> and <code>/resume</code> cost anything.
 				</p>
 			</div>
 
 			<div className="column">
 				<ImageOutput
+					engine={engine}
 					outcome={outcome}
 					waitingMs={inFlight ? elapsedMs : null}
 					onResume={
 						resultResumable && !sessionMoved && !inFlight && outcome?.kind === 'run'
-							? () => requestResume(outcome.result.p_invoc_id)
+							? () => requestResume(outcome.runId)
 							: null
 					}
-					resumeNote={outcome?.kind === 'run' ? describeBriefHistory(briefHistory(groups, outcome.result.p_invoc_id)) : null}
+					resumeNote={outcome?.kind === 'run' ? describeBriefHistory(briefHistory(groups, outcome.runId)) : null}
 					resumeBlockedReason={
 						sessionMoved
 							? `This run was made in session "${outcomeSession}" and the field now reads "${target}". Resume is session-bound — a p_invoc_id from one session is refused in another with "no run with that id in this session". Switch back to resume it.`
@@ -264,6 +353,7 @@ export function App() {
 				<Scratchpad sections={sections} waitingMs={inFlight ? elapsedMs : null} />
 
 				<RunHistory
+					engine={engine}
 					groups={groups}
 					session={target}
 					loading={rowsLoading}

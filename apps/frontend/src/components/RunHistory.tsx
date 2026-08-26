@@ -1,7 +1,9 @@
 import { localTime, shortId, usd } from '../domain/format';
+import { ENGINE_SPECS, type Engine } from '../domain/engines';
 import { briefHistory, describeBriefHistory, type RunGroup } from '../domain/runView';
 
 interface Props {
+	engine: Engine;
 	groups: RunGroup[];
 	session: string;
 	loading: boolean;
@@ -24,7 +26,10 @@ interface Props {
  * Everything ever run is in D1 permanently, but there is no route that lists D1
  * and this page does not add one.
  */
-export function RunHistory({ groups, session, loading, error, selectedId, onSelect, onResume, onRefresh, busy }: Props) {
+export function RunHistory({ engine, groups, session, loading, error, selectedId, onSelect, onResume, onRefresh, busy }: Props) {
+	// Atlas writes one row per invocation and has no text stage at all, so a
+	// `text` column there would be a column of permanent em-dashes.
+	const singleRow = ENGINE_SPECS[engine].rowsPerInvocation === 1;
 	return (
 		<section className="panel">
 			<header>
@@ -50,10 +55,10 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 						<table>
 							<thead>
 								<tr>
-									<th>p_invoc_id</th>
+									<th>{ENGINE_SPECS[engine].resultIdField}</th>
 									<th>when</th>
-									<th>text</th>
-									<th>image</th>
+									{!singleRow && <th>text</th>}
+									<th>{singleRow ? 'status' : 'image'}</th>
 									<th>total cost</th>
 									<th>lineage</th>
 									<th />
@@ -64,23 +69,25 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 									// What resuming this one would actually buy. Computed from rows
 									// already on screen — no extra call, and `GET /runs` stays the
 									// only read this page makes.
-									const spentSoFar = describeBriefHistory(briefHistory(groups, group.pInvocId));
+									const spentSoFar = describeBriefHistory(briefHistory(groups, group.runId));
 
 									return (
-									<tr key={group.pInvocId} className={group.pInvocId === selectedId ? 'current' : undefined}>
+									<tr key={group.runId} className={group.runId === selectedId ? 'current' : undefined}>
 										<td>
 											<button
 												className="small"
-												onClick={() => onSelect(group.pInvocId)}
-												title={`${group.pInvocId} — show this run in the scratchpad`}
+												onClick={() => onSelect(group.runId)}
+												title={`${group.runId} — show this run in the scratchpad`}
 											>
-												{shortId(group.pInvocId)}
+												{shortId(group.runId)}
 											</button>
 										</td>
 										<td>{localTime(group.createdAt)}</td>
-										<td>
-											<Status status={group.text?.status ?? null} />
-										</td>
+										{!singleRow && (
+											<td>
+												<Status status={group.text?.status ?? null} />
+											</td>
+										)}
 										<td>
 											<Status status={group.image?.status ?? null} />
 										</td>
@@ -89,7 +96,7 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 										<td>
 											{group.resumable && (
 												<div className="resume-cell">
-													<button className="small" disabled={busy} onClick={() => onResume(group.pInvocId)}>
+													<button className="small" disabled={busy} onClick={() => onResume(group.runId)}>
 														Resume
 													</button>
 													{spentSoFar && <span className="hint warn">{spentSoFar}</span>}
@@ -105,7 +112,9 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 				)}
 
 				<p className="hint">
-					A run is offered a Resume when its text row is <code>completed</code> and its image row is <code>failed</code> or absent. That
+					{singleRow
+						? 'A run is offered a Resume when its single row failed. Atlas writes one row per invocation and has no text stage, so there is no "planner succeeded, image failed" pair to look for — a completed run already has its image. That'
+						: 'A run is offered a Resume when its text row is completed and its image row is failed or absent. That'}{' '}
 					check is client-side and approximate on purpose: the backend refuses with a 409 and a readable reason, and showing that
 					reason is a perfectly good outcome. A resume creates a <strong>new</strong> run — the original row is never overwritten,
 					which is why a failed run keeps offering Resume even after one of its resumes has succeeded. Each image call sets{' '}

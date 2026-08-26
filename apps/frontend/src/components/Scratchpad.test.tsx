@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Scratchpad } from './Scratchpad';
 import { buildScratchpad } from '../domain/scratchpad';
 import { groupRows } from '../domain/runView';
-import { imageRow, textRow } from '../domain/rows.fixture';
+import { heliosImageRow, heliosTextRow } from '../domain/rows.fixture';
 import { NOT_CAPTURED } from '../domain/notCaptured';
 
 /**
@@ -11,9 +11,9 @@ import { NOT_CAPTURED } from '../domain/notCaptured';
  * reach the screen, and — the part that matters — that a labelled gap is
  * visibly different from a value rather than collapsing into an empty cell.
  */
-const [group] = groupRows([textRow({ costUsd: 0.001 }), imageRow({ costUsd: 0.0019008 })]);
+const [group] = groupRows('helios', [heliosTextRow({ costUsd: 0.001 }), heliosImageRow({ costUsd: 0.0019008 })]);
 const markup = renderToStaticMarkup(
-	<Scratchpad sections={buildScratchpad({ result: null, group: group!, wallClockMs: 1200 })} waitingMs={null} />,
+	<Scratchpad sections={buildScratchpad({ engine: 'helios', runId: null, result: null, group: group!, wallClockMs: 1200 })} waitingMs={null} />,
 );
 
 describe('the scratchpad', () => {

@@ -1,10 +1,14 @@
-import { RESUME_COST_USD } from '../api/client';
+import { resumeCostUsd } from '../api/client';
+import type { Engine } from '../domain/engines';
 import type { CallOutcome } from '../domain/outcome';
 import { failedStage, failureDetail } from '../domain/outcome';
 import { usd } from '../domain/format';
 import { Waiting } from './Waiting';
 
 interface Props {
+	/** Which engine produced this, so the run id is read under the right key and
+	 *  the stage prefix is matched against the right stage list. */
+	engine: Engine;
 	outcome: CallOutcome | null;
 	waitingMs: number | null;
 	/** Null when the result on screen cannot be resumed, or when resuming it
@@ -23,7 +27,7 @@ interface Props {
  * addition to it, never instead of it — this is a debugging tool and the exact
  * bytes are the point.
  */
-export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason, resumeNote }: Props) {
+export function ImageOutput({ engine, outcome, waitingMs, onResume, resumeBlockedReason, resumeNote }: Props) {
 	return (
 		<section className="panel">
 			<header>
@@ -40,7 +44,7 @@ export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason,
 
 				{outcome && (
 					<>
-						<Banner outcome={outcome} onResume={onResume} resumeBlockedReason={resumeBlockedReason} resumeNote={resumeNote} />
+						<Banner engine={engine} outcome={outcome} onResume={onResume} resumeBlockedReason={resumeBlockedReason} resumeNote={resumeNote} />
 						{outcome.kind === 'run' && outcome.result.image_url && (
 							<figure style={{ margin: 0 }}>
 								<div className="pattern">
@@ -70,7 +74,7 @@ export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason,
 	);
 }
 
-function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Props, 'outcome' | 'onResume' | 'resumeBlockedReason' | 'resumeNote'>) {
+function Banner({ engine, outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Props, 'engine' | 'outcome' | 'onResume' | 'resumeBlockedReason' | 'resumeNote'>) {
 	// A refusal is a third outcome class: not an error and not a run. Nothing was
 	// written and nothing was billed, and the worker's sentence is written to be
 	// shown to a person verbatim, so it is shown verbatim.
@@ -110,7 +114,7 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 	// HTTP 200 either way. `status` is what decides, not the response code — the
 	// worker returns non-200 only for things that never became a run.
 	const failed = result.status === 'failed';
-	const stage = failedStage(result.error);
+	const stage = failedStage(engine, result.error);
 
 	return (
 		<div className={`banner-row ${failed ? 'fail' : 'ok'}`}>
@@ -119,11 +123,11 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 					{failed ? 'Run failed' : 'Run completed'} <span className={`chip ${result.status}`}>{result.status}</span>
 				</div>
 				<div className="body">
-					<code>{result.p_invoc_id}</code>
+					<code>{outcome.runId}</code>
 				</div>
 				{failed && (
 					<div className="verbatim" style={{ marginTop: 6 }}>
-						{stage ? `${stage} stage: ${failureDetail(result.error)}` : (result.error ?? 'no error message')}
+						{stage ? `${stage} stage: ${failureDetail(engine, result.error)}` : (result.error ?? 'no error message')}
 					</div>
 				)}
 				<div className="body" style={{ marginTop: 6 }}>
@@ -132,7 +136,7 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 				</div>
 				{onResume && (
 					<button className="small" style={{ marginTop: 8 }} onClick={onResume}>
-						Resume this run — about {usd(RESUME_COST_USD)}
+						Resume this run — about {usd(resumeCostUsd(engine))}
 					</button>
 				)}
 				{onResume && resumeNote && (

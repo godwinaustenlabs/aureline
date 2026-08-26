@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react';
-import { GENERATE_COST_USD } from '../api/client';
+import { generateCostUsd } from '../api/client';
+import { ENGINES, ENGINE_SPECS, type Engine } from '../domain/engines';
 import { usd } from '../domain/format';
+import { EngineFields, type EngineFieldValues } from './EngineFields';
 import { DEFAULT_SESSION, effectiveSession, normaliseSessionId, randomSessionId, type RememberedSession } from '../state/sessions';
 
 interface Props {
+	engine: Engine;
+	onEngine: (engine: Engine) => void;
+	fields: EngineFieldValues;
+	onField: <K extends keyof EngineFieldValues>(key: K, value: EngineFieldValues[K]) => void;
+	onCopyFromUpstream: (() => void) | null;
 	concept: string;
 	onConcept: (value: string) => void;
 	sessionField: string;
@@ -20,6 +27,11 @@ interface Props {
 }
 
 export function InputPanel({
+	engine,
+	onEngine,
+	fields,
+	onField,
+	onCopyFromUpstream,
 	concept,
 	onConcept,
 	sessionField,
@@ -44,6 +56,24 @@ export function InputPanel({
 			</header>
 			<div className="panel-body">
 				<div className="field">
+					<label htmlFor="engine">Engine</label>
+					<div className="row wrap">
+						{ENGINES.map((option) => (
+							<label key={option} className={option === engine ? 'check current' : 'check'}>
+								<input type="radio" name="engine" checked={option === engine} onChange={() => onEngine(option)} />
+								{ENGINE_SPECS[option].label}
+							</label>
+						))}
+					</div>
+					<span className="hint">
+						{ENGINE_SPECS[engine].tagline}. The choice is explicit and is never inferred from the base URL — guessing from the
+						hostname breaks the moment two workers are both on <code>*.workers.dev</code>, and it breaks by sending the wrong
+						request shape. Each engine remembers its own base URL, so switching never leaves you pointed at the previous one.
+					</span>
+				</div>
+
+				{engine !== 'atlas' && (
+				<div className="field">
 					<label htmlFor="concept">Concept</label>
 					<textarea
 						id="concept"
@@ -53,11 +83,15 @@ export function InputPanel({
 						onChange={(event) => onConcept(event.target.value)}
 					/>
 					<span className="hint">
-						{concept.trim().length} / 1000 characters, trimmed. Validated here with <code>HeliosRequestSchema</code> before anything is
+						{concept.trim().length} / 1000 characters, trimmed. Validated here against the worker's own schema before anything is
 						sent, so a 400 never costs a round trip.
 					</span>
-					{validationError && <span className="hint error">{validationError}</span>}
 				</div>
+				)}
+
+				<EngineFields engine={engine} values={fields} onChange={onField} onCopyFromUpstream={onCopyFromUpstream} />
+
+				{validationError && <span className="hint error">{validationError}</span>}
 
 				<div className="field">
 					<label htmlFor="session">Session id</label>
@@ -115,7 +149,7 @@ export function InputPanel({
 					</span>
 				</div>
 
-				<ReferenceImage />
+				{engine === 'helios' && <ReferenceImage />}
 
 				<div className="field">
 					<label htmlFor="base-url">API base URL</label>
@@ -133,7 +167,11 @@ export function InputPanel({
 				</div>
 
 				<button className="primary" disabled={inFlight} onClick={onGenerate}>
-					{inFlight ? 'Running…' : `Generate — about ${usd(GENERATE_COST_USD)}`}
+					{inFlight
+						? 'Running…'
+						: ENGINE_SPECS[engine].generateCostUsd === 0
+							? 'Generate — free (call is faked)'
+							: `Generate — about ${usd(generateCostUsd(engine))}`}
 				</button>
 			</div>
 		</section>

@@ -1,5 +1,5 @@
-import type { HeliosResult } from '@aureline/shared-types';
-import { failedStage, failureDetail } from './outcome';
+import { failedStage, failureDetail, type RunResult } from './outcome';
+import { ENGINE_SPECS, type Engine } from './engines';
 import { NOT_CAPTURED } from './notCaptured';
 import { duration, localTime, NOT_RECORDED, usd } from './format';
 import { durationMs, plannerWasSkipped, readModel, readSteps, readUsage, type RunGroup } from './runView';
@@ -39,8 +39,12 @@ export interface ScratchpadSection {
 }
 
 export interface ScratchpadInput {
+	/** Which engine produced this. Decides the id key and the stage vocabulary. */
+	engine: Engine;
+	/** The run id, already read under this engine's key by `classify`. */
+	runId: string | null;
 	/** The settled result, if a run happened at all. */
-	result: HeliosResult | null;
+	result: RunResult | null;
 	/** This invocation's rows, from `GET /runs`. Null when that call failed, or
 	 *  when the Durable Object no longer holds them. */
 	group: RunGroup | null;
@@ -53,7 +57,7 @@ export interface ScratchpadInput {
 /** The gap text used wherever an answer depended on rows this run does not have. */
 const NO_ROWS = 'no stored row for this run';
 
-export function buildScratchpad({ result, group, wallClockMs, rowsUnavailableReason }: ScratchpadInput): ScratchpadSection[] {
+export function buildScratchpad({ engine, result, runId, group, wallClockMs, rowsUnavailableReason }: ScratchpadInput): ScratchpadSection[] {
 	const text = group?.text ?? null;
 	const image = group?.image ?? null;
 
@@ -63,10 +67,10 @@ export function buildScratchpad({ result, group, wallClockMs, rowsUnavailableRea
 			note: rowsUnavailableReason,
 			entries: [
 				entry('Result status', result ? result.status : null, 'no result on screen'),
-				stageEntry(result),
+				stageEntry(engine, result),
 				entry('Client wall clock', wallClockMs === null ? null : duration(wallClockMs), 'not measured'),
-				entry('p_invoc_id', result?.p_invoc_id ?? group?.pInvocId ?? null, 'no run'),
-				entry('Concept sent', group?.userPrompt || null, NO_ROWS),
+				entry(ENGINE_SPECS[engine].resultIdField, runId ?? group?.runId ?? null, 'no run'),
+				entry('Concept sent', group?.userPrompt || null, engine === 'atlas' ? 'Atlas takes no concept text' : NO_ROWS),
 			],
 		},
 		{
@@ -168,12 +172,12 @@ function lineageSection(group: RunGroup | null): ScratchpadSection {
  * A completed run gets an explicit "did not fail" rather than a blank, so the
  * absence of a stage reads as an answer instead of as a missing value.
  */
-function stageEntry(result: HeliosResult | null): ScratchpadEntry {
+function stageEntry(engine: Engine, result: RunResult | null): ScratchpadEntry {
 	if (!result) return { label: 'Failed at stage', value: 'no result on screen', missing: true };
 	if (result.status !== 'failed') return { label: 'Failed at stage', value: 'did not fail' };
 
-	const stage = failedStage(result.error);
-	const detail = failureDetail(result.error);
+	const stage = failedStage(engine, result.error);
+	const detail = failureDetail(engine, result.error);
 
 	return {
 		label: 'Failed at stage',
@@ -188,8 +192,16 @@ function stageEntry(result: HeliosResult | null): ScratchpadEntry {
  * row that never got past the planner, which is why an empty object falls
  * through to the result's own `params` rather than rendering as `{}`.
  */
-function paramsEntry(result: HeliosResult | null, group: RunGroup | null): ScratchpadEntry {
-	const stored = group?.text?.plannerParams;
+function paramsEntry(result: RunResult | null, group: RunGroup | null): ScratchpadEntry {
+	// Atlas has no planner and no `plannerParams` column; its equivalent is the
+	// placement, on `garmentRegions`.
+	const storedRow = group?.text ?? group?.image ?? null;
+	const stored =
+		storedRow && 'plannerParams' in storedRow
+			? storedRow.plannerParams
+			: storedRow && 'garmentRegions' in storedRow
+				? storedRow.garmentRegions
+				: undefined;
 
 	if (isNonEmptyObject(stored)) return { label: 'plannerParams (stored)', value: '', json: stored };
 	if (result?.params) return { label: 'params (from the response)', value: '', json: result.params };

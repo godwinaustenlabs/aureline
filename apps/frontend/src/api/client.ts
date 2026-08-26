@@ -1,5 +1,6 @@
-import type { HeliosRequest, HeliosResumeRequest } from '@aureline/shared-types';
 import { classify, type CallOutcome } from '../domain/outcome';
+import { ENGINE_SPECS, type Engine } from '../domain/engines';
+import type { GenerateRequest } from '../domain/validate';
 import { isRunsResponse, type RunRow } from './runs';
 
 /**
@@ -20,9 +21,21 @@ import { isRunsResponse, type RunRow } from './runs';
  * `ALLOWED_HEADERS` grants; anything else fails at preflight.
  */
 
-/** How much a call to each billed route costs, for the confirm dialogs. */
-export const GENERATE_COST_USD = 0.0029;
-export const RESUME_COST_USD = 0.0019;
+/**
+ * How much a call to each billed route costs, for the confirm dialogs.
+ *
+ * **Per engine, and they differ by more than an order of magnitude.** Iris's
+ * image call is about six times Helios's; Atlas does not bill at all yet. A
+ * dialog quoting the wrong engine's price is worse than quoting none, so the
+ * figures live in `ENGINE_SPECS` beside everything else that differs.
+ */
+export function generateCostUsd(engine: Engine): number {
+	return ENGINE_SPECS[engine].generateCostUsd;
+}
+
+export function resumeCostUsd(engine: Engine): number {
+	return ENGINE_SPECS[engine].resumeCostUsd;
+}
 
 /** Trailing slashes are what people type into a URL field, and `${base}/runs`
  *  with one produces a double slash that routes nowhere. */
@@ -30,14 +43,29 @@ export function normaliseBaseUrl(baseUrl: string): string {
 	return baseUrl.trim().replace(/\/+$/, '');
 }
 
-/** `POST /generate`. Billed. */
-export async function generate(baseUrl: string, request: HeliosRequest): Promise<CallOutcome> {
-	return post(`${normaliseBaseUrl(baseUrl)}/generate`, request);
+/**
+ * `POST /generate`. Billed.
+ *
+ * One function and a wider request type, not three — every engine uses the same
+ * route names on purpose (iris-05 decision 9), so switching engines is a base
+ * URL and a request shape, never a different code path.
+ */
+export async function generate(engine: Engine, baseUrl: string, request: GenerateRequest): Promise<CallOutcome> {
+	return post(engine, `${normaliseBaseUrl(baseUrl)}/generate`, request);
 }
 
-/** `POST /resume`. Billed, and refuses with a 409 more often than it runs. */
-export async function resume(baseUrl: string, request: HeliosResumeRequest): Promise<CallOutcome> {
-	return post(`${normaliseBaseUrl(baseUrl)}/resume`, request);
+/**
+ * `POST /resume`. Billed, and refuses with a 409 more often than it runs.
+ *
+ * The id key differs by engine — Helios shipped before the rename and still
+ * says `p_invoc_id`, Iris and Atlas say `pipeline_id` — so the body is built
+ * from the spec rather than hardcoded.
+ */
+export async function resume(engine: Engine, baseUrl: string, runId: string, sessionId: string): Promise<CallOutcome> {
+	const body: Record<string, string> = { [ENGINE_SPECS[engine].resumeIdField]: runId };
+	if (sessionId) body.session_id = sessionId;
+
+	return post(engine, `${normaliseBaseUrl(baseUrl)}/resume`, body);
 }
 
 export type RunsOutcome = { ok: true; rows: RunRow[] } | { ok: false; message: string };
@@ -85,14 +113,14 @@ export async function ping(baseUrl: string): Promise<{ ok: boolean; message: str
 	return status === 200 ? { ok: true, message: raw } : { ok: false, message: status === null ? raw : `HTTP ${status}: ${raw}` };
 }
 
-async function post(url: string, body: unknown): Promise<CallOutcome> {
+async function post(engine: Engine, url: string, body: unknown): Promise<CallOutcome> {
 	const { status, raw } = await send(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
 	});
 
-	return classify(status, raw);
+	return classify(engine, status, raw);
 }
 
 /**

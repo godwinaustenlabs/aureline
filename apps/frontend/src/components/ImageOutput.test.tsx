@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { HeliosResult } from '@aureline/shared-types';
+import type { RunResult } from '../domain/outcome';
 import { ImageOutput } from './ImageOutput';
 import { classify, type CallOutcome } from '../domain/outcome';
 
@@ -17,21 +17,21 @@ import { classify, type CallOutcome } from '../domain/outcome';
 
 function render(outcome: CallOutcome | null) {
 	return renderToStaticMarkup(
-		<ImageOutput outcome={outcome} waitingMs={null} onResume={null} resumeBlockedReason={null} resumeNote={null} />,
+		<ImageOutput engine="helios" outcome={outcome} waitingMs={null} onResume={null} resumeBlockedReason={null} resumeNote={null} />,
 	);
 }
 
-const completed: HeliosResult = {
+const completed: RunResult = {
 	p_invoc_id: '849778fa-4917-4d68-b28c-06f86b1c4c3d',
 	status: 'completed',
-	params: { motif_type: 'paisley' } as HeliosResult['params'],
+	params: { motif_type: 'paisley' } as RunResult['params'],
 	image_url: 'https://agent-helios.aureline.workers.dev/images/patterns/849778fa.jpg',
 	cost_usd: 0.0019008,
 	error: null,
 };
 
 describe('a completed run', () => {
-	const markup = render({ kind: 'run', result: completed, raw: JSON.stringify(completed) });
+	const markup = render({ kind: 'run', result: completed, runId: completed.p_invoc_id as string, raw: JSON.stringify(completed) });
 
 	it('renders the image', () => {
 		expect(markup).toContain('Run completed');
@@ -51,7 +51,7 @@ describe('a completed run', () => {
 });
 
 describe('a failed run', () => {
-	const failed: HeliosResult = {
+	const failed: RunResult = {
 		...completed,
 		status: 'failed',
 		image_url: null,
@@ -59,7 +59,7 @@ describe('a failed run', () => {
 		error: 'image: 5006: Additional properties not allowed',
 	};
 
-	const markup = render({ kind: 'run', result: failed, raw: JSON.stringify(failed) });
+	const markup = render({ kind: 'run', result: failed, runId: failed.p_invoc_id as string, raw: JSON.stringify(failed) });
 
 	it('renders as failed even though the HTTP code was 200', () => {
 		// The trap at the top of ticket 09. A page branching on `response.ok` puts
@@ -80,7 +80,7 @@ describe('a failed run', () => {
 
 describe('a refusal', () => {
 	const reason = 'this run already has an image, and resuming would generate and charge for a second one';
-	const markup = render(classify(409, JSON.stringify({ error: reason })));
+	const markup = render(classify('helios', 409, JSON.stringify({ error: reason })));
 
 	it('shows the backend sentence verbatim', () => {
 		// Six of these exist and they mean different things to whoever is holding
@@ -100,7 +100,7 @@ describe('a refusal', () => {
 });
 
 describe('a transport error', () => {
-	const markup = render(classify(400, JSON.stringify({ error: 'concept: Too small' })));
+	const markup = render(classify('helios', 400, JSON.stringify({ error: 'concept: Too small' })));
 
 	it('reports the HTTP code and says it never became a run', () => {
 		expect(markup).toContain('HTTP 400');
@@ -118,7 +118,7 @@ describe('the raw body', () => {
 		// field this build does not know about would all change.
 		const odd = '{"status":"completed","p_invoc_id":"abc","unknown_future_field":1}';
 
-		for (const outcome of [classify(200, odd), classify(409, '{"error":"no"}'), classify(500, 'boom')]) {
+		for (const outcome of [classify('helios', 200, odd), classify('helios', 409, '{"error":"no"}'), classify('helios', 500, 'boom')]) {
 			expect(render(outcome)).toContain(outcome.raw.replace(/"/g, '&quot;'));
 		}
 	});
