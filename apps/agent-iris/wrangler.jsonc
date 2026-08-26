@@ -1,0 +1,160 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "agent-iris",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-27",
+	"migrations": [
+		{
+			"new_sqlite_classes": [
+				"IrisAgent"
+			],
+			"tag": "v1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "IrisAgent",
+				"name": "IrisAgent"
+			}
+		]
+	},
+
+	"ai": {
+		"binding": "AI"
+	},
+
+	/**
+	 * Shared with Atlas, deliberately. R2 has no migrations and no schema, so
+	 * there is nothing two squads writing in parallel can collide on — unlike D1,
+	 * which stays one database per engine for the length of the sprint.
+	 *
+	 * The binding name stays `PATTERNS`, matching Helios's, so r2.repository.ts
+	 * reads identically in all three engines. Separation happens in the key, not
+	 * the bucket: Iris writes `iris/{pipeline_id}.jpg` and Atlas writes
+	 * `atlas/{pipeline_id}.jpg` (iris-05, atlas-06).
+	 *
+	 * `bucket_name` here must be the exact same string Atlas's wrangler.jsonc
+	 * uses. R2 bindings take the name directly, not an id — a typo does not
+	 * error, it silently creates a second bucket.
+	 */
+	"r2_buckets": [
+		{
+			"binding": "PATTERNS",
+			"bucket_name": "images-bucket",
+			// "remote": true
+		}
+	],
+
+	/**
+	 * Iris's own database, not Helios's. A migration applied against a shared,
+	 * live database cannot be rehearsed the way a branch merge can, so each
+	 * engine keeps its own for the sprint and consolidation happens once, at the
+	 * end, as its own joint ticket.
+	 *
+	 * `migrations_dir` must point at the `iris/` subdirectory. Pointing it at
+	 * Helios's would apply Helios's migration to Iris's database.
+	 */
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "iris-d1",
+			// TODO(iris-02): replace with the real id from `wrangler d1 create iris-d1`.
+			"database_id": "73146202-15d3-4969-a440-3975797a923c",
+			"migrations_dir": "../../infrastructure/d1/migrations/iris"
+		}
+	],
+
+	/**
+	 * Runtime-tunable config. Read once per invocation by src/config.ts; the app
+	 * never writes. Edit the values by hand in the Cloudflare dashboard
+	 * (namespace "IRIS_CONFIG") and they take effect within about a minute,
+	 * with no redeploy.
+	 *
+	 * Keys: text_model, image_model, max_retries, retention_limit,
+	 * max_resume_attempts. The matching entries in `vars` below are the
+	 * committed fallbacks used when a key is absent or its value is invalid.
+	 *
+	 * The binding name is `CONFIG` and not `IRIS_CONFIG`, deliberately and for
+	 * every engine, so that each engine's config.ts is identical code. The
+	 * engines are told apart by the namespace's dashboard title instead.
+	 *
+	 * ONE namespace, deliberately. There is no `preview_id`: a second store only
+	 * ever meant a value edited in one place silently did nothing in the other.
+	 * `wrangler dev` therefore reads a LOCAL simulated store (empty on a fresh
+	 * clone, so everything falls back to `vars`). To point local dev at the real
+	 * namespace for a session, uncomment `remote` below — that binding alone goes
+	 * remote and the rest of the worker stays local. Remember it is the same
+	 * store production reads.
+	 *
+	 * See docs/adr/0008-runtime-config-resolved-from-kv.md
+	 * https://developers.cloudflare.com/kv/
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "CONFIG",
+			// The namespace's ID, not its dashboard title ("IRIS_CONFIG").
+			// A title here is accepted by `deploy --dry-run` and by local dev,
+			// and only fails against the real API.
+			// TODO(iris-02): replace with the real id from
+			// `wrangler kv namespace create IRIS_CONFIG`.
+			"id": "29fa117114d840d3bb1b584e425c7884",
+			// "remote": true
+		}
+	],
+
+	/**
+	 * `wrangler types` types each of these as its LITERAL value, not as `string`.
+	 * Change a value here and TypeScript rejects it until `npm run cf-typegen` is
+	 * re-run and worker-configuration.d.ts is committed alongside the change.
+	 * Helios's committed types are already stale on ALLOWED_ORIGINS for exactly
+	 * this reason. Regenerate in the same commit as the edit.
+	 */
+	"vars": {
+		// fallback default — the live value is CONFIG:text_model in KV
+		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
+		// fallback default — the live value is CONFIG:image_model in KV.
+		// Image-to-image, unlike Helios's flux-1-schnell: Iris colors an existing
+		// motif rather than generating one. It takes multipart form data, not a
+		// plain JSON body, and its input images must be under 512x512 (iris-06).
+		"IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-9b",
+		// AI Gateway name, created in the dashboard under AI > AI Gateway.
+		// Empty string means direct Workers AI with no logging or caching.
+		// Deliberately NOT in KV: an empty or misspelled id makes the call fall
+		// through to direct Workers AI with no error and no gateway log, so a
+		// dashboard typo would be a silent routing outage. It stays here, where
+		// it is reviewed. See docs/adr/0006-all-model-calls-route-through-ai-gateway.md
+		"AI_GATEWAY_ID": "iris",
+		// fallback default — the live value is CONFIG:retention_limit in KV
+		"RETENTION_LIMIT": "5",
+		// fallback default — the live value is CONFIG:max_retries in KV
+		"MAX_RETRIES": "2",
+		// fallback default — the live value is CONFIG:max_resume_attempts in KV.
+		// How many times one run may be resumed, so 3 is an original plus three
+		// retries. Every retry spends the image model.
+		"MAX_RESUME_ATTEMPTS": "3",
+		// Browser origins allowed to call this worker from JavaScript.
+		// Comma separated, exact origins, no trailing slash. Anything not listed
+		// is refused at preflight.
+		//
+		// Never "*", and deliberately NOT in KV. There is no auth on /generate and
+		// it spends real money per call, so this list is the only thing stopping
+		// any webpage from billing our account. It belongs where it gets reviewed.
+		//
+		// Local dev servers only for now. iris-12 adds the deployed playground's
+		// origin when the frontend lands in dev.
+		"ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173"
+	},
+
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	]
+}

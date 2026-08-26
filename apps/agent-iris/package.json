@@ -1,0 +1,32 @@
+{
+  "name": "agent-iris",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "cf-typegen": "wrangler types",
+    "db:generate": "drizzle-kit generate",
+    "db:generate:d1": "drizzle-kit generate --config drizzle.d1.config.ts",
+    "config:pull": "for k in text_model image_model max_retries retention_limit max_resume_attempts; do v=$(wrangler kv key get --binding CONFIG --remote \"$k\") && wrangler kv key put --binding CONFIG --local \"$k\" \"$v\"; done",
+    "//kv": "Always reach local KV through these. Bare wrangler run from the repo root finds no wrangler.jsonc, silently leaves this app's KV untouched, and the next request is a normal billed run instead of the failure you were trying to force. npm runs a script with its own package as the working directory, so these cannot land in the wrong place.",
+    "kv:get": "wrangler kv key get --binding CONFIG --local",
+    "kv:put": "wrangler kv key put --binding CONFIG --local",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.5.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.114.0"
+  },
+  "dependencies": {
+    "@aureline/shared-types": "^1.0.0",
+    "@aureline/shared-utils": "^1.0.0",
+    "agents": "^0.19.0",
+    "drizzle-orm": "^0.45.2",
+    "zod": "^4.1.13"
+  }
+}

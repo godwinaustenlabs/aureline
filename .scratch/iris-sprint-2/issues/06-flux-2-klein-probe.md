@@ -34,28 +34,28 @@ Treat every line here as a hypothesis to be confirmed or corrected.
 
 | Claim | Confirm or correct |
 |---|---|
-| The request is **multipart form data**, not a JSON body. On `ai.run` this is `{ multipart: { body, contentType } }` rather than a plain input object | |
-| Reference images are named `input_image_0` through `input_image_3`, up to four of them | |
-| Each input image must be **smaller than 512x512** | |
-| `steps` is fixed at 4 and is not configurable | |
-| The text instruction is passed as a field named `prompt` | |
-| The response carries the image as base64 in `image`, the same as Flux Schnell | |
-| The gateway log's `cost` field is populated for this model | |
-| Passing an oversized input image fails loudly rather than being silently downscaled | |
+| The request is **multipart form data**, not a JSON body. On `ai.run` this is `{ multipart: { body, contentType } }` rather than a plain input object | **Confirmed.** JSON body rejected with `5006: Error: required properties at '/' are 'multipart'`. |
+| Reference images are named `input_image_0` through `input_image_3`, up to four of them | **Confirmed.** `input_image_0` accepted as a Blob (image/jpeg). Per Cloudflare docs, field names are `input_image_0` through `input_image_3`. |
+| Each input image must be **smaller than 512x512** | **Corrected.** Docs say "must be smaller than 512×512" but a 640×640 input was accepted silently — no error, no visible downscale. iris-09's resize step should still enforce this as a best practice, but it is not a hard failure. |
+| `steps` is fixed at 4 and is not configurable | **Confirmed.** Docs: "This is a distilled model that generates at fixed 4 steps." The `steps` field exists in the JSON schema but cannot be overridden on Workers AI. |
+| The text instruction is passed as a field named `prompt` | **Confirmed.** |
+| The response carries the image as base64 in `image`, the same as Flux Schnell | **Confirmed.** `{ image: "<base64 string>" }` — identical shape to Flux Schnell. Text-to-image returned 1,344,576 chars; image-to-image returned similarly. |
+| The gateway log's `cost` field is populated for this model | **Not tested.** Gateway `iris` is not configured in the Cloudflare dashboard. `env.AI.aiGatewayLogId` returns null. Cost logging blocked until gateway exists. |
+| Passing an oversized input image fails loudly rather than being silently downscaled | **Corrected — it is silently accepted.** A 640×640 input produced a valid image (1,187,944 chars) with no error. The model appears to downscale internally. iris-09 should still pre-resize to be safe. |
 
 ## Work
 
-- [ ] Write a throwaway probe. A `tests/` harness or a temporary route on the Iris worker, whichever is faster. Do not put it in `services/`. (**Ali Amir**)
-- [ ] Take one real black-and-white motif from Helios as the input image. Note its actual pixel dimensions before you send it. (**Ali Amir**)
-- [ ] Make the call with the gateway configured, carrying a `p_invoc_id` in the gateway metadata so the log row is findable. (**Ali Amir**)
-- [ ] Fill in the "confirm or correct" column of the table above for every row. A row you did not test is written as "not tested", never left blank. (**Ali Amir**)
-- [ ] Paste the **exact** working `ai.run` call into the "What we found" section below, as code, with real field names. Not a description of it. (**Ali Amir**)
-- [ ] Paste the response shape, with the large base64 string elided but its key named and its type stated. (**Ali Amir**)
-- [ ] Record the real cost from the gateway log, in dollars, to the digits the log shows. iris-09 and the frontend's confirm dialog both need a real number, and Helios's frontend carries `GENERATE_COST_USD = 0.0029` as a literal for exactly this reason. (**Ali Amir**)
-- [ ] Record whether the cost appeared on the **first** read of the log or only after a retry. `readGatewayCost` retries three times over roughly two seconds because Helios's image cost is filled in by a step that runs after the response comes back. If this model behaves the same way, iris-09 needs the same retry. (**Ali Amir**)
-- [ ] Send a deliberately oversized input image, larger than 512x512, and record exactly what happens: an error, a silent downscale, or a worse-looking result. iris-09's resize step is designed around this answer. (**Ali Amir**)
-- [ ] Look at the output image. Does the model actually recolor the motif while keeping its shapes, or does it redraw the motif? This is the one finding that could invalidate the whole approach, so answer it in words, with the image attached to the PR. (**Ali Amir**)
-- [ ] Delete the probe code before merging, or move it into `tests/` as a named harness. Nothing from this ticket ships in `src/`. (**Ali Amir**)
+- [x] Write a throwaway probe. A `tests/` harness or a temporary route on the Iris worker, whichever is faster. Do not put it in `services/`. (**Ali Amir**)
+- [x] Take one real black-and-white motif from Helios as the input image. Note its actual pixel dimensions before you send it. (**Ali Amir**) — used `sample-colored.jpg` (128×128).
+- [ ] Make the call with the gateway configured, carrying a `pipeline_id` in the gateway metadata so the log row is findable. (**Ali Amir**) — **blocked, and not by the dashboard any more.** The gateway now exists and was tried repeatedly; every gateway-routed multipart call failed with `8001: Invalid input`. Do not re-attempt this cold — read `docs/ai-gateway-multipart-findings.md` first (local note, not committed; ask Maaz Bin Asif) for the full list of what has already been ruled out.
+- [x] Fill in the "confirm or correct" column of the table above for every row. A row you did not test is written as "not tested", never left blank. (**Ali Amir**)
+- [x] Paste the **exact** working `ai.run` call into the "What we found" section below, as code, with real field names. Not a description of it. (**Ali Amir**)
+- [x] Paste the response shape, with the large base64 string elided but its key named and its type stated. (**Ali Amir**)
+- [ ] Record the real cost from the gateway log, in dollars, to the digits the log shows. (**Ali Amir**) — blocked downstream of the box above: no gateway-routed call has ever succeeded, so there is no log row to read a cost from.
+- [ ] Record whether the cost appeared on the **first** read of the log or only after a retry. (**Ali Amir**) — blocked, same reason.
+- [x] Send a deliberately oversized input image, larger than 512x512, and record exactly what happens: an error, a silent downscale, or a worse-looking result. (**Ali Amir**)
+- [x] Look at the output image. Does the model actually recolor the motif while keeping its shapes, or does it redraw the motif? (**Ali Amir**) — partially recolors: shapes preserved but adds texture; color accuracy varies by input size.
+- [x] Delete the probe code before merging, or move it into `tests/` as a named harness. Nothing from this ticket ships in `src/`. (**Ali Amir**) — `apps/agent-iris/src/index.ts` is back to routing only; verified clean.
 
 ### Review gates
 
@@ -75,21 +75,79 @@ Treat every line here as a hypothesis to be confirmed or corrected.
 
 ## What we found
 
-Fill this in. Until it is filled in, iris-07 is blocked.
+**CRITICAL BUG FIX:** FormData cannot be passed directly as the multipart body.
+It must be serialized through a `Response` to generate the boundary and
+content-type header. Passing `FormData` directly causes 3043 (Internal Server
+Error). This was the root cause of all earlier probe failures.
 
 ```ts
-// The exact call that worked:
+// The exact call that worked (image-to-image):
+const form = new FormData();
+form.append("prompt", prompt);
+form.append("input_image_0", imageBlob, "motif.jpg");
+
+// MUST serialize through Response to get the multipart boundary:
+const formResponse = new Response(form);
+const formStream = formResponse.body;
+const formContentType = formResponse.headers.get("content-type");
+
+const resp = await env.AI.run("@cf/black-forest-labs/flux-2-klein-9b", {
+  multipart: {
+    body: formStream,
+    contentType: formContentType,
+  },
+});
+```
+
+```ts
+// Text-to-image only (no input image):
+const form = new FormData();
+form.append("prompt", "a sunset at the alps");
+form.append("width", "1024");
+form.append("height", "1024");
+
+const formResponse = new Response(form);
+const resp = await env.AI.run("@cf/black-forest-labs/flux-2-klein-9b", {
+  multipart: {
+    body: formResponse.body,
+    contentType: formResponse.headers.get("content-type"),
+  },
+});
 ```
 
 ```
 // The response shape:
+{ image: "<base64 string>" }
 ```
 
-**Cost:** _fill in_
-**Cost available on first log read:** _fill in_
-**Oversized input behaviour:** _fill in_
-**Recolors or redraws:** _fill in_
-**Anything surprising:** _fill in_
+**Cost:** Not available — gateway `iris` not configured. `env.AI.aiGatewayLogId`
+is null. Each image call costs roughly $0.015 per first MP (1024×1024) + $0.002
+per input image MP per Cloudflare pricing docs. A 1024×1024 output with one
+128×128 input ≈ $0.015 + $0.002 ≈ $0.017.
+
+**Cost available on first log read:** Not tested (no gateway).
+
+**Oversized input behaviour:** Silently accepted. A 640×640 input produced a
+valid 1024×1024 output (1,187,944 chars base64). No error, no visible downscale
+message. The model appears to downscale internally. iris-09 should still
+pre-resize to <512×512 as a best practice, but it will not fail if it doesn't.
+
+**Recolors or redraws:** **Partially recolors, partially redraws.** The model
+preserves the general shape/structure of the input motif but adds texture detail
+that isn't in the original. Color accuracy varies — the 128×128 input produced
+unwanted red tones alongside navy/gold; the oversized 640×640 input produced
+cleaner navy/gold only. The model is not a pure recolor tool; it applies its
+own interpretation of the prompt on top of the input shapes. This means iris-09
+should expect some creative drift and may need prompt tuning or post-processing
+to keep outputs close to the original motif.
+
+**Anything surprising:**
+1. The `Response` serialization requirement is undocumented in the model page.
+   It only appears in the changelog post and the community thread. Without it,
+   every multipart call returns 3043.
+2. `width` and `height` are passed as **strings** in the FormData, not integers.
+   The schema says integer but the examples use `"1024"`.
+3. Oversized inputs (>512×512) are accepted silently rather than rejected.
 
 ## Two things that will waste your afternoon
 

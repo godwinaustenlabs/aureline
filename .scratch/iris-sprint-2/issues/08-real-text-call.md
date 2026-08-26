@@ -30,7 +30,7 @@
 5. **A missing cost never fails a run.** `readGatewayCost` returns null on every failure path, and every one of those paths logs first. Cost is an audit concern. A run that produced a good palette must not fail because a log row was slow.
 6. **Warn when the call did not route through the gateway.** `buildAiRunOptions` returns `undefined` for an empty gateway id, which sends the call straight to Workers AI with no error, no log entry and no cost. `env.AI.aiGatewayLogId` being null afterwards is the only available signal. Helios warns on exactly this and so must Iris.
 7. **The model is `config.textModel.model`, never a literal.** Resolved from KV with the `wrangler.jsonc` var as fallback (ADR-0008). `@cf/openai/gpt-oss-120b` is the starting choice because it is already proven in this repo, and it must be swappable without a redeploy.
-8. **Carry `p_invoc_id` in the gateway metadata.** That is what lets a gateway log row be joined back to an `iris_runs` row later. It costs one line and it is the only bridge between the two systems.
+8. **Carry `pipeline_id` in the gateway metadata.** That is what lets a gateway log row be joined back to an `iris_runs` row later. It costs one line and it is the only bridge between the two systems.
 9. **The prompt version goes in `model_metadata`.** So a run's palette stays attributable to the prompt that produced it, which is the entire reason iris-04 versions its prompts.
 
 ## Agreed shapes, do not invent your own
@@ -53,7 +53,7 @@ export async function callPlannerModel(
 // apps/agent-iris/src/services/planner.ts
 // Signature unchanged from iris-05's fake. Only the body changes.
 export async function planConcept(
-  concept: string, env: Env, config: IrisConfig, p_invoc_id: string
+  concept: string, env: Env, config: IrisConfig, pipeline_id: string
 ): Promise<unknown>;
 ```
 
@@ -72,14 +72,16 @@ What lands in the text row's `model_metadata`:
 - [ ] Write `src/tools.ts` exactly as above. It binds the schema and does nothing else. If you find yourself putting logic in it, that logic belongs in `planner.ts`. (**Ali Amir**)
 - [ ] Replace `planConcept`'s body in `src/services/planner.ts`. Do not change its signature: iris-05's pipeline calls it and its tests fake it. (**Ali Amir**)
 - [ ] Build both prompts from iris-04's `buildPlannerSystemPrompt` and `buildPlannerUserPrompt`. Do not write prompt text in this file. Prompt text lives in `prompts/`, versioned. (**Ali Amir**)
-- [ ] Pass `{ gateway: { id: env.AI_GATEWAY_ID, metadata: { p_invoc_id } }, maxRetries: config.maxRetries, temperature: config.textModel.temperature }`. All three come from config or env; none is a literal. (**Ali Amir**)
-- [ ] After the call, warn if `env.AI.aiGatewayLogId` is falsy, naming the `p_invoc_id` (decision 6). (**Ali Amir**)
+- [ ] Pass `{ gateway: { id: env.AI_GATEWAY_ID, metadata: { pipeline_id } }, maxRetries: config.maxRetries, temperature: config.textModel.temperature }`. All three come from config or env; none is a literal. (**Ali Amir**)
+- [ ] After the call, warn if `env.AI.aiGatewayLogId` is falsy, naming the `pipeline_id` (decision 6). (**Ali Amir**)
 - [ ] In `pipeline.ts`, read the cost with `readGatewayCost(env, "planner")` on the line immediately after `planConcept` returns, before the validate stage runs. Not later (decision 4). (**Ali Amir**)
 - [ ] Port `services/gatewayCost.ts` from Helios into Iris, including its three read attempts and its backoff. Do **not** shorten it to one attempt because the text call usually populates on the first read: iris-09 calls the same function and needs the retries. (**Ali Amir**)
 - [ ] Pass `prompt_version` into the text row's `model_metadata` alongside `model` and `usage` (decision 9). (**Ali Amir**)
 - [ ] Confirm the validate stage in `pipeline.ts` parses with `IrisParamsSchema.parse` and that a failure there is reported with the `validate:` stage prefix, not `planner:`. (**Ali Amir**)
 - [ ] Do **not** add retry logic in `planner.ts`. `getTextualModelOutput` already retries, and a second loop around it multiplies the attempts. (**Ali Amir**)
-- [ ] Update `pipeline.test.ts`'s fake `AI` binding so it returns a plausible structured reply for the text call and still **throws** for the image call. The image call is still faked at this point and must stay unbillable. (**Ali Amir**)
+- [ ] Update the fake `AI` binding so it returns a plausible structured reply for the text call and still **throws** for the image call. The image call is still faked at this point and must stay unbillable. (**Ali Amir**)
+
+  It lives in **`src/services/test-env.ts`**, not in `pipeline.test.ts` — and it is shared with `planner.test.ts`, so this is a change to a helper both suites use, not to one test file. Today `AI.run` throws unconditionally and the file's own doc comment says *"AI.run must never be called by the fakes in iris-05"*. That contract is exactly what this ticket changes: update the comment along with the code, or the next person reads a guarantee the file no longer offers. Keep the throw for the image call.
 - [ ] Add a test where the model returns invalid JSON and assert the run settles as `failed` with the stage prefix naming the failing stage, and that both rows are written. (**Ali Amir**)
 - [ ] Add a test where `readGatewayCost` returns null and assert the run still completes. Decision 5 is a contract and needs a test that would notice it changing. (**Ali Amir**)
 
@@ -89,7 +91,7 @@ What lands in the text row's `model_metadata`:
 - [ ] Send at least three concepts that **do** name colors and confirm the returned palette actually reflects them. A prompt that returns valid-but-unrelated palettes passes every schema check and is completely broken. (**Hashir Rauf**)
 - [ ] Confirm the cost read happens before the validate stage, by reading the order of statements in `runPipeline`. (**Hashir Rauf**)
 - [ ] Confirm `tools.ts` owns no schema and no logic. (**Hashir Rauf**)
-- [ ] Confirm the gateway log shows a row per call, with the `p_invoc_id` in its metadata, and that the row's cost matches what landed in `iris_runs`. (**Hashir Rauf**)
+- [ ] Confirm the gateway log shows a row per call, with the `pipeline_id` in its metadata, and that the row's cost matches what landed in `iris_runs`. (**Hashir Rauf**)
 - [ ] Nobody approves their own work. (**both**)
 
 ## Verification without burning budget
@@ -99,12 +101,14 @@ What lands in the text row's `model_metadata`:
 1. `npm run dev --workspace=apps/agent-iris`, then a real concept:
    ```
    curl -s -X POST http://localhost:8787/generate -H 'Content-Type: application/json' \
-     -d '{"concept":"art deco paisley in deep jewel tones","motif_ref":"patterns/fake.jpg","source_p_invoc_id":"h1"}' | jq .params
+     -d '{"concept":"art deco paisley in deep jewel tones","motif_ref":"patterns/fake.jpg","design_session_id":"h1"}' | jq .params
    ```
    Expect a real palette whose colors relate to "deep jewel tones".
 2. `curl -s 'http://localhost:8787/runs' | jq '.runs[] | select(.modality=="text")'`. Confirm `cost_usd` is a real non-null number, `planner_params` holds the palette, and `model_metadata` carries `model`, `usage` and `prompt_version`.
 3. Force a retry: set `max_retries` low and use a concept likely to confuse the model, or temporarily corrupt the schema handed to the model. Confirm the error message distinguishes a schema failure from a call failure. Put everything back with `npm run config:pull:iris`.
 4. Force the no-gateway path: temporarily blank `AI_GATEWAY_ID`. Confirm the warning fires, the run still completes, and `cost_usd` is null. Put it back. This is worth doing once, because in production this failure is completely silent.
+
+   **`AI_GATEWAY_ID` is a `wrangler.jsonc` var, not a KV key** — it is deliberately absent from `config.ts`'s `FIELDS`, so `npm run config:pull:iris` will not touch it and you have to edit the file. That means **re-running `npm run cf-typegen` after each edit, both times** (AGENTS.md §9): `wrangler types` generates it as the *literal* type `AI_GATEWAY_ID: "iris"`, so a blanked value typechecks against a string that is no longer real, and a stale `worker-configuration.d.ts` then lies to you in the direction of everything looking fine. Put the value back and regenerate before you commit anything.
 5. `npm test --workspace=apps/agent-iris` passes.
 
 ## Two things that will waste your afternoon

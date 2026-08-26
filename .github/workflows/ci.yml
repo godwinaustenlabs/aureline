@@ -1,0 +1,89 @@
+# Pull request checks for both squads' integration branches, and for dev.
+#
+# Three checks, ordered cheapest first: a clean install, a typecheck of every
+# workspace, then the tests. All free. Nothing here talks to Cloudflare, nothing
+# here calls a model, and nothing here needs a secret — if this workflow ever
+# requires a token, something has gone wrong (shared-01 decision 4).
+#
+# Deliberately not here yet:
+#   - the PR title convention check.
+#   - any deploy step. Deploys stay manual. A deploy step in a pull request
+#     workflow is how a pull request ends up shipping to production.
+#
+# This workflow reports; it does not yet gate. Until it is marked a required
+# status check in the repository settings, a red run does not stop a merge.
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - dev-iris
+      - dev-atlas
+      - dev
+    # A PR touching only docs/tickets has nothing for install/typecheck/test to
+    # check, so skip the run rather than burning a runner on it. Safe while this
+    # workflow only reports (see the note above) — paths-ignore skips the run
+    # entirely rather than reporting green, which would block merges if this
+    # workflow is ever made a required status check.
+    paths-ignore:
+      - "**/*.md"
+
+# A new push to the same pull request cancels the run still in flight, rather
+# than queueing behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24 is not optional: the root package.json's `engines` field requires
+      # it because the repository tests use `node:sqlite`. A runner on Node 20
+      # fails those in a way that reads like a code problem.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # `npm ci`, never `npm install`. It installs strictly from the lockfile and
+      # fails when the lockfile and package.json disagree — and that failure is
+      # the entire point of this step. `npm install` would quietly reconcile the
+      # two and hide exactly the breakage this is here to catch.
+      - name: Install
+        run: npm ci
+
+      # Typechecking runs from inside each workspace, not from the root, because
+      # each carries its own tsconfig.json and the apps use
+      # `moduleResolution: node`, which only resolves correctly from their own
+      # directory. Discovered rather than listed, so a new engine is covered the
+      # day its workspace lands instead of the day someone remembers this file.
+      - name: Typecheck
+        run: |
+          set -euo pipefail
+          failed=0
+          for dir in apps/*/ packages/*/; do
+            [ -f "${dir}tsconfig.json" ] || continue
+            echo "::group::tsc --noEmit ${dir}"
+            if (cd "$dir" && npx --no-install tsc --noEmit); then
+              echo "ok: $dir"
+            else
+              echo "::error::typecheck failed in $dir"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+      # Last because it is the slowest, and because a typecheck failure explains
+      # a test failure far more clearly than the test failure explains itself.
+      #
+      # `--if-present` so a workspace without a test script is skipped rather
+      # than failing the run. No workspace here calls a model or touches the
+      # network, so this stays free: any test that reaches the `AI` binding must
+      # fake it (AGENTS.md §5).
+      - name: Test
+        run: npm test --workspaces --if-present

@@ -21,6 +21,8 @@ Start with [docs/](docs/). The six files there describe the engine shape in gene
 | [directory-structure.md](docs/directory-structure.md) | What is in each file, and why does it exist? |
 | [running-locally.md](docs/running-locally.md) | How do I run it, and how do I know it works? |
 
+[AGENTS.md](AGENTS.md) sits at the repo root rather than in `docs/`, because it is rules rather than explanation: the conventions everyone writing code here follows, human or agent. Read it before your first change.
+
 Two other kinds of doc live there. [docs/adr/](docs/adr/) holds the Architecture Decision Records, which are the *why* behind individual decisions. **Read them before changing architecture**, because several apply repo-wide rather than to Helios alone. [docs/helios-runs-conventions.md](docs/helios-runs-conventions.md) is for writing queries against the audit table.
 
 ## Repo layout
