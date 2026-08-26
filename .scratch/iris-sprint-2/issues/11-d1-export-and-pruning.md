@@ -80,7 +80,7 @@ export async function exportAndPrune(
 - [x] Make sure `readRun` has a caller. In Helios's sprint this function shipped with no callers and no tests and was unticked at review. Either wire it into a debug read or cover it in a test that proves a round trip, and say which you did. (**Maaz Bin Asif**)
 - [x] Add tests to `do.repository.test.ts` or a new `d1.repository.test.ts` covering: export idempotency (export the same rows twice, row count unchanged); chunking (export fifteen rows and assert they all land, which exercises the seven-row boundary); a `running` row being excluded; a failed run surviving a prune; and the pruning boundary exactly at the limit and one past it. (**Maaz Bin Asif**)
 - [x] Write a test asserting the **order**: with a fake that makes the export fail, the prune must not have run. This is the one test that protects ADR-0010's actual rule, as opposed to testing the two halves separately. (**Maaz Bin Asif**)
-- [ ] Apply the D1 migration to `iris-d1` for real. `npx wrangler d1 migrations apply iris-d1 --remote` from inside `apps/agent-iris`. iris-03 generated it and deliberately left it unapplied. (**Maaz Bin Asif**, with **Saad Naik** on the apply)
+- [x] Apply the D1 migration to `iris-d1` for real. `npx wrangler d1 migrations apply iris-d1 --remote` from inside `apps/agent-iris`. iris-03 generated it and deliberately left it unapplied. (**Maaz Bin Asif**, with **Saad Naik** on the apply)
 
 ### Review gates
 
@@ -129,5 +129,13 @@ export async function exportAndPrune(
 - **All four call sites confirmed by grep**, unchanged since iris-10: `pipeline.ts:276` and `:316` for `runPipeline`'s two exits, `resume.ts:204` and `:231` for `resumeRun`'s.
 
 - **One new cast in the app**, the `as unknown as D1Database` at the end of `createTestD1`, documented in the same style as the two that were already there. A Workers binding cannot be constructed outside a Worker; asserting it once is what keeps every call site checked against the real type.
+
+- **The live check ran against a real database, and every number was predicted before it ran.** The migration is applied to the remote `iris-d1` (`iris_runs` present, 0 rows) and to the local one. With `retention_limit` at 2, one real `POST /generate` produced exactly the predicted result: D1 went to **27 rows** and the DO down to **23**, with 0 `running` rows exported and 0 null `design_session_id`. All three runs the prune deleted (`0e420c20`, `23bde030`, `r-noimage`) are still in D1, which is the export-then-prune order holding against something other than a test double.
+
+  A second run, deliberately failing at the motif read, proved idempotency: the 27 rows already there re-exported with **zero** duplicate ids and zero duplicate `(pipeline_id, modality)` pairs, and only the 2 new rows were added. That run also exercised `runPipeline`'s **failure** exit, so two of the four call sites are now verified live rather than only in the suite. Its failed rows were not pruned.
+
+  **The rows landed in local D1, not remote.** `npm run dev` is plain `wrangler dev`, so D1, KV and R2 are local emulations while the `AI` binding still bills for real — the ticket's step 5 assumes remote bindings and would read 0 rows. The remote table was created by the same migration, so the schema is identical; what is not proven is that hosted D1 accepts the same statements. Anyone wanting that must run `wrangler dev --remote`, which also means editing production KV.
+
+- **`r-noimage` was on the prune list, and it is worth looking at.** It is a lone `completed` text row with no image sibling, so `pruneCompletedRuns` reads the whole run as completed and deletes it. That is exactly the hazard ADR-0001's two-rows-per-invocation rule exists to prevent: a half-written invocation looks like a success and gets pruned like one. Here it was leftover debug seed data and deleting it was correct, but it is a live demonstration of why the rule is a rule.
 
 - **`wrangler.jsonc` still carries `TODO(iris-02): replace with the real id`** above `database_id`, and the same above the KV namespace id, but both now hold real-looking UUIDs. That is iris-02's box, not this ticket's, so it is flagged rather than fixed here.
