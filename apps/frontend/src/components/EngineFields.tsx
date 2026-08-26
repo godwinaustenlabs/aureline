@@ -28,6 +28,8 @@ interface Props {
 	/** Offered when a run from the engine upstream is on screen, so the chain can
 	 *  be walked without copying ids by hand. */
 	onCopyFromUpstream: (() => void) | null;
+	/** Fields that were auto-populated from the previous engine's output. */
+	autoFilled?: Partial<Record<keyof EngineFieldValues, boolean>>;
 }
 
 /**
@@ -50,7 +52,20 @@ const VALID_REGIONS: Record<string, readonly string[]> = {
 	dress: ['front', 'back', 'neck', 'hem'],
 };
 
-export function EngineFields({ engine, values, onChange, onCopyFromUpstream }: Props) {
+function FieldLabel({ label, autoFilled }: { label: string; autoFilled?: boolean }) {
+	return (
+		<label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+			{label}
+			{autoFilled && (
+				<span className="auto-filled-badge" title="Auto-filled from previous engine">
+					✦ auto
+				</span>
+			)}
+		</label>
+	);
+}
+
+export function EngineFields({ engine, values, onChange, onCopyFromUpstream, autoFilled = {} }: Props) {
 	if (engine === 'helios') return null;
 
 	const available = VALID_REGIONS[values.garmentType] ?? [];
@@ -89,13 +104,14 @@ export function EngineFields({ engine, values, onChange, onCopyFromUpstream }: P
 
 			{engine === 'iris' && (
 				<div className="field">
-					<label htmlFor="motif-ref">Motif image reference</label>
+					<FieldLabel label="Motif image reference" autoFilled={autoFilled.motifRef} />
 					<input
 						id="motif-ref"
 						type="text"
 						value={values.motifRef}
 						placeholder="http://localhost:8787/images/patterns/….jpg"
 						onChange={(event) => onChange('motifRef', event.target.value)}
+						className={autoFilled.motifRef ? 'auto-filled' : ''}
 					/>
 					<span className="hint">
 						Paste the <code>image_url</code> from a Helios run. A URL or an R2 key — a reference, never bytes.
@@ -106,13 +122,14 @@ export function EngineFields({ engine, values, onChange, onCopyFromUpstream }: P
 			{engine === 'atlas' && (
 				<>
 					<div className="field">
-						<label htmlFor="pattern-ref">Coloured pattern reference</label>
+						<FieldLabel label="Coloured pattern reference" autoFilled={autoFilled.patternRef} />
 						<input
 							id="pattern-ref"
 							type="text"
 							value={values.patternRef}
 							placeholder="http://localhost:8788/images/iris/….jpg"
 							onChange={(event) => onChange('patternRef', event.target.value)}
+							className={autoFilled.patternRef ? 'auto-filled' : ''}
 						/>
 						<span className="hint">
 							The <code>image_url</code> from an Iris run. A URL, or an R2 key under the shared bucket's <code>iris/</code> prefix.
@@ -195,13 +212,14 @@ export function EngineFields({ engine, values, onChange, onCopyFromUpstream }: P
 			)}
 
 			<div className="field">
-				<label htmlFor="design-session">Design session id</label>
+				<FieldLabel label="Design session id" autoFilled={autoFilled.designSessionId} />
 				<input
 					id="design-session"
 					type="text"
 					value={values.designSessionId}
 					placeholder="design-…"
 					onChange={(event) => onChange('designSessionId', event.target.value)}
+					className={autoFilled.designSessionId ? 'auto-filled' : ''}
 				/>
 				<span className="hint">
 					<strong>The design, not this run.</strong> Minted once upstream and carried unchanged through every engine — it is what

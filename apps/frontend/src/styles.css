@@ -1191,3 +1191,30 @@ tr.current td:first-child {
 	opacity: 0.45;
 	cursor: not-allowed;
 }
+
+/* ============================================================ auto-filled fields */
+
+.auto-filled-badge {
+	font-family: var(--mono);
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--free);
+	background: var(--free-wash);
+	border: 1px solid rgba(102, 168, 224, 0.35);
+	border-radius: 2px;
+	padding: 1px 6px;
+	white-space: nowrap;
+}
+
+.auto-filled {
+	border-color: var(--free) !important;
+	box-shadow: 0 0 0 2px var(--free-wash);
+	background: linear-gradient(90deg, var(--free-wash) 0%, var(--recessed) 40%);
+}
+
+.auto-filled:focus {
+	border-color: var(--free) !important;
+	box-shadow: 0 0 0 3px var(--free-wash) !important;
+}

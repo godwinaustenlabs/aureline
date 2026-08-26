@@ -24,6 +24,7 @@ interface Props {
 	onGenerate: () => void;
 	onPing: () => void;
 	connection: { ok: boolean; message: string } | null;
+	autoFilled: Partial<Record<keyof EngineFieldValues, boolean>>;
 }
 
 export function InputPanel({
@@ -45,6 +46,7 @@ export function InputPanel({
 	onGenerate,
 	onPing,
 	connection,
+	autoFilled,
 }: Props) {
 	const normalised = normaliseSessionId(sessionField);
 	const target = effectiveSession(sessionField);
@@ -89,7 +91,7 @@ export function InputPanel({
 				</div>
 				)}
 
-				<EngineFields engine={engine} values={fields} onChange={onField} onCopyFromUpstream={onCopyFromUpstream} />
+				<EngineFields engine={engine} values={fields} onChange={onField} onCopyFromUpstream={onCopyFromUpstream} autoFilled={autoFilled} />
 
 				{validationError && <span className="hint error">{validationError}</span>}
 

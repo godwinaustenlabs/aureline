@@ -72,6 +72,52 @@ export function App() {
 	/** The Durable Object the next request will reach. */
 	const target = effectiveSession(sessionField);
 
+	/** Tracks which fields were auto-filled from the previous engine's output. */
+	const [autoFilled, setAutoFilled] = useState<Partial<Record<keyof EngineFieldValues, boolean>>>({});
+
+	/** Auto-generate design_session_id if not provided when starting from Helios. */
+	const ensureDesignSessionId = useCallback(() => {
+		if (!fields.designSessionId) {
+			const newId = `design-${crypto.randomUUID()}`;
+			setFields((current) => ({ ...current, designSessionId: newId }));
+			return newId;
+		}
+		return fields.designSessionId;
+	}, [fields.designSessionId]);
+
+	/** Auto-advance to next engine after successful generation. */
+	const advanceToNextEngine = useCallback((outcome: CallOutcome) => {
+		if (outcome.kind !== 'run') return;
+		const result = outcome.result;
+		if (engine === 'helios' && result.status === 'completed' && result.image_url) {
+			// Helios → Iris: carry forward pattern URL and design_session_id
+			setFields((current) => ({
+				...current,
+				motifRef: result.image_url!,
+				designSessionId: result.design_session_id ?? current.designSessionId,
+			}));
+			setAutoFilled({ motifRef: true, designSessionId: true });
+			switchEngine('iris');
+		} else if (engine === 'iris' && result.status === 'completed' && result.image_url) {
+			// Iris → Atlas: carry forward colored pattern URL and design_session_id
+			setFields((current) => ({
+				...current,
+				patternRef: result.image_url!,
+				designSessionId: result.design_session_id ?? current.designSessionId,
+			}));
+			setAutoFilled({ patternRef: true, designSessionId: true });
+			switchEngine('atlas');
+		}
+	}, [engine]);
+
+	/** Clear auto-filled markers when user manually edits a field. */
+	const handleFieldChange = useCallback(<K extends keyof EngineFieldValues>(key: K, value: EngineFieldValues[K]) => {
+		setFields((current) => ({ ...current, [key]: value }));
+		if (autoFilled[key]) {
+			setAutoFilled((prev) => ({ ...prev, [key]: false }));
+		}
+	}, [autoFilled]);
+
 	// Read inside callbacks so that editing the URL does not re-fire the history
 	// effect on every keystroke. The Check button refreshes on demand instead.
 	const baseUrlRef = useRef(baseUrl);
@@ -179,6 +225,9 @@ export function App() {
 			// carries. Null when the rows could not be read, which marks the tally
 			// approximate rather than under-reporting it.
 			setSpend((current) => recordCall(current, group?.totalCostUsd ?? null));
+
+			// Auto-advance to next engine in the pipeline
+			advanceToNextEngine(result);
 		}
 
 		setInFlight(null);
@@ -204,6 +253,11 @@ export function App() {
 	}
 
 	function requestGenerate() {
+		// Auto-generate design_session_id if starting from Helios without one
+		if (engine === 'helios') {
+			ensureDesignSessionId();
+		}
+
 		const validated = validateForEngine();
 		if (!validated.ok) {
 			setValidationError(validated.message);
@@ -310,7 +364,7 @@ export function App() {
 					engine={engine}
 					onEngine={switchEngine}
 					fields={fields}
-					onField={(key, value) => setFields((current) => ({ ...current, [key]: value }))}
+					onField={handleFieldChange}
 					onCopyFromUpstream={copyFromUpstream}
 					concept={concept}
 					onConcept={setConcept}
@@ -325,6 +379,7 @@ export function App() {
 					onGenerate={requestGenerate}
 					onPing={() => void checkConnection()}
 					connection={connection}
+					autoFilled={autoFilled}
 				/>
 				<p className="hint">
 					Default base URL for {ENGINE_SPECS[engine].label} is <code>{ENGINE_SPECS[engine].defaultBaseUrl}</code>, remembered per engine. <code>GET /runs</code>, <code>GET /</code> and the image bytes are all
