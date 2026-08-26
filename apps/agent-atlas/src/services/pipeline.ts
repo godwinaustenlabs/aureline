@@ -78,12 +78,26 @@ export async function exportAndPrune(
 	pipeline_id: string,
 	retentionLimit: number,
 ): Promise<void> {
+	// Hoisted so the failure log can say how much is now stuck in the DO.
+	let settled = 0;
+
 	try {
 		const rows = await getSettledRows(db);
+		settled = rows.length;
 		await exportRuns(getD1Db(env.DB), rows);
 		await pruneCompletedRuns(db, retentionLimit);
 	} catch (cause) {
-		console.error(`d1 export failed for ${pipeline_id}:`, describeError(cause));
+		// Swallowed on purpose (ADR-0010), but the consequence is named: prune
+		// only runs after a successful export, so every failure leaves the DO one
+		// invocation larger. A transient failure is picked up by the next run's
+		// export. A persistent one — a misconfigured D1 binding, a missing
+		// migration — means the DO grows without bound and nothing else says so.
+		// If this line repeats with a rising count, that is the signal.
+		console.error(
+			`d1 export failed for ${pipeline_id}: ${describeError(cause)}. ` +
+				`${settled} settled row(s) remain unexported and unpruned in this Durable Object; ` +
+				`it will keep growing until an export succeeds.`,
+		);
 	}
 }
 
