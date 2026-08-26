@@ -1,0 +1,23 @@
+# Local dev secrets for agent-atlas.
+#
+# Copy this file to `.dev.vars` (already gitignored) and fill in real values
+# for `wrangler dev`. For deploy, the equivalent goes in via
+# `wrangler secret put <NAME>`, never in wrangler.jsonc `vars`.
+#
+# AI Gateway auth: when an AI Gateway is called through the Workers AI binding
+# (`env.AI.run(..., { gateway })`, which is how every model call in this repo
+# is made), the request is pre-authenticated by the account the Worker runs
+# under. The `cf-aig-authorization` token / "Authenticated Gateway" setting
+# only applies to calls made directly against the Gateway's REST/Universal
+# endpoint (a plain `fetch` to the gateway URL), which this codebase does not
+# do.
+#
+# Net effect: no secret is required here for the "atlas" AI Gateway to work
+# locally or in production, as long as every call continues to go through the
+# AI binding. If a future ticket adds a direct REST call to the Gateway
+# (bypassing the binding), add the token here as e.g.:
+#   AI_GATEWAY_TOKEN=
+#
+# This file intentionally has no keys today — it exists so the "nothing
+# needed" conclusion is discoverable instead of re-investigated per ticket.
+# Copied from agent-helios, whose version reached the same conclusion first.

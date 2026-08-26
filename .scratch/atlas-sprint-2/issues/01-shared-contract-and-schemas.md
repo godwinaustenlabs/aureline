@@ -141,13 +141,13 @@ export function atlasInputFromIrisResult(
 
 ## Work
 
-- [ ] Create `packages/shared-types/src/v1/atlas.ts` with exactly the shapes above. Copy them rather than retyping from memory. (**Maaz Ahmad**)
-- [ ] Import `IrisResultSchema` from `./iris` and write `atlasInputFromIrisResult` against it (decision 2). If it throws when `image_url` or `p_invoc_id` is null, that is correct: a failed Iris run has nothing for Atlas to place. Say so in the doc comment. (**Maaz Ahmad**)
-- [ ] Add `export * from "./v1/atlas";` to `packages/shared-types/src/index.ts`. Check the barrel's existing form first and match it. This one line is the only shared edit this ticket makes. (**Maaz Ahmad**)
-- [ ] Every schema carries a doc comment in the same voice `messages.ts` uses. A reader should not need the plan open to understand a field. (**Maaz Ahmad**)
-- [ ] Do **not** define a `ColoredPattern` type, or any other local restatement of `IrisResult` (decision 2). (**Maaz Ahmad**)
-- [ ] Do **not** touch `messages.ts` or `iris.ts`. `git diff --stat` should show one new file and one barrel line. (**Maaz Ahmad**)
-- [ ] `npx tsc --noEmit` passes from inside `packages/shared-types`. (**Maaz Ahmad**)
+- [x] Create `packages/shared-types/src/v1/atlas.ts` with exactly the shapes above. Copy them rather than retyping from memory. (**Maaz Ahmad**)
+- [x] Import `IrisResultSchema` from `./iris` and write `atlasInputFromIrisResult` against it (decision 2). If it throws when `image_url` or `p_invoc_id` is null, that is correct: a failed Iris run has nothing for Atlas to place. Say so in the doc comment. (**Maaz Ahmad**)
+- [x] Add `export * from "./v1/atlas";` to `packages/shared-types/src/index.ts`. Check the barrel's existing form first and match it. This one line is the only shared edit this ticket makes. (**Maaz Ahmad**)
+- [x] Every schema carries a doc comment in the same voice `messages.ts` uses. A reader should not need the plan open to understand a field. (**Maaz Ahmad**)
+- [x] Do **not** define a `ColoredPattern` type, or any other local restatement of `IrisResult` (decision 2). (**Maaz Ahmad**)
+- [x] Do **not** touch `messages.ts` or `iris.ts`. `git diff --stat` should show one new file and one barrel line. (**Maaz Ahmad**)
+- [x] `npx tsc --noEmit` passes from inside `packages/shared-types`. (**Maaz Ahmad**)
 
 ### Review gates
 

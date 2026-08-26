@@ -30,11 +30,11 @@
 
 ## Work
 
-- [ ] Create `docs/adr/iris/`, `docs/adr/atlas/` and `docs/adr/shared/`. A `.gitkeep` in each until its first ADR lands. (**Maaz Bin Asif**)
-- [ ] Write `docs/adr/README.md`. Three short paragraphs: what the flat `0001` to `0010` files are and why they stay put, where a new ADR goes and how it is numbered, and the citation format with one real example of each. (**Maaz Bin Asif**)
-- [ ] Do **not** move, rename or renumber any existing file (decision 1). `git status` should show only new files. (**Maaz Bin Asif**)
-- [ ] Update `.scratch/iris-sprint-2/issues/10-failure-handling-and-resume.md`. Its work list currently says to number the ADR `0011` in `docs/adr/`. It becomes `docs/adr/iris/0001-...`, cited as `ADR-IRIS-0001`. This is the only hard-coded new ADR number in any of the three backlogs. (**Maaz Bin Asif**)
-- [ ] Update `.scratch/shared-sprint-2/issues/03-d1-consolidation.md`, decision 7, which says its ADR belongs in `docs/adr/`. It goes in `docs/adr/shared/`. (**Maaz Bin Asif**)
+- [x] Create `docs/adr/iris/`, `docs/adr/atlas/` and `docs/adr/shared/`. A `.gitkeep` in each until its first ADR lands. (**Maaz Bin Asif**)
+- [x] Write `docs/adr/README.md`. Three short paragraphs: what the flat `0001` to `0010` files are and why they stay put, where a new ADR goes and how it is numbered, and the citation format with one real example of each. (**Maaz Bin Asif**)
+- [x] Do **not** move, rename or renumber any existing file (decision 1). `git status` should show only new files. (**Maaz Bin Asif**)
+- [x] Update `.scratch/iris-sprint-2/issues/10-failure-handling-and-resume.md`. Its work list currently says to number the ADR `0011` in `docs/adr/`. It becomes `docs/adr/iris/0001-...`, cited as `ADR-IRIS-0001`. This is the only hard-coded new ADR number in any of the three backlogs. (**Maaz Bin Asif**)
+- [x] Update `.scratch/shared-sprint-2/issues/03-d1-consolidation.md`, decision 7, which says its ADR belongs in `docs/adr/`. It goes in `docs/adr/shared/`. (**Maaz Bin Asif**)
 - [ ] Tell both squads in the group, not just in this ticket. Two people are about to write ADRs and neither will read this file first. (**Maaz Bin Asif**)
 
 ### Review gates

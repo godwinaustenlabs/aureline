@@ -1,0 +1,179 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "agent-atlas",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-27",
+	"migrations": [
+		{
+			"new_sqlite_classes": [
+				"AtlasAgent"
+			],
+			"tag": "v1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "AtlasAgent",
+				"name": "AtlasAgent"
+			}
+		]
+	},
+
+	"ai": {
+		"binding": "AI"
+	},
+
+	/**
+	 * ONE bucket, shared with Iris — unlike D1, which stays separate per engine.
+	 * R2 has no migrations and no schema, so there is nothing two squads writing
+	 * to the same bucket in parallel can actually break, which is the risk that
+	 * keeps the databases apart. See atlas-02 decision 5 and
+	 * .scratch/shared-sprint-2/sprint-2-3-conventions.md.
+	 *
+	 * The binding name stays `PATTERNS`, matching Helios's, so r2.repository.ts
+	 * reads identically in all three engines. What differs is `bucket_name`:
+	 * Iris's and Atlas's point at the identical bucket. Collisions are avoided
+	 * on the KEY instead — every object gets an engine folder prefix,
+	 * `iris/{p_invoc_id}.jpg` and `atlas/{p_invoc_id}.jpg`.
+	 *
+	 * This must be the exact same string as Iris's. A typo silently creates a
+	 * second bucket instead of erroring, and the mistake is invisible until
+	 * somebody goes looking for an image written to the wrong one.
+	 */
+	"r2_buckets": [
+		{
+			"binding": "PATTERNS",
+			"bucket_name": "images-bucket",
+			// "remote": true
+		}
+	],
+
+	/**
+	 * Atlas's own database, never Helios's or Iris's. Pointing `migrations_dir`
+	 * at another engine's directory would apply that engine's migration to this
+	 * database. Consolidation into one database is shared-03, at the end of the
+	 * sprint, once no ticket in either backlog still touches a schema.
+	 */
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "atlas-d1",
+			// TODO(atlas-02): replace with the real id from the Cloudflare
+			// dashboard. Local dev simulates D1 and does not need it; a deploy
+			// against the real API does.
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "../../infrastructure/d1/migrations/atlas"
+		}
+	],
+
+	/**
+	 * Runtime-tunable config. Read once per invocation by src/config.ts; the app
+	 * never writes. Edit the values by hand in the Cloudflare dashboard
+	 * (namespace "ATLAS_CONFIG") and they take effect within about a minute,
+	 * with no redeploy.
+	 *
+	 * Keys: image_model, max_retries, retention_limit, max_resume_attempts.
+	 * FOUR, not Helios's and Iris's five. There is deliberately no `text_model`,
+	 * because Atlas has no text call (ADR-ATLAS-0001). A config key with no
+	 * reader is one somebody will eventually set to fix an output, and nothing
+	 * will happen.
+	 *
+	 * The matching entries in `vars` below are the committed fallbacks used when
+	 * a key is absent or its value is invalid.
+	 *
+	 * ONE namespace, deliberately. There is no `preview_id`: a second store only
+	 * ever meant a value edited in one place silently did nothing in the other.
+	 * `wrangler dev` therefore reads a LOCAL simulated store (empty on a fresh
+	 * clone, so everything falls back to `vars`). To point local dev at the real
+	 * namespace for a session, uncomment `remote` below — that binding alone goes
+	 * remote and the rest of the worker stays local. Remember it is the same
+	 * store production reads.
+	 *
+	 * See docs/adr/0008-runtime-config-resolved-from-kv.md
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "CONFIG",
+			// The namespace's ID, not its dashboard title ("ATLAS_CONFIG").
+			// A title here is accepted by `deploy --dry-run` and by local dev,
+			// and only fails against the real API — the one mistake local dev
+			// cannot catch.
+			// TODO(atlas-02): replace with the real namespace id.
+			"id": "00000000000000000000000000000000",
+			// "remote": true
+		}
+	],
+
+	/**
+	 * `wrangler types` types each var as its LITERAL value rather than as
+	 * `string`. Change one of these and you must re-run `npm run cf-typegen`,
+	 * or TypeScript rejects the new value.
+	 */
+	"vars": {
+		// fallback default — the live value is CONFIG:image_model in KV.
+		// Confirmed image-to-image capable; Iris uses the same model.
+		"IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-9b",
+		// AI Gateway name, created in the dashboard under AI > AI Gateway.
+		// Empty string means direct Workers AI with no logging or caching.
+		// Deliberately NOT in KV: an empty or misspelled id makes the call fall
+		// through to direct Workers AI with no error and no gateway log, so a
+		// dashboard typo would be a silent routing outage rather than a visible
+		// failure. It stays here, where it is reviewed.
+		// See docs/adr/0006-all-model-calls-route-through-ai-gateway.md
+		"AI_GATEWAY_ID": "atlas",
+		// fallback default — the live value is CONFIG:retention_limit in KV
+		"RETENTION_LIMIT": "5",
+		// fallback default — the live value is CONFIG:max_retries in KV.
+		// Read by the shared helpers so all four keys resolve through the same
+		// code path Helios and Iris use. It governs NOTHING on Atlas's image
+		// path: nothing in Atlas auto-retries (ADR-ATLAS-0001, ADR-0009).
+		"MAX_RETRIES": "2",
+		// fallback default — the live value is CONFIG:max_resume_attempts in KV.
+		// How many times one brief may be resumed, so 3 is an original plus three
+		// retries. Atlas has exactly one billable call, so this number is the
+		// ceiling on what a single brief can cost.
+		"MAX_RESUME_ATTEMPTS": "3",
+		// Browser origins allowed to call this worker from JavaScript.
+		// Comma separated, exact origins, no trailing slash. Anything not listed
+		// is refused at preflight.
+		//
+		// Never "*", and deliberately NOT in KV. There is no auth on /generate and
+		// it spends real money per call, so this list is the only thing stopping
+		// any webpage from billing our account. It belongs where it gets reviewed.
+		//
+		// The defaults are the local dev servers the playground is likely to use.
+		// Add the deployed playground's origin here when atlas-10 lands.
+		"ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:4173,http://localhost:3000,http://127.0.0.1:5173"
+	},
+
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	]
+
+	/**
+	 * Static Assets. Not used: the playground is its own app on its own host, so
+	 * it reaches this worker cross-origin and through ALLOWED_ORIGINS above
+	 * rather than being served from here.
+	 * https://developers.cloudflare.com/workers/static-assets/binding/
+	 */
+	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
+	/**
+	 * Smart Placement
+	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 */
+	// "placement": {  "mode": "smart" }
+	/**
+	 * Service Bindings (communicate between multiple Workers)
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
+	 */
+	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+}

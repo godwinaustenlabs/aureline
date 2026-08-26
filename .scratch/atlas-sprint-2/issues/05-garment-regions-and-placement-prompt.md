@@ -82,28 +82,28 @@ export function validRegionsFor(
 
 ### The glossary
 
-- [ ] Write `prompts/garment.glossary.ts` with both records, typed as complete `Record`s (decision 2). (**M. Subhan**)
-- [ ] Give all five garment types a full description. Not "tshirt" but something a model can render, naming the cut and the shape. These five phrases are the entire garment vocabulary of the engine. (**M. Subhan**)
-- [ ] Give all five regions a description in plain words, plus a stable `order` (decision 6). (**M. Subhan**)
-- [ ] Fill in `validRegions` for each garment honestly. A scarf has no sleeve and no neck; a hoodie has all five. Getting this wrong means a request that cannot be satisfied still bills. (**M. Subhan**)
-- [ ] Do **not** add a fallback, a default, or a `??` anywhere in the lookups (decision 3). (**M. Subhan**)
+- [x] Write `prompts/garment.glossary.ts` with both records, typed as complete `Record`s (decision 2). (**M. Subhan**)
+- [x] Give all five garment types a full description. Not "tshirt" but something a model can render, naming the cut and the shape. These five phrases are the entire garment vocabulary of the engine. (**M. Subhan**)
+- [x] Give all five regions a description in plain words, plus a stable `order` (decision 6). (**M. Subhan**)
+- [x] Fill in `validRegions` for each garment honestly. A scarf has no sleeve and no neck; a hoodie has all five. Getting this wrong means a request that cannot be satisfied still bills. (**M. Subhan**)
+- [x] Do **not** add a fallback, a default, or a `??` anywhere in the lookups (decision 3). (**M. Subhan**)
 
 ### The builder
 
-- [ ] Write `prompts/placement.prompt.ts` with `buildPlacementPrompt` and `validRegionsFor`. (**M. Subhan**)
-- [ ] The prompt names the garment in full before it names anything else (decision 4). (**M. Subhan**)
-- [ ] Sort regions by `order` before writing them into the string, never by the order they arrived in (decision 6). (**M. Subhan**)
-- [ ] Translate `coverage` and `pattern_scale` into words, not enum values. `"trim"` becomes something like "as a narrow border", not the word `trim`. (**M. Subhan**)
-- [ ] Say explicitly, in the prompt, that the first supplied image is the pattern to apply and not the thing to redraw, and that the second supplied image is the actual garment to render it onto, not a hint to redraw a similar-looking one. atlas-03 is the ticket that tells you whether this is needed and in what words; if its findings say the model confuses the two images or redraws the pattern, this line is the first thing to fix. (**M. Subhan**)
-- [ ] Export `PLACEMENT_PROMPT_VERSION` and make sure atlas-06 writes it into `AtlasPlacement.prompt_version`. Bump it whenever the wording changes, in the same commit as the wording. (**M. Subhan**)
-- [ ] Do **not** read config, env, or anything else from inside this file (decision 8). (**M. Subhan**)
-- [ ] Do **not** make a model call from this ticket (decision 7). (**M. Subhan**)
+- [x] Write `prompts/placement.prompt.ts` with `buildPlacementPrompt` and `validRegionsFor`. (**M. Subhan**)
+- [x] The prompt names the garment in full before it names anything else (decision 4). (**M. Subhan**)
+- [x] Sort regions by `order` before writing them into the string, never by the order they arrived in (decision 6). (**M. Subhan**)
+- [x] Translate `coverage` and `pattern_scale` into words, not enum values. `"trim"` becomes something like "as a narrow border", not the word `trim`. (**M. Subhan**)
+- [x] Say explicitly, in the prompt, that the first supplied image is the pattern to apply and not the thing to redraw, and that the second supplied image is the actual garment to render it onto, not a hint to redraw a similar-looking one. atlas-03 is the ticket that tells you whether this is needed and in what words; if its findings say the model confuses the two images or redraws the pattern, this line is the first thing to fix. (**M. Subhan**)
+- [x] Export `PLACEMENT_PROMPT_VERSION` and make sure atlas-06 writes it into `AtlasPlacement.prompt_version`. Bump it whenever the wording changes, in the same commit as the wording. (**M. Subhan**)
+- [x] Do **not** read config, env, or anything else from inside this file (decision 8). (**M. Subhan**)
+- [x] Do **not** make a model call from this ticket (decision 7). (**M. Subhan**)
 
 ### Tests
 
-- [ ] Write `prompts/placement.prompt.test.ts`. Cover: the same placement producing a byte-identical string twice; two region arrays in different orders producing the same string; every garment type producing a string that contains its description; and every coverage and scale value producing distinguishable output. (**M. Subhan**)
-- [ ] Test `validRegionsFor` rejects a sleeve on a scarf and keeps everything valid on a hoodie. (**M. Subhan**)
-- [ ] **Prove the compile-error property.** Delete one entry from `GARMENT_GLOSSARY`, run `npx tsc --noEmit`, confirm it fails, then put it back. Note in the pull request that you did this. A type that is supposed to catch something and has never been seen catching it is a type nobody trusts. (**M. Subhan**)
+- [x] Write `prompts/placement.prompt.test.ts`. Cover: the same placement producing a byte-identical string twice; two region arrays in different orders producing the same string; every garment type producing a string that contains its description; and every coverage and scale value producing distinguishable output. (**M. Subhan**)
+- [x] Test `validRegionsFor` rejects a sleeve on a scarf and keeps everything valid on a hoodie. (**M. Subhan**)
+- [x] **Prove the compile-error property.** Delete one entry from `GARMENT_GLOSSARY`, run `npx tsc --noEmit`, confirm it fails, then put it back. Note in the pull request that you did this. A type that is supposed to catch something and has never been seen catching it is a type nobody trusts. (**M. Subhan**)
 
 ### Review gates
 

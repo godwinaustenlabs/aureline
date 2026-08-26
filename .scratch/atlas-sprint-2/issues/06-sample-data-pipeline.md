@@ -84,42 +84,42 @@ This differs from Helios's `patterns/{p_invoc_id}.jpg`, which names what the fil
 
 ### The pipeline
 
-- [ ] Write `services/pipeline.ts` with `runPipeline`, `runImageStage` and `exportAndPrune`. `exportAndPrune` may have a no-op body with a comment pointing at atlas-09, but its call sites must be in place at both the success and the failure exit. (**Maaz Ahmad**)
-- [ ] `runPipeline` never throws. Wrap the whole body, and wrap the cleanup inside the catch in its own try as well, because cleanup is itself a DO write and fails when storage is what broke. A throw from inside a catch escapes the function. (**Maaz Ahmad**)
-- [ ] Track the image cost in a variable declared **outside** the try. The real call bills before the R2 save and the row update, so a failure in either must still report what was spent. Getting this wrong records a spent call as having cost nothing, and it is invisible until it happens in production. (**Maaz Ahmad**)
-- [ ] Track the current stage and prefix it onto `error` on failure (`"validate: ..."`, `"image: ..."`). This is how failures stay attributable without a separate column, which is why atlas-04 has no `error` column. (**Maaz Ahmad**)
-- [ ] Call `validRegionsFor` from atlas-05 before anything bills, and refuse a request whose regions do not exist on the chosen garment. An impossible request must not reach a paid call. (**Maaz Ahmad**)
-- [ ] Build the `AtlasPlacement` from the request plus `PLACEMENT_PROMPT_VERSION`, and write it into the row's `garment_regions` column. That column is the record of what this run actually did. (**Maaz Ahmad**)
-- [ ] Write `request.garment_ref` onto the row's `garment_ref` column (atlas-04) at the same time as `pattern_ref`. Both are `notNull`; a run cannot open a row without either. (**Maaz Ahmad**)
-- [ ] `runImageStage` always leaves a row behind, even when opening the row is itself what failed, via `insertFailedRun`. Atlas has one row per invocation, so without this a failed run leaves no trace at all. (**Maaz Ahmad**)
-- [ ] `runImageStage` accepts a `metadataExtras` argument merged over the row's metadata. `runPipeline` passes nothing; atlas-08's resume passes its `root`, `resumed_from` and `attempt` markers, which have to land on this row because it is the only row there is. (**Maaz Ahmad**)
-- [ ] `runImageStage` returns an outcome object rather than throwing, so the caller decides what a failed image means for its own result. (**Maaz Ahmad**)
+- [x] Write `services/pipeline.ts` with `runPipeline`, `runImageStage` and `exportAndPrune`. `exportAndPrune` may have a no-op body with a comment pointing at atlas-09, but its call sites must be in place at both the success and the failure exit. (**Maaz Ahmad**)
+- [x] `runPipeline` never throws. Wrap the whole body, and wrap the cleanup inside the catch in its own try as well, because cleanup is itself a DO write and fails when storage is what broke. A throw from inside a catch escapes the function. (**Maaz Ahmad**)
+- [x] Track the image cost in a variable declared **outside** the try. The real call bills before the R2 save and the row update, so a failure in either must still report what was spent. Getting this wrong records a spent call as having cost nothing, and it is invisible until it happens in production. (**Maaz Ahmad**)
+- [x] Track the current stage and prefix it onto `error` on failure (`"validate: ..."`, `"image: ..."`). This is how failures stay attributable without a separate column, which is why atlas-04 has no `error` column. (**Maaz Ahmad**)
+- [x] Call `validRegionsFor` from atlas-05 before anything bills, and refuse a request whose regions do not exist on the chosen garment. An impossible request must not reach a paid call. (**Maaz Ahmad**)
+- [x] Build the `AtlasPlacement` from the request plus `PLACEMENT_PROMPT_VERSION`, and write it into the row's `garment_regions` column. That column is the record of what this run actually did. (**Maaz Ahmad**)
+- [x] Write `request.garment_ref` onto the row's `garment_ref` column (atlas-04) at the same time as `pattern_ref`. Both are `notNull`; a run cannot open a row without either. (**Maaz Ahmad**)
+- [x] `runImageStage` always leaves a row behind, even when opening the row is itself what failed, via `insertFailedRun`. Atlas has one row per invocation, so without this a failed run leaves no trace at all. (**Maaz Ahmad**)
+- [x] `runImageStage` accepts a `metadataExtras` argument merged over the row's metadata. `runPipeline` passes nothing; atlas-08's resume passes its `root`, `resumed_from` and `attempt` markers, which have to land on this row because it is the only row there is. (**Maaz Ahmad**)
+- [x] `runImageStage` returns an outcome object rather than throwing, so the caller decides what a failed image means for its own result. (**Maaz Ahmad**)
 
 ### The fakes
 
-- [ ] Write `services/placer.ts` with `placePattern` returning the fixture output image bytes, its dimensions, and `cost_usd: null`. Signature exactly as above, taking both `patternRef` and `garmentRef` even though the fake ignores both. Put a comment at the top naming atlas-07 as the ticket that replaces the body. (**Maaz Ahmad**)
-- [ ] Add `fixtures/sample-garment-output.jpg`: a real, small JPEG of a garment carrying a pattern, standing in for what a real placement call would return. Under about 50KB. It must render in a browser, because that is the only thing distinguishing this from random bytes (decision 8). (**Maaz Ahmad**)
-- [ ] Add `fixtures/sample-garment-reference.jpg`: a separate real, small JPEG of a plain garment, standing in for a caller-uploaded `garment_ref`. It must be a different file from the output fixture, so a test that never actually reads `garment_ref` still fails. (**Maaz Ahmad**)
-- [ ] Add `fixtures/sample-iris-result.ts` holding a complete `IrisResult`, and a test that runs `IrisResultSchema.parse` over it (decision 9). If it fails, fix the fixture, not the schema, unless the schema is genuinely wrong. (**Maaz Ahmad**)
-- [ ] Do **not** put a config flag in the pipeline that switches between fake and real (decision 7). (**Maaz Ahmad**)
+- [x] Write `services/placer.ts` with `placePattern` returning the fixture output image bytes, its dimensions, and `cost_usd: null`. Signature exactly as above, taking both `patternRef` and `garmentRef` even though the fake ignores both. Put a comment at the top naming atlas-07 as the ticket that replaces the body. (**Maaz Ahmad**)
+- [x] Add `fixtures/sample-garment-output.jpg`: a real, small JPEG of a garment carrying a pattern, standing in for what a real placement call would return. Under about 50KB. It must render in a browser, because that is the only thing distinguishing this from random bytes (decision 8). (**Maaz Ahmad**)
+- [x] Add `fixtures/sample-garment-reference.jpg`: a separate real, small JPEG of a plain garment, standing in for a caller-uploaded `garment_ref`. It must be a different file from the output fixture, so a test that never actually reads `garment_ref` still fails. (**Maaz Ahmad**)
+- [x] Add `fixtures/sample-iris-result.ts` holding a complete `IrisResult`, and a test that runs `IrisResultSchema.parse` over it (decision 9). If it fails, fix the fixture, not the schema, unless the schema is genuinely wrong. (**Maaz Ahmad**)
+- [x] Do **not** put a config flag in the pipeline that switches between fake and real (decision 7). (**Maaz Ahmad**)
 
 ### Routes and the agent
 
-- [ ] `agent.ts`: `onRequest` handles `GET /runs` **before** the POST check, because it is the one route with no body and 405-ing it would make the history unreachable. (**Maaz Ahmad**)
-- [ ] `GET /runs` returns `{ runs: [...] }`, an envelope and not a bare array, matching Helios and Iris. It honours an optional `p_invoc_id` query param. Rows go out exactly as stored, not reshaped: whatever reads this is debugging, and the stored shape is the thing worth seeing. (**Maaz Ahmad**)
-- [ ] `POST /generate` validates with `AtlasRequestSchema.safeParse` and returns 400 with `firstIssueMessage` on failure. A malformed request never became an invocation, so there is no `p_invoc_id` to report: this is a transport error, not a run outcome. (**Maaz Ahmad**)
-- [ ] `POST /resume` validates with `AtlasResumeRequestSchema` and returns a clearly-marked not-implemented response pointing at atlas-08. The route exists and validates; its behaviour does not. (**Maaz Ahmad**)
-- [ ] Write `repository/r2.repository.ts` with `saveGarmentImage` and `readGarmentImage`, key format `atlas/{p_invoc_id}.jpg`. All R2 access, both directions, and nothing else in the app touches R2. (**Maaz Ahmad**)
-- [ ] `GET /images/*` in `index.ts` reads through `readGarmentImage` and returns 404 when the key is absent, setting `Content-Type` from the object's stored metadata. (**Maaz Ahmad**)
-- [ ] `image_url` on the result is built as `${origin}/images/${key}`, a servable URL and not raw bytes, matching both other engines. (**Maaz Ahmad**)
-- [ ] `width` and `height` are populated on the result, from the fake for now. (**Maaz Ahmad**)
+- [x] `agent.ts`: `onRequest` handles `GET /runs` **before** the POST check, because it is the one route with no body and 405-ing it would make the history unreachable. (**Maaz Ahmad**)
+- [x] `GET /runs` returns `{ runs: [...] }`, an envelope and not a bare array, matching Helios and Iris. It honours an optional `p_invoc_id` query param. Rows go out exactly as stored, not reshaped: whatever reads this is debugging, and the stored shape is the thing worth seeing. (**Maaz Ahmad**)
+- [x] `POST /generate` validates with `AtlasRequestSchema.safeParse` and returns 400 with `firstIssueMessage` on failure. A malformed request never became an invocation, so there is no `p_invoc_id` to report: this is a transport error, not a run outcome. (**Maaz Ahmad**)
+- [x] `POST /resume` validates with `AtlasResumeRequestSchema` and returns a clearly-marked not-implemented response pointing at atlas-08. The route exists and validates; its behaviour does not. (**Maaz Ahmad**)
+- [x] Write `repository/r2.repository.ts` with `saveGarmentImage` and `readGarmentImage`, key format `atlas/{p_invoc_id}.jpg`. All R2 access, both directions, and nothing else in the app touches R2. (**Maaz Ahmad**)
+- [x] `GET /images/*` in `index.ts` reads through `readGarmentImage` and returns 404 when the key is absent, setting `Content-Type` from the object's stored metadata. (**Maaz Ahmad**)
+- [x] `image_url` on the result is built as `${origin}/images/${key}`, a servable URL and not raw bytes, matching both other engines. (**Maaz Ahmad**)
+- [x] `width` and `height` are populated on the result, from the fake for now. (**Maaz Ahmad**)
 
 ### Tests
 
-- [ ] Write `services/pipeline.test.ts` against `createTestDb` from atlas-04 and a fake `env`. Cover: a full success writing exactly one row; an image failure leaving one `failed` row with the placement still recorded; an impossible region combination refused before the image stage runs; and storage being unavailable still returning a settled `AtlasResult` rather than throwing. (**Maaz Ahmad**)
+- [x] Write `services/pipeline.test.ts` against `createTestDb` from atlas-04 and a fake `env`. Cover: a full success writing exactly one row; an image failure leaving one `failed` row with the placement still recorded; an impossible region combination refused before the image stage runs; and storage being unavailable still returning a settled `AtlasResult` rather than throwing. (**Maaz Ahmad**)
 - [ ] Assert a failed run returns HTTP 200 at the HTTP level, not just that the body says `failed`. Decision 3 is a contract with the frontend and needs a test that would notice it changing. (**Maaz Ahmad**)
-- [ ] The fake `env` must include a fake `AI` binding that **throws if called**. Nothing in this ticket should reach a model, and a test that would silently start billing when atlas-07 lands is worse than no test. (**Maaz Ahmad**)
-- [ ] Assert exactly one row per invocation. A test that counts rows is what would catch someone reintroducing a second row later out of symmetry with Iris. (**Maaz Ahmad**)
+- [x] The fake `env` must include a fake `AI` binding that **throws if called**. Nothing in this ticket should reach a model, and a test that would silently start billing when atlas-07 lands is worse than no test. (**Maaz Ahmad**)
+- [x] Assert exactly one row per invocation. A test that counts rows is what would catch someone reintroducing a second row later out of symmetry with Iris. (**Maaz Ahmad**)
 
 ### Review gates
 

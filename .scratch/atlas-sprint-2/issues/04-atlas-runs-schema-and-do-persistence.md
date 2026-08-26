@@ -101,33 +101,33 @@ The nine repository functions. Helios has twelve; the three Atlas does not need 
 
 ### The ADR
 
-- [ ] Write `docs/adr/atlas/0001-atlas-has-one-image-call-and-one-audit-row.md`. State both halves: why there is no text call (the repeat-style decisions already exist upstream in Helios's params, and macro-placement is a fixed vocabulary rather than an open-ended language problem), and why one call means one row. Name what would have to change for the answer to be different, which is Atlas gaining a second independently-billable call. (**Hashir Rauf**)
-- [ ] Cite ADR-0001 and say plainly that this departs from it, rather than quietly not mentioning it. An ADR that only agrees with its predecessors is not doing its job. (**Hashir Rauf**)
-- [ ] Follow shared-04's directory and citation scheme. If `docs/adr/atlas/` does not exist yet, that ticket has not landed and this box waits on it. (**Hashir Rauf**)
+- [x] Write `docs/adr/atlas/0001-atlas-has-one-image-call-and-one-audit-row.md`. State both halves: why there is no text call (the repeat-style decisions already exist upstream in Helios's params, and macro-placement is a fixed vocabulary rather than an open-ended language problem), and why one call means one row. Name what would have to change for the answer to be different, which is Atlas gaining a second independently-billable call. (**Hashir Rauf**)
+- [x] Cite ADR-0001 and say plainly that this departs from it, rather than quietly not mentioning it. An ADR that only agrees with its predecessors is not doing its job. (**Hashir Rauf**)
+- [x] Follow shared-04's directory and citation scheme. If `docs/adr/atlas/` does not exist yet, that ticket has not landed and this box waits on it. (**Hashir Rauf**)
 
 ### The schema
 
-- [ ] Write `src/db/schema.ts` exactly as above, including the doc comment. (**Hashir Rauf**)
-- [ ] Write `src/db/client.ts` with the two factories, returning distinct types (`AtlasDb`, `AtlasD1Db`). That distinction is what stops the two clients being mixed up. (**Hashir Rauf**)
-- [ ] `npm run db:generate` produces the DO migration into `apps/agent-atlas/drizzle/`. Commit it. It is generated, so never hand-edit it. (**Hashir Rauf**)
-- [ ] `npm run db:generate:d1` produces the D1 migration into `infrastructure/d1/migrations/atlas/`. Commit it. Same schema file, different target, and this is the only reason two drizzle configs exist. (**Hashir Rauf**)
-- [ ] Confirm `agent.ts`'s `onStart` calls `migrate(getDb(this.ctx.storage), migrations)`. It runs on every DO wake-up and that is safe, because drizzle tracks what is applied. atlas-02 stubbed this; point it at the real migrations. (**Hashir Rauf**)
+- [x] Write `src/db/schema.ts` exactly as above, including the doc comment. (**Hashir Rauf**)
+- [x] Write `src/db/client.ts` with the two factories, returning distinct types (`AtlasDb`, `AtlasD1Db`). That distinction is what stops the two clients being mixed up. (**Hashir Rauf**)
+- [x] `npm run db:generate` produces the DO migration into `apps/agent-atlas/drizzle/`. Commit it. It is generated, so never hand-edit it. (**Hashir Rauf**)
+- [x] `npm run db:generate:d1` produces the D1 migration into `infrastructure/d1/migrations/atlas/`. Commit it. Same schema file, different target, and this is the only reason two drizzle configs exist. (**Hashir Rauf**)
+- [x] Confirm `agent.ts`'s `onStart` calls `migrate(getDb(this.ctx.storage), migrations)`. It runs on every DO wake-up and that is safe, because drizzle tracks what is applied. atlas-02 stubbed this; point it at the real migrations. (**Hashir Rauf**)
 
 ### The repository
 
-- [ ] Write `src/repository/do.repository.ts` with the nine functions above. **This file is the only code in Atlas allowed to touch `atlas_runs`.** No service, no route, no agent method runs a query directly. (**Hashir Rauf**)
-- [ ] `failRunningRuns` takes the cost already spent as an argument and writes it onto the row it marks failed. Do not have it write null. The image call bills before the R2 save and the row update, so a failure after the call has to record money that already left the account. (**Hashir Rauf**)
-- [ ] `insertFailedRun` exists for the case where opening the row is what failed. Without it a failed invocation leaves no row at all, which is worse than Iris's version of this problem: there, a lone completed text row at least looks like something happened. Read the comment above `runImageStage` in `apps/agent-helios/src/services/pipeline.ts` for the original reasoning. (**Hashir Rauf**)
-- [ ] `getSettledRows` returns only `completed` and `failed`. A `running` row must never reach the export (ADR-0010), and filtering here rather than at the call site means one place to get it right. (**Hashir Rauf**)
-- [ ] `pruneCompletedRuns` takes the retention limit as an argument. Do not read `env.RETENTION_LIMIT` inside the repository and do not hardcode 5. Config reading belongs in `config.ts` only. This exact box was unticked at review in Helios's sprint. (**Hashir Rauf**)
-- [ ] `countResumeAttempts` counts by `root` from `model_metadata`, not by `resumed_from`. atlas-08 depends on this and the reason is in that ticket; getting it wrong here makes the spend cap unbounded. (**Hashir Rauf**)
-- [ ] Do **not** write `startTextRun`, `completeTextRun` or `insertResumedTextRun`. If a later ticket seems to need one, that is a signal Atlas grew a text call, which contradicts ADR-ATLAS-0001 and is a group discussion rather than a quiet addition. (**Hashir Rauf**)
+- [x] Write `src/repository/do.repository.ts` with the nine functions above. **This file is the only code in Atlas allowed to touch `atlas_runs`.** No service, no route, no agent method runs a query directly. (**Hashir Rauf**)
+- [x] `failRunningRuns` takes the cost already spent as an argument and writes it onto the row it marks failed. Do not have it write null. The image call bills before the R2 save and the row update, so a failure after the call has to record money that already left the account. (**Hashir Rauf**)
+- [x] `insertFailedRun` exists for the case where opening the row is what failed. Without it a failed invocation leaves no row at all, which is worse than Iris's version of this problem: there, a lone completed text row at least looks like something happened. Read the comment above `runImageStage` in `apps/agent-helios/src/services/pipeline.ts` for the original reasoning. (**Hashir Rauf**)
+- [x] `getSettledRows` returns only `completed` and `failed`. A `running` row must never reach the export (ADR-0010), and filtering here rather than at the call site means one place to get it right. (**Hashir Rauf**)
+- [x] `pruneCompletedRuns` takes the retention limit as an argument. Do not read `env.RETENTION_LIMIT` inside the repository and do not hardcode 5. Config reading belongs in `config.ts` only. This exact box was unticked at review in Helios's sprint. (**Hashir Rauf**)
+- [x] `countResumeAttempts` counts by `root` from `model_metadata`, not by `resumed_from`. atlas-08 depends on this and the reason is in that ticket; getting it wrong here makes the spend cap unbounded. (**Hashir Rauf**)
+- [x] Do **not** write `startTextRun`, `completeTextRun` or `insertResumedTextRun`. If a later ticket seems to need one, that is a signal Atlas grew a text call, which contradicts ADR-ATLAS-0001 and is a group discussion rather than a quiet addition. (**Hashir Rauf**)
 
 ### Tests
 
-- [ ] Write `src/repository/test-db.ts` exporting `createTestDb` and `insertRow`, with the `CREATE TABLE atlas_runs` statement carrying all twelve columns, `garment_ref` included. Keep the `node:sqlite` plus `sqlite-proxy` approach and reproduce the comment explaining why it is not a native module. (**Hashir Rauf**)
-- [ ] Write `src/repository/do.repository.test.ts` covering at minimum: the pruning boundary (exactly N kept, N+1 pruned), `getSettledRows` excluding `running`, a failed run never being pruned, `failRunningRuns` writing the cost through, `countResumeAttempts` counting by root, and `getRun` returning undefined for an unknown id. Adapt Helios's suite rather than writing from scratch. (**Hashir Rauf**)
-- [ ] `npx tsc --noEmit` and `npm test` both clean from inside `apps/agent-atlas`. (**Hashir Rauf**)
+- [x] Write `src/repository/test-db.ts` exporting `createTestDb` and `insertRow`, with the `CREATE TABLE atlas_runs` statement carrying all twelve columns, `garment_ref` included. Keep the `node:sqlite` plus `sqlite-proxy` approach and reproduce the comment explaining why it is not a native module. (**Hashir Rauf**)
+- [x] Write `src/repository/do.repository.test.ts` covering at minimum: the pruning boundary (exactly N kept, N+1 pruned), `getSettledRows` excluding `running`, a failed run never being pruned, `failRunningRuns` writing the cost through, `countResumeAttempts` counting by root, and `getRun` returning undefined for an unknown id. Adapt Helios's suite rather than writing from scratch. (**Hashir Rauf**)
+- [x] `npx tsc --noEmit` and `npm test` both clean from inside `apps/agent-atlas`. (**Hashir Rauf**)
 
 ### Review gates
 

@@ -93,30 +93,30 @@
 
 ### The workspace
 
-- [ ] Create `apps/agent-atlas/` with `package.json`, `tsconfig.json`, `wrangler.jsonc`, `drizzle.config.ts`, `drizzle.d1.config.ts`, `.dev.vars.example`, `.prettierrc`, `.editorconfig`, `.gitignore`. Copy each from `apps/agent-helios` (or from `apps/agent-iris` if iris-02 has landed) and change only what has to change. Write none of them from scratch. (**Saad Naik**)
-- [ ] `package.json` carries the same scripts, with `config:pull` looping over Atlas's **four** keys, not five. Read the `"//kv"` comment in `apps/agent-helios/package.json` before touching the kv scripts and reproduce it: it explains why they must be npm scripts and not bare `wrangler` commands. (**Saad Naik**)
-- [ ] `.dev.vars.example` has **no keys in it**, same as Helios's. It is a written record that no secret is needed, because the AI Gateway is reached through the pre-authenticated `AI` binding. Do not put an API token in it. (**Saad Naik**)
-- [ ] `.gitignore` covers `.dev.vars*` and `.wrangler/`. (**Saad Naik**)
-- [ ] Add `config:pull:atlas` to the **root** `package.json`, matching `config:pull:helios` and `config:pull:iris`. This is the only root-level edit this ticket makes. (**Saad Naik**)
+- [x] Create `apps/agent-atlas/` with `package.json`, `tsconfig.json`, `wrangler.jsonc`, `drizzle.config.ts`, `drizzle.d1.config.ts`, `.dev.vars.example`, `.prettierrc`, `.editorconfig`, `.gitignore`. Copy each from `apps/agent-helios` (or from `apps/agent-iris` if iris-02 has landed) and change only what has to change. Write none of them from scratch. (**Saad Naik**)
+- [x] `package.json` carries the same scripts, with `config:pull` looping over Atlas's **four** keys, not five. Read the `"//kv"` comment in `apps/agent-helios/package.json` before touching the kv scripts and reproduce it: it explains why they must be npm scripts and not bare `wrangler` commands. (**Saad Naik**)
+- [x] `.dev.vars.example` has **no keys in it**, same as Helios's. It is a written record that no secret is needed, because the AI Gateway is reached through the pre-authenticated `AI` binding. Do not put an API token in it. (**Saad Naik**)
+- [x] `.gitignore` covers `.dev.vars*` and `.wrangler/`. (**Saad Naik**)
+- [x] Add `config:pull:atlas` to the **root** `package.json`, matching `config:pull:helios` and `config:pull:iris`. This is the only root-level edit this ticket makes. (**Saad Naik**)
 - [ ] If adding a dependency changes `package-lock.json` and it conflicts with the Iris squad's, **delete the file and regenerate it**, never hand-resolve it. Two new apps landing in the same week is exactly the sprint 1 break, and the rule is in `docs/sprint-2-3-conventions.md`. Use `npm install --package-lock-only`, never a bare `npm i`. (**Saad Naik**)
 
 ### `index.ts`, `agent.ts`, `cors.ts`, `utils.ts`
 
-- [ ] `src/index.ts`: routing only, exporting `AtlasAgent` from `./agent` because wrangler's `class_name` binding resolves through the main module. Route `/generate`, `/resume` and `/runs` to the DO through `getAgentByName` with the same `scopeKey` rule Helios uses, route `/images/*` to R2, and answer `/` with `"Atlas Agent is running"`. Copy `apps/agent-helios/src/index.ts` including its `scopeKey` and `normaliseSession` helpers and the comment about why a GET reads the query string. No orchestration here. (**Saad Naik**)
-- [ ] The entry route is `/generate`, matching Helios and Iris. Not `/place`, not `/repeat`. The playground switches engines by base URL, so identical route names mean it needs no per-engine code (iris-05, decision 9). (**Saad Naik**)
-- [ ] `src/cors.ts`: copy `apps/agent-helios/src/cors.ts` and its test as-is. Do not rewrite it and do not simplify it. Preflight has to be handled ahead of routing, because `/generate` would reject a preflight's empty body long before CORS got a say. (**Saad Naik**)
-- [ ] `src/utils.ts`: copy `firstIssueMessage` and `describeError` from `apps/agent-helios/src/utils.ts`. Nineteen lines, and every later ticket uses both. (**Saad Naik**)
-- [ ] `src/agent.ts`: the `AtlasAgent` Durable Object with `onStart` running migrations and `onRequest` as its own inline controller. Stub the three routes with a clearly-marked not-implemented response; atlas-06 fills them in. Do not add a controller layer. (**Saad Naik**)
-- [ ] Do **not** create `src/types.ts` (decision 9). (**Saad Naik**)
+- [x] `src/index.ts`: routing only, exporting `AtlasAgent` from `./agent` because wrangler's `class_name` binding resolves through the main module. Route `/generate`, `/resume` and `/runs` to the DO through `getAgentByName` with the same `scopeKey` rule Helios uses, route `/images/*` to R2, and answer `/` with `"Atlas Agent is running"`. Copy `apps/agent-helios/src/index.ts` including its `scopeKey` and `normaliseSession` helpers and the comment about why a GET reads the query string. No orchestration here. (**Saad Naik**)
+- [x] The entry route is `/generate`, matching Helios and Iris. Not `/place`, not `/repeat`. The playground switches engines by base URL, so identical route names mean it needs no per-engine code (iris-05, decision 9). (**Saad Naik**)
+- [x] `src/cors.ts`: copy `apps/agent-helios/src/cors.ts` and its test as-is. Do not rewrite it and do not simplify it. Preflight has to be handled ahead of routing, because `/generate` would reject a preflight's empty body long before CORS got a say. (**Saad Naik**)
+- [x] `src/utils.ts`: copy `firstIssueMessage` and `describeError` from `apps/agent-helios/src/utils.ts`. Nineteen lines, and every later ticket uses both. (**Saad Naik**)
+- [x] `src/agent.ts`: the `AtlasAgent` Durable Object with `onStart` running migrations and `onRequest` as its own inline controller. Stub the three routes with a clearly-marked not-implemented response; atlas-06 fills them in. Do not add a controller layer. (**Saad Naik**)
+- [x] Do **not** create `src/types.ts` (decision 9). (**Saad Naik**)
 
 ### `config.ts`
 
-- [ ] `src/config.ts` is the only file in the app that reads KV. Port Helios's `FIELDS` table, `resolveConfig` and `describeConfig`, with the four keys above and **no `text_model`** (decision 7). (**Saad Naik**)
-- [ ] It **never throws.** Every failure path falls back to a `wrangler.jsonc` var and warns. Read the comment on `numberFromVar` in Helios's version: `resolveConfig` runs outside the pipeline's try block, so a throw here escapes as an opaque 500 instead of a settled result. (**Saad Naik**)
-- [ ] Config is read **once per invocation**, not at DO wake-up and not cached at module level (ADR-0008). (**Saad Naik**)
-- [ ] `AI_GATEWAY_ID` is deliberately absent from `FIELDS`. Reproduce the comment in Helios's version saying why. (**Saad Naik**)
-- [ ] Port `config.test.ts`, covering every fallback path including KV throwing outright and a broken var. Adapt Helios's dozen-plus cases rather than writing new ones, and delete the `text_model` cases rather than leaving them testing a key that does not exist. (**Saad Naik**)
-- [ ] Run `npm run cf-typegen` and commit `worker-configuration.d.ts`. `wrangler types` types each var as its **literal** value, not as `string`, so anyone changing a var later must regenerate or TypeScript rejects the new value. Say this in a comment near the vars. (**Saad Naik**)
+- [x] `src/config.ts` is the only file in the app that reads KV. Port Helios's `FIELDS` table, `resolveConfig` and `describeConfig`, with the four keys above and **no `text_model`** (decision 7). (**Saad Naik**)
+- [x] It **never throws.** Every failure path falls back to a `wrangler.jsonc` var and warns. Read the comment on `numberFromVar` in Helios's version: `resolveConfig` runs outside the pipeline's try block, so a throw here escapes as an opaque 500 instead of a settled result. (**Saad Naik**)
+- [x] Config is read **once per invocation**, not at DO wake-up and not cached at module level (ADR-0008). (**Saad Naik**)
+- [x] `AI_GATEWAY_ID` is deliberately absent from `FIELDS`. Reproduce the comment in Helios's version saying why. (**Saad Naik**)
+- [x] Port `config.test.ts`, covering every fallback path including KV throwing outright and a broken var. Adapt Helios's dozen-plus cases rather than writing new ones, and delete the `text_model` cases rather than leaving them testing a key that does not exist. (**Saad Naik**)
+- [x] Run `npm run cf-typegen` and commit `worker-configuration.d.ts`. `wrangler types` types each var as its **literal** value, not as `string`, so anyone changing a var later must regenerate or TypeScript rejects the new value. Say this in a comment near the vars. (**Saad Naik**)
 
 ### Review gates
 
