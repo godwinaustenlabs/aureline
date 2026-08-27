@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
 import { createTestDb } from "../repository/test-db";
@@ -404,12 +404,28 @@ describe("resumeRun refusals", () => {
 	});
 
 	it("refuses when the stored params no longer satisfy the schema", async () => {
-		await startTextRun(db as never, "stale-params", "a concept", { model: TEXT_MODEL });
+		// Seeded as a whole resumable run, not just a text row: the params check
+		// sits behind the missing-image-row guard, so a lone text row would be
+		// refused for the wrong reason and this test would pass without ever
+		// reaching the branch it names.
+		await seedImageFailure(db, "stale-params");
 		await db
 			.update(heliosRuns)
-			.set({ status: "completed", plannerParams: { motif_type: "fan" } })
-			.where(eq(heliosRuns.pInvocId, "stale-params"));
+			.set({ plannerParams: { motif_type: "fan" } })
+			.where(and(eq(heliosRuns.pInvocId, "stale-params"), eq(heliosRuns.modality, "text")));
 
 		await expectRefusal("stale-params", /no longer valid/i);
+	});
+
+	it("refuses a run whose image row was never written, rather than billing a new image", async () => {
+		// ADR-0001 says an invocation is two rows. A lone completed text row means
+		// a write was lost — `runImageStage`'s rescue insert is itself inside a
+		// catch. Before this guard existed both status checks used `?.`, so
+		// `undefined` matched neither and execution fell through into the image
+		// call (AGENTS.md §7).
+		await startTextRun(db as never, "no-image-row", "a concept", { model: TEXT_MODEL });
+		await completeTextRun(db as never, "no-image-row", PARAMS, { model: TEXT_MODEL }, 0.001);
+
+		await expectRefusal("no-image-row", /no image row at all/i);
 	});
 });

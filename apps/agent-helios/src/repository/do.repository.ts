@@ -34,7 +34,17 @@ export async function startTextRun(
 	});
 }
 
-/** Settles the text row with the params the planner actually produced. */
+/**
+ * Settles the text row with the params the planner actually produced.
+ *
+ * **Throws when there is no text row to settle.** A bare `UPDATE ... WHERE`
+ * against a row that is not there matches nothing and resolves exactly as if it
+ * had worked, so "the insert never landed" and "the insert landed fine" were
+ * indistinguishable from here. That is not theoretical at this call site: if
+ * `startTextRun` silently no-opped, the pipeline would carry on into the image
+ * stage and return `status: "completed"` for an invocation with no rows in the
+ * table at all (AGENTS.md §7).
+ */
 export async function completeTextRun(
 	db: HeliosDb,
 	pInvocId: string,
@@ -42,6 +52,15 @@ export async function completeTextRun(
 	modelMetadata: ModelMetadata,
 	costUsd: number | null,
 ): Promise<void> {
+	const [existing] = await db
+		.select({ id: heliosRuns.id })
+		.from(heliosRuns)
+		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
+
+	if (!existing) {
+		throw new Error(`no text row to settle for p_invoc_id ${pInvocId}`);
+	}
+
 	await db
 		.update(heliosRuns)
 		.set({
@@ -135,13 +154,30 @@ export async function insertFailedImageRun(
 	});
 }
 
-/** Settles the image row with its R2 key and cost. */
+/**
+ * Settles the image row with its R2 key and cost.
+ *
+ * **Throws when there is no image row to settle.** The caller has just paid for
+ * an image by the time this runs, and an `UPDATE` that matches zero rows reports
+ * success just as loudly as one that matched. Silently failing to record a spent
+ * image is how a run that cost real money ends up looking like it never happened
+ * (AGENTS.md §7).
+ */
 export async function completeImageRun(
 	db: HeliosDb,
 	pInvocId: string,
 	imageR2Key: string,
 	costUsd: number | null,
 ): Promise<void> {
+	const [existing] = await db
+		.select({ id: heliosRuns.id })
+		.from(heliosRuns)
+		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "image")));
+
+	if (!existing) {
+		throw new Error(`no image row to settle for p_invoc_id ${pInvocId}`);
+	}
+
 	await db
 		.update(heliosRuns)
 		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
@@ -183,6 +219,14 @@ export async function failRunningRuns(
  *
  * Filtered in memory rather than through `json_extract` because a DO holds a
  * handful of rows and Drizzle hands the JSON column back already parsed.
+ *
+ * **A row whose metadata cannot be read counts toward the cap.** It used to be
+ * filtered out by a `?.root === root` that treated unreadable and "belongs to a
+ * different chain" as the same answer, so a row that failed to serialise made
+ * the cap generous rather than strict. This is a spend limit, so the unknown
+ * case errs toward refusing rather than toward another image call (AGENTS.md §7).
+ * An original run is a different matter and is still not counted: its metadata
+ * is perfectly readable and simply carries no `root`.
  */
 export async function countResumeAttempts(db: HeliosDb, root: string): Promise<number> {
 	const rows = await db
@@ -190,7 +234,16 @@ export async function countResumeAttempts(db: HeliosDb, root: string): Promise<n
 		.from(heliosRuns)
 		.where(eq(heliosRuns.modality, "image"));
 
-	return rows.filter((row) => (row.modelMetadata as { root?: unknown } | null)?.root === root).length;
+	return rows.filter((row) => {
+		const metadata = row.modelMetadata;
+
+		if (metadata === null || typeof metadata !== "object") {
+			console.warn(`resume cap: image row with unreadable model_metadata counted toward root ${root}`);
+			return true;
+		}
+
+		return (metadata as { root?: unknown }).root === root;
+	}).length;
 }
 
 /** The rows for one invocation. */

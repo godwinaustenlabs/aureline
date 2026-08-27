@@ -44,8 +44,8 @@ export async function resumeRun(
 ): Promise<ResumeOutcome> {
 	const rows = await getRunRows(db, p_invoc_id);
 
-	// Four separate refusals rather than one generic error. They mean genuinely
-	// different things to whoever is holding the failed run, and the third is the
+	// Five separate refusals rather than one generic error. They mean genuinely
+	// different things to whoever is holding the failed run, and the fourth is the
 	// one standing between us and paying for the same image twice.
 	if (rows.length === 0) {
 		return { ok: false, reason: `no run ${p_invoc_id} in this session` };
@@ -60,10 +60,31 @@ export async function resumeRun(
 	}
 
 	const imageRow = rows.find((row) => row.modality === "image");
-	if (imageRow?.status === "completed") {
+
+	// `undefined` before any status is read, because the two guards below use
+	// `?.` and a missing row matches neither of them. Without this, a run with no
+	// image row falls straight through into generating and billing another image
+	// (AGENTS.md §7) — the shape that produced the runaway loop this engine is
+	// named for in that section.
+	//
+	// It is reachable: `runImageStage` rescues a never-opened image row with
+	// `insertFailedImageRun`, and that rescue has its own catch. When it is the
+	// thing that broke, the invocation settles as a lone text row and ADR-0001's
+	// two-rows invariant has been violated by a lost write. Refusing is the
+	// cheap answer — the run's own metadata is what a resume reads its attempt
+	// count from, and that is exactly what cannot be trusted here.
+	if (!imageRow) {
+		return {
+			ok: false,
+			reason:
+				"this run has no image row at all, so its record is incomplete and resuming would build on a run whose state was never written. Send a new POST /generate",
+		};
+	}
+
+	if (imageRow.status === "completed") {
 		return { ok: false, reason: "this run already has an image, and resuming would generate and charge for a second one" };
 	}
-	if (imageRow?.status === "running") {
+	if (imageRow.status === "running") {
 		return { ok: false, reason: "this run's image is still being generated. Wait for it to settle before resuming" };
 	}
 

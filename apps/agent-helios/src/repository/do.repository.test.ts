@@ -1,8 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
-import { getRunRows, getSettledRows, listRuns, pruneCompletedRuns } from "./do.repository";
+import { completeImageRun, completeTextRun, getRunRows, getSettledRows, listRuns, pruneCompletedRuns } from "./do.repository";
 import { exportRuns, readRun } from "./d1.repository";
 import { createTestDb, insertRow } from "./test-db";
+
+/** A complete, valid `HeliosParams`. Whole rather than a partial plus a cast,
+ * so a contract change breaks this file instead of slipping past it. */
+const PARAMS: HeliosParams = {
+	motif_type: "art deco fan",
+	repeat_type: "half-drop",
+	scale: "medium",
+	density: "balanced",
+	line_weight: "medium",
+	texture_technique: "hatching",
+	contrast_level: "high",
+	style: "traditional",
+};
 
 describe("pruneCompletedRuns", () => {
 	let db: ReturnType<typeof createTestDb>;
@@ -230,5 +244,42 @@ describe("readRun", () => {
 		const d1Db = createTestDb();
 
 		expect(await readRun(d1Db as never, "never-happened")).toEqual([]);
+	});
+});
+
+describe("settling a row that is not there", () => {
+	// A bare `UPDATE ... WHERE` against a missing row matches nothing and resolves
+	// exactly as if it had worked. These two prove the difference is now audible
+	// rather than silent (AGENTS.md §7).
+
+	it("completeImageRun throws rather than reporting success for a spent image", async () => {
+		const db = createTestDb();
+		// A text row for the same run, so this is specifically "no *image* row"
+		// and not "no rows at all" — the latter would pass against a weaker guard.
+		await insertRow(db, { pInvocId: "run-a", modality: "text" });
+
+		await expect(
+			completeImageRun(db as never, "run-a", "patterns/run-a.jpg", 0.0009),
+		).rejects.toThrow(/no image row to settle for p_invoc_id run-a/);
+	});
+
+	it("completeTextRun throws rather than letting a pipeline report success with no rows", async () => {
+		const db = createTestDb();
+		await insertRow(db, { pInvocId: "run-a", modality: "image" });
+
+		await expect(
+			completeTextRun(db as never, "run-a", PARAMS, { model: "a-model" }, 0.001),
+		).rejects.toThrow(/no text row to settle for p_invoc_id run-a/);
+	});
+
+	it("still settles normally when the row is there", async () => {
+		const db = createTestDb();
+		await insertRow(db, { pInvocId: "run-a", modality: "image", status: "running" });
+
+		await completeImageRun(db as never, "run-a", "patterns/run-a.jpg", 0.0009);
+
+		const [row] = await getRunRows(db as never, "run-a");
+		expect(row.status).toBe("completed");
+		expect(row.imageR2Key).toBe("patterns/run-a.jpg");
 	});
 });
