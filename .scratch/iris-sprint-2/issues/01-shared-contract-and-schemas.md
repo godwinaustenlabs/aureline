@@ -121,12 +121,12 @@ export type IrisResult = z.infer<typeof IrisResultSchema>;
 
 ## Work
 
-- [ ] Create `packages/shared-types/src/v1/iris.ts` with exactly the shapes above. Copy them, do not retype them from memory. (**Maaz Bin Asif**)
-- [ ] Add `export * from "./v1/iris";` to `packages/shared-types/src/index.ts`. Check the existing barrel first: it is a single `export *` today, so match whatever form is already there. (**Maaz Bin Asif**)
-- [ ] Every schema above carries a doc comment explaining what the field is for, in the same voice `messages.ts` uses. A reader should not have to open the plan to understand a field. This is not optional polish: `messages.ts`'s comments are the reason nobody had to ask what `session_id` meant in sprint 1. (**Maaz Bin Asif**)
-- [ ] Do **not** add a `color` field, hint, or anything similar to `HeliosParamsSchema`. ADR-0002 rejected even a temporary color hint. If it feels like Helios should pass something, that is a sign the concept text should carry it instead. (**Maaz Bin Asif**)
-- [ ] Do **not** touch `messages.ts` at all. `git diff --stat` on this ticket should show two files: one new, one barrel line. (**Maaz Bin Asif**)
-- [ ] `npx tsc --noEmit` passes from inside `packages/shared-types`. (**Maaz Bin Asif**)
+- [x] Create `packages/shared-types/src/v1/iris.ts` with exactly the shapes above. Copy them, do not retype them from memory. (**Maaz Bin Asif**)
+- [x] Add `export * from "./v1/iris";` to `packages/shared-types/src/index.ts`. Check the existing barrel first: it is a single `export *` today, so match whatever form is already there. (**Maaz Bin Asif**)
+- [x] Every schema above carries a doc comment explaining what the field is for, in the same voice `messages.ts` uses. A reader should not have to open the plan to understand a field. This is not optional polish: `messages.ts`'s comments are the reason nobody had to ask what `session_id` meant in sprint 1. (**Maaz Bin Asif**)
+- [x] Do **not** add a `color` field, hint, or anything similar to `HeliosParamsSchema`. ADR-0002 rejected even a temporary color hint. If it feels like Helios should pass something, that is a sign the concept text should carry it instead. (**Maaz Bin Asif**)
+- [x] Do **not** touch `messages.ts` at all. `git diff --stat` on this ticket should show two files: one new, one barrel line. (**Maaz Bin Asif**)
+- [x] `npx tsc --noEmit` passes from inside `packages/shared-types`. (**Maaz Bin Asif**)
 
 ### Review gates
 

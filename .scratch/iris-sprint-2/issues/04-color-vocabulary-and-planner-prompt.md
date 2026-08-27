@@ -68,34 +68,34 @@ export function buildColorPrompt(params: IrisParams): string;
 
 ### The vocabulary
 
-- [ ] Go through the 28 proposed names and hex values in the plan and decide, for each one, whether it stays, changes value, or goes. Write the outcome into this ticket as a table so the decision is recorded, not just applied. (**M. Subhan**)
-- [ ] Write `prompts/color.glossary.ts` with `COLOR_GLOSSARY` typed as a full `Record<ColorName, ...>` per decision 3. (**M. Subhan**)
-- [ ] Each gloss is one line and describes the color as a person working with cloth would, not as a hex code restated in words. `"a warm off-white, barely tinted, reads as unbleached cloth"` is useful to a model; `"a very light yellowish white"` is not. (**M. Subhan**)
-- [ ] Write the three smaller glossaries for `harmony`, `saturation` and `background_treatment`, each typed against the matching schema field. `background_treatment` matters more than it looks: without a decision there, the image call has to guess what happens to the space around the motif, and that guess shows up as visibly inconsistent output between runs. (**M. Subhan**)
-- [ ] If a name changes or is added, update `ColorNameSchema` in `packages/shared-types/src/v1/iris.ts` in the same change. This is the only edit this ticket makes outside `apps/agent-iris`. Keep it to that one enum. (**M. Subhan**)
+- [x] Go through the 28 proposed names and hex values in the plan and decide, for each one, whether it stays, changes value, or goes. Write the outcome into this ticket as a table so the decision is recorded, not just applied. (**M. Subhan**) — see "Vocabulary as shipped" below. **Note the ticket's own error:** it says 28, but `ColorNameSchema` has carried **30** names since iris-01. Every one stays, none changed value, none went, and nothing was added — so `ColorNameSchema` needed no edit, which is why no `packages/` file appears in the diff.
+- [x] Write `prompts/color.glossary.ts` with `COLOR_GLOSSARY` typed as a full `Record<ColorName, ...>` per decision 3. (**M. Subhan**)
+- [x] Each gloss is one line and describes the color as a person working with cloth would, not as a hex code restated in words. `"a warm off-white, barely tinted, reads as unbleached cloth"` is useful to a model; `"a very light yellowish white"` is not. (**M. Subhan**)
+- [x] Write the three smaller glossaries for `harmony`, `saturation` and `background_treatment`, each typed against the matching schema field. `background_treatment` matters more than it looks: without a decision there, the image call has to guess what happens to the space around the motif, and that guess shows up as visibly inconsistent output between runs. (**M. Subhan**)
+- [x] If a name changes or is added, update `ColorNameSchema` in `packages/shared-types/src/v1/iris.ts` in the same change. This is the only edit this ticket makes outside `apps/agent-iris`. Keep it to that one enum. (**M. Subhan**) — not needed; no name changed or was added.
 
 ### The planner prompt
 
-- [ ] Write `buildPlannerSystemPrompt`, embedding the glossaries so the model sees what each enum value means rather than just its name. Follow how Helios's system prompt lays this out. (**M. Subhan**)
-- [ ] Write the no-color fallback rule into the system prompt as explicit instructions, per decision 4. Include at least one worked example inside the prompt: a concept with no color and the palette that should come back for it. (**M. Subhan**)
-- [ ] Write into the prompt that the model must ignore shape, line weight, texture, contrast, repeat and scale, because another engine handles those (decision 6). (**M. Subhan**)
-- [ ] Do **not** refer to an image, a motif, or "the pattern shown" anywhere in this prompt. The model receives text only (decision 5). (**M. Subhan**)
-- [ ] Export `IRIS_PLANNER_PROMPT_VERSION`. (**M. Subhan**)
+- [x] Write `buildPlannerSystemPrompt`, embedding the glossaries so the model sees what each enum value means rather than just its name. Follow how Helios's system prompt lays this out. (**M. Subhan**)
+- [x] Write the no-color fallback rule into the system prompt as explicit instructions, per decision 4. Include at least one worked example inside the prompt: a concept with no color and the palette that should come back for it. (**M. Subhan**)
+- [x] Write into the prompt that the model must ignore shape, line weight, texture, contrast, repeat and scale, because another engine handles those (decision 6). (**M. Subhan**)
+- [x] Do **not** refer to an image, a motif, or "the pattern shown" anywhere in this prompt. The model receives text only (decision 5). (**M. Subhan**)
+- [x] Export `IRIS_PLANNER_PROMPT_VERSION`. (**M. Subhan**)
 
 ### `buildColorPrompt`
 
-- [ ] Write `prompts/color.prompt.ts` with `buildColorPrompt(params: IrisParams): string`. Deterministic, no randomness, no default-filling beyond what the optional fields require. (**M. Subhan**)
-- [ ] Resolve each color name to its hex from `COLOR_GLOSSARY` and put **both** the name and the hex in the sentence. A name alone is ambiguous to the model; a hex alone gives it nothing to reason with. (**M. Subhan**)
-- [ ] Handle the optional fields: a palette with only `primary_color` must still produce a complete, sensible sentence, not one with a dangling "and". (**M. Subhan**)
-- [ ] Clause order matters, because these models weight early clauses more heavily. Put the palette first and the mood last. Helios's `buildImagePrompt` has a comment saying exactly this; reproduce the reasoning. (**M. Subhan**)
-- [ ] Export `IRIS_COLOR_PROMPT_VERSION`. (**M. Subhan**)
-- [ ] Write `prompts/index.ts` as a barrel, matching Helios's. (**M. Subhan**)
+- [x] Write `prompts/color.prompt.ts` with `buildColorPrompt(params: IrisParams): string`. Deterministic, no randomness, no default-filling beyond what the optional fields require. (**M. Subhan**)
+- [x] Resolve each color name to its hex from `COLOR_GLOSSARY` and put **both** the name and the hex in the sentence. A name alone is ambiguous to the model; a hex alone gives it nothing to reason with. (**M. Subhan**)
+- [x] Handle the optional fields: a palette with only `primary_color` must still produce a complete, sensible sentence, not one with a dangling "and". (**M. Subhan**)
+- [x] Clause order matters, because these models weight early clauses more heavily. Put the palette first and the mood last. Helios's `buildImagePrompt` has a comment saying exactly this; reproduce the reasoning. (**M. Subhan**)
+- [x] Export `IRIS_COLOR_PROMPT_VERSION`. (**M. Subhan**)
+- [x] Write `prompts/index.ts` as a barrel, matching Helios's. (**M. Subhan**)
 
 ### Testing, without a model
 
-- [ ] Write a table-driven test asserting `buildColorPrompt` is deterministic: the same params produce the same string, twice. (**M. Subhan**)
-- [ ] Assert every `ColorName` resolves to a hex, by iterating `ColorNameSchema.options` against `COLOR_GLOSSARY`. This catches a name added to the enum but not the glossary even if the type system somehow lets it through. (**M. Subhan**)
-- [ ] Write a scratch harness at `tests/run-concept-iris.ts` that prints what `buildColorPrompt` produces for hand-typed params, so prompt changes can be eyeballed without a model call. `tests/run-concept.ts` is the existing example. It is a harness, not a test. (**M. Subhan**)
+- [x] Write a table-driven test asserting `buildColorPrompt` is deterministic: the same params produce the same string, twice. (**Maaz Bin Asif**, added after review) — `color.prompt.test.ts`, three complete `IrisParams` cases (three colours / two / primary-only), each validated through `IrisParamsSchema` so the fixtures cannot drift from the real shape.
+- [x] Assert every `ColorName` resolves to a hex, by iterating `ColorNameSchema.options` against `COLOR_GLOSSARY`. This catches a name added to the enum but not the glossary even if the type system somehow lets it through. (**Maaz Bin Asif**, added after review) — `color.glossary.test.ts`, both directions, plus hex format, non-empty gloss, no two names sharing a hex, and the same coverage check for the three enum glossaries.
+- [x] Write a scratch harness at `tests/run-concept-iris.ts` that prints what `buildColorPrompt` produces for hand-typed params, so prompt changes can be eyeballed without a model call. `tests/run-concept.ts` is the existing example. It is a harness, not a test. (**M. Subhan**) — harness written by Subhan; its locally-redeclared `IrisParams` replaced with the real imported type by **Maaz Bin Asif**, since the local copy was an all-`string` shape that let an invalid colour name compile.
 
 ### Review gates
 
@@ -104,6 +104,25 @@ export function buildColorPrompt(params: IrisParams): string;
 - [ ] Confirm `buildColorPrompt` contains no `if` that makes a design choice. A branch handling an absent optional field is fine; a branch that picks a color is not. (**Maaz Bin Asif**)
 - [ ] Confirm the only file touched outside `apps/agent-iris` is the `ColorNameSchema` enum. (**Maaz Bin Asif**)
 - [ ] Nobody approves their own work. (**both**)
+
+## Vocabulary as shipped
+
+30 names, not the 28 this ticket assumed. `ColorNameSchema` has carried all 30 since iris-01, so nothing in `packages/shared-types` was touched: every name stays, no hex changed, none removed, none added. What iris-04 added is the hex and gloss for each.
+
+`color.glossary.test.ts` asserts this list and `ColorNameSchema.options` stay in step in both directions, and that no two names share a hex.
+
+| Group | Names |
+|---|---|
+| Neutrals (8) | `ivory` `cream` `sand` `taupe` `stone` `charcoal` `black` `white` |
+| Reds / pinks (6) | `crimson` `rust` `terracotta` `coral` `blush` `rose` |
+| Yellows / golds (4) | `amber` `gold` `mustard` `ochre` |
+| Greens (5) | `olive` `sage` `emerald` `forest_green` `mint` |
+| Blues / teals (5) | `teal` `turquoise` `cobalt` `navy` `indigo` |
+| Purples / deep reds (2) | `plum` `burgundy` |
+
+Hex values are in `apps/agent-iris/src/prompts/color.glossary.ts`; they are not duplicated here, because decision 2 says one source of truth for what a name means.
+
+**For the reviewer's product sign-off:** decision 9 flags `rust`/`terracotta` as already close. The other pairs worth a second look are `stone`/`taupe` and `amber`/`gold`/`ochre` — all defensible, but they are the ones a model is most likely to blur.
 
 ## Verification without burning budget
 
