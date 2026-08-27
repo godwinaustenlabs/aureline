@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { corsHeaders, parseAllowedOrigins, preflight, withCors } from "./cors";
+import { corsHeaders, parseAllowedOrigins, preflight, withCors, type CorsEnv } from "./cors";
 
 const ALLOWED = "http://localhost:5173";
 
-/** An `env` carrying only the var CORS reads. */
-function fakeEnv(allowedOrigins: string | undefined = ALLOWED) {
-	return { ALLOWED_ORIGINS: allowedOrigins } as unknown as Env;
+/**
+ * An `env` carrying only the var CORS reads.
+ *
+ * No cast: `corsHeaders` and friends take `CorsEnv`, which is exactly this one
+ * optional var. The cast that used to be here was hiding the fact that the
+ * signature asked for a whole Workers `Env` it never touched (AGENTS.md §4).
+ */
+function fakeEnv(allowedOrigins: string | undefined = ALLOWED): CorsEnv {
+	return { ALLOWED_ORIGINS: allowedOrigins };
 }
 
 /** A request from a browser page on `origin`, or from something that sent none. */

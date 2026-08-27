@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { CONFIG_CACHE_TTL, describeConfig, resolveConfig } from "./config";
+import { CONFIG_CACHE_TTL, describeConfig, resolveConfig, type ConfigEnv } from "./config";
 
 const VARS = {
 	PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
@@ -23,11 +23,20 @@ const ALL_KEYS = [
  * Only the fields `resolveConfig` touches are present, so this needs no Worker
  * runtime and makes no model calls.
  */
-function fakeEnv(kv: Record<string, string> = {}, overrides: Partial<typeof VARS> = {}) {
+function fakeEnv(
+	kv: Record<string, string> = {},
+	// `string | undefined`, not `Partial<typeof VARS>`: a var missing from
+	// wrangler.jsonc is a real runtime case that `numberFromVar` warns and falls
+	// back on, and the test for it used to force `undefined` through with a cast.
+	overrides: Partial<Record<keyof typeof VARS, string | undefined>> = {},
+) {
 	const get = vi.fn(async (keys: string[]) => {
 		return new Map(keys.map((key) => [key, kv[key] ?? null]));
 	});
-	return { env: { ...VARS, ...overrides, CONFIG: { get } } as unknown as Env, get };
+	// No cast: `resolveConfig` takes `ConfigEnv`, which is the five vars and the
+	// one KV method this file actually reads (AGENTS.md §4).
+	const env: ConfigEnv = { ...VARS, ...overrides, CONFIG: { get } };
+	return { env, get };
 }
 
 /** The shape actually stored in the HELIOS_CONFIG namespace. */
@@ -210,7 +219,7 @@ describe("resolveConfig", () => {
 	it("never throws, even when a numeric var is missing from wrangler.jsonc", async () => {
 		// Unreachable while `wrangler types` keeps the var typed, but this runs
 		// outside runPipeline's try block, so a throw here would escape as a 500.
-		const { env } = fakeEnv({}, { MAX_RETRIES: undefined as unknown as string });
+		const { env } = fakeEnv({}, { MAX_RETRIES: undefined });
 
 		const config = await resolveConfig(env);
 

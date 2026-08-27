@@ -46,13 +46,22 @@ export function parseAllowedOrigins(configured: string | undefined): string[] {
 }
 
 /**
+ * The single var this file reads. Structural rather than `Pick<Env,
+ * "ALLOWED_ORIGINS">` because `wrangler types` generates that var as a literal
+ * type — the exact origin list currently in `wrangler.jsonc` — so a `Pick` could
+ * only ever be satisfied by that one string, and every test would need a cast to
+ * build one. The real `Env` satisfies this, since its literal is a `string`.
+ */
+export type CorsEnv = { ALLOWED_ORIGINS?: string };
+
+/**
  * The CORS headers belonging on a response to this request.
  *
  * `Vary: Origin` rides on every answer, including the ones carrying no
  * permission at all. The reply differs by origin, and a cache that missed that
  * would hand one origin's approval to another.
  */
-export function corsHeaders(request: Request, env: Env): Record<string, string> {
+export function corsHeaders(request: Request, env: CorsEnv): Record<string, string> {
 	const headers: Record<string, string> = { Vary: "Origin" };
 
 	const origin = request.headers.get("Origin");
@@ -73,7 +82,7 @@ export function corsHeaders(request: Request, env: Env): Record<string, string> 
  * but the developer staring at the network tab can, and "origin not allowed" is
  * a much shorter afternoon than a bare CORS failure.
  */
-export function preflight(request: Request, env: Env): Response {
+export function preflight(request: Request, env: CorsEnv): Response {
 	const headers = corsHeaders(request, env);
 
 	if (!headers["Access-Control-Allow-Origin"]) {
@@ -95,7 +104,7 @@ export function preflight(request: Request, env: Env): Response {
  * A WebSocket upgrade is handed back untouched. Its 101 cannot be reconstructed,
  * and the handshake is not something CORS governs anyway.
  */
-export function withCors(response: Response, request: Request, env: Env): Response {
+export function withCors(response: Response, request: Request, env: CorsEnv): Response {
 	if (response.status === 101 || response.webSocket) {
 		return response;
 	}
