@@ -12,6 +12,8 @@ The image row duplicates `planner_params` from its text sibling rather than requ
 
 The exception is a run that failed before the planner produced anything: those have a single `failed` text row and no image row, because there was never any image work to record.
 
+**Iris differs here, deliberately, and a cross-engine query has to know it.** `iris_runs` guarantees the pair even on a planner failure: `runPipeline`'s catch opens a `failed` image row when the run never reached the image stage, so Iris's equivalent of the row above is `failed`/`failed`. Helios's shape is the older decision (helios-sprint-1 ticket 07, decision 4) and it is not a bug — but it does mean **counting rows and dividing by two is wrong on `helios_runs` and right on `iris_runs`**. Group by the run id instead, in both.
+
 `p_invoc_id` is a UUID minted per invocation in `services/pipeline.ts`. It is **not** a Durable Object identifier: one DO accumulates many invocations. The DO is chosen by `session_id`, which never appears in this table.
 
 ## Status, and which combinations are legal
