@@ -28,7 +28,7 @@ The AI Gateway log metadata key changes from `p_invoc_id` to `pipeline_id`. Log 
 
 **The regenerated `0000` is a bare `CREATE TABLE` with no `IF NOT EXISTS`.** Anything that applied the old `0000` throws "table already exists" on the new one, and for a Durable Object that happens inside `onStart`, so existing sessions break rather than merely losing history. Before the next deploy, a human must:
 
-1. Delete the `agent-helios` Worker, which takes the `HeliosAgent` namespace and all its DO storage with it. R2 (`helios-bucket`) and KV survive untouched, and there are no secrets to restore.
+1. Delete the `agent-helios` Worker, which takes the `HeliosAgent` namespace and all its DO storage with it. The R2 bucket and the KV namespace are separate resources and survive untouched, and there are no secrets to restore. Note the bucket is now `images-bucket`, shared with Iris and Atlas, so deleting objects from it is not a Helios-only decision.
 2. Against `helios-d1`, `DROP TABLE helios_runs;` and delete the `0000_abnormal_sway` row from `d1_migrations`. Without the second statement wrangler still believes the old migration is applied and skips the new one.
 3. Redeploy, then apply the D1 migration.
 
