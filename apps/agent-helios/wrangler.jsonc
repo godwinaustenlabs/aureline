@@ -31,7 +31,7 @@
 	"r2_buckets": [
 		{
 			"binding": "PATTERNS",
-			"bucket_name": "helios-bucket",
+			"bucket_name": "images-bucket",
 			// "remote": true
 		}
 	],
