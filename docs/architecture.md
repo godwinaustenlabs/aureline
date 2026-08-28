@@ -64,7 +64,7 @@ Two consequences that surprise people:
 
 **One object per session, not per request and not one global one.** One global object would be a bottleneck and would grow forever. One per invocation would be useless, because Durable Objects cannot be listed or enumerated, so you could never find yesterday's run again. Per session is the middle that works, and it is what makes a retention rule meaningful: one object accumulates a session's history, so there is something to retain. [ADR-0005](adr/0005-helios-do-instance-scoped-to-session.md) has the full argument.
 
-**The invocation id is not the object id.** Every call to `/generate` mints its own `p_invoc_id` in `pipeline.ts`. Two requests with the same `session_id` land on the same object and still get different invocation ids. The object is *where* the work happened, the invocation id is *which* work it was.
+**The invocation id is not the object id.** Every call to `/generate` mints its own `pipeline_id` in `pipeline.ts`. Two requests with the same `session_id` land on the same object and still get different invocation ids. The object is *where* the work happened, the invocation id is *which* work it was.
 
 ## Four stores, and why four
 
@@ -83,7 +83,7 @@ An engine writes to four different places, and each exists because the others ca
 
 Those two use **the same schema definition**, in `src/db/schema.ts`, compiled to two sets of migrations. See [database.md](database.md) for how that works and why export always runs before pruning ([ADR-0010](adr/0010-export-the-whole-do-before-pruning-any-of-it.md)).
 
-**R2 holds the bytes.** Images are large and binary and do not belong in a row. The database stores the key, `patterns/{p_invoc_id}.jpg`, and the key is derived from the invocation id rather than random, so you can always find an object again without a lookup.
+**R2 holds the bytes.** Images are large and binary and do not belong in a row. The database stores the key, `patterns/{pipeline_id}.jpg`, and the key is derived from the invocation id rather than random, so you can always find an object again without a lookup.
 
 **KV holds config.** Which model, how many retries, how many runs to keep. These are policy, not code, and putting them in KV means changing one from the Cloudflare dashboard takes effect in about a minute with no deploy. `resolveConfig()` reads all of them in one batched call per invocation and **never throws**: a missing key, a bad value, or KV itself being down all fall back to the committed value in `wrangler.jsonc` and log a warning. A typo in a dashboard must not be able to take the service down. [ADR-0008](adr/0008-runtime-config-resolved-from-kv.md).
 

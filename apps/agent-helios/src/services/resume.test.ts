@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
 import { createTestDb } from "../repository/test-db";
+import type { HeliosDb } from "../db/client";
+import { fakeEnv as sharedEnv, GATEWAY_COST_USD } from "./test-env";
+import { SAMPLE_DESIGN_SESSION_ID } from "../fixtures/sample-params";
 import {
 	completeImageRun,
 	completeTextRun,
@@ -20,9 +23,10 @@ vi.mock("../repository/do.repository", async (importOriginal) => {
 	return { ...actual, startImageRun: vi.fn(actual.startImageRun) };
 });
 
-type TestDb = ReturnType<typeof createTestDb>;
+type TestDb = HeliosDb;
 
 const TEXT_MODEL = "@cf/openai/gpt-oss-120b";
+const DESIGN_SESSION_ID = SAMPLE_DESIGN_SESSION_ID;
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
 const PARAMS: HeliosParams = {
@@ -40,57 +44,19 @@ const PARAMS: HeliosParams = {
 const BASE64 = "SGVsbG8=";
 
 /**
- * Enough of a D1 binding for `exportAndPrune` to run without touching a real
- * database. What export actually writes is ticket 07's suite; here it only has
- * to not throw and not fill the output with swallowed-error noise.
- */
-function fakeD1(): D1Database {
-	const statement = {
-		bind: () => statement,
-		all: async () => ({ results: [], success: true, meta: {} }),
-		run: async () => ({ results: [], success: true, meta: {} }),
-		first: async () => null,
-		raw: async () => [],
-	};
-
-	return { prepare: () => statement, batch: async () => [] } as unknown as D1Database;
-}
-
-/**
- * A fake `Env` covering everything `resumeRun` reaches: KV for the config, the
- * `AI` binding and its gateway log, R2 and D1. No Worker runtime and no model
- * call, so the suite costs nothing.
+ * A fake `Env` for the resume suite, from the shared definition.
  *
- * Same shape as `imageGenerator.test.ts`'s helper, widened because resume
- * touches storage as well as the model.
+ * The local one this replaces built its own no-op D1 that answered every query
+ * with nothing, so an export could not be asserted on at all. The shared fake's
+ * `DB` really writes, and `d1` comes back so a test can read what landed.
  */
 function fakeEnv(overrides: { imageError?: Error; maxResumeAttempts?: number } = {}) {
-	const run = vi.fn(async (_model: string) => {
-		if (overrides.imageError) throw overrides.imageError;
-		return { image: BASE64 };
+	const { env, run, patternsPut, d1 } = sharedEnv({
+		image: overrides.imageError,
+		maxResumeAttempts: overrides.maxResumeAttempts,
 	});
 
-	const getLog = vi.fn().mockResolvedValue({ cost: 0.0009 });
-	const put = vi.fn().mockResolvedValue(undefined);
-
-	const env = {
-		AI: { run, gateway: () => ({ getLog }), aiGatewayLogId: "log-1" },
-		AI_GATEWAY_ID: "helios",
-		PATTERNS: { put },
-		DB: fakeD1(),
-		CONFIG: {
-			get: async () =>
-				new Map([
-					["text_model", TEXT_MODEL],
-					["image_model", IMAGE_MODEL],
-					["max_retries", "2"],
-					["retention_limit", "5"],
-					["max_resume_attempts", String(overrides.maxResumeAttempts ?? 3)],
-				]),
-		},
-	} as unknown as Env;
-
-	return { env, run, put };
+	return { env, run, put: patternsPut, d1 };
 }
 
 /** Every model name the fake `AI` binding was called with, in order. */
@@ -103,17 +69,28 @@ function modelsCalled(run: ReturnType<typeof fakeEnv>["run"]): string[] {
  * the pipeline uses: the planner succeeded and settled its row, then the image
  * call failed.
  */
-async function seedImageFailure(db: TestDb, pInvocId: string) {
-	await startTextRun(db as never, pInvocId, "art deco fan motif", { model: TEXT_MODEL });
-	await completeTextRun(db as never, pInvocId, PARAMS, { model: TEXT_MODEL, usage: { neurons: 95 } }, 0.001);
-	await startImageRun(db as never, pInvocId, "art deco fan motif", PARAMS, { model: IMAGE_MODEL, steps: 4 });
-	await failRunningRuns(db as never, pInvocId, null);
+async function seedImageFailure(db: TestDb, pipelineId: string) {
+	await startTextRun(db, {
+		pipelineId,
+		designSessionId: DESIGN_SESSION_ID,
+		userPrompt: "art deco fan motif",
+		modelMetadata: { model: TEXT_MODEL },
+	});
+	await completeTextRun(db, pipelineId, PARAMS, { model: TEXT_MODEL, usage: { neurons: 95 } }, 0.001);
+	await startImageRun(db, {
+		pipelineId,
+		designSessionId: DESIGN_SESSION_ID,
+		userPrompt: "art deco fan motif",
+		plannerParams: PARAMS,
+		modelMetadata: { model: IMAGE_MODEL, steps: 4 },
+	});
+	await failRunningRuns(db, pipelineId, null);
 }
 
 /** The rows of one invocation, keyed by modality. */
-async function rowsOf(db: TestDb, pInvocId: string) {
+async function rowsOf(db: TestDb, pipelineId: string) {
 	const rows = await db.select().from(heliosRuns);
-	const mine = rows.filter((row) => row.pInvocId === pInvocId);
+	const mine = rows.filter((row) => row.pipelineId === pipelineId);
 
 	return {
 		all: mine,
@@ -138,24 +115,47 @@ describe("resumeRun", () => {
 		await seedImageFailure(db, "original-1");
 	});
 
-	it("mints a new p_invoc_id and reuses the stored params exactly", async () => {
+	it("mints a new pipeline_id and reuses the stored params exactly", async () => {
 		const { env } = fakeEnv();
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) return;
-		expect(outcome.result.p_invoc_id).not.toBe("original-1");
+		expect(outcome.result.pipeline_id).not.toBe("original-1");
 		expect(outcome.result.status).toBe("completed");
 		expect(outcome.result.params).toEqual(PARAMS);
-		expect(outcome.result.image_url).toBe(`http://localhost/images/patterns/${outcome.result.p_invoc_id}.jpg`);
-		expect(outcome.result.cost_usd).toBe(0.0009);
+		expect(outcome.result.image_url).toBe(`http://localhost/images/patterns/${outcome.result.pipeline_id}.jpg`);
+		expect(outcome.result.cost_usd).toBe(GATEWAY_COST_USD);
+	});
+
+	it("inherits design_session_id from the run it resumes, rather than minting a new one", async () => {
+		// A retry belongs to the design it is retrying. If a resume minted its own,
+		// every failed-then-recovered design would split into two in D1, which is
+		// precisely the tracing the column exists to provide (AGENTS.md §3).
+		const { env } = fakeEnv();
+
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected a run");
+
+		expect(outcome.result.design_session_id).toBe(DESIGN_SESSION_ID);
+
+		// On the rows too, not just in the response, since the rows are what any
+		// later query reads.
+		const { all } = await rowsOf(db, outcome.result.pipeline_id);
+		expect(all.every((row) => row.designSessionId === DESIGN_SESSION_ID)).toBe(true);
+
+		// And the original is untouched and still part of the same design, so the
+		// two attempts group together while staying separately identifiable.
+		const original = await rowsOf(db, "original-1");
+		expect(original.all.every((row) => row.designSessionId === DESIGN_SESSION_ID)).toBe(true);
+		expect(outcome.result.pipeline_id).not.toBe("original-1");
 	});
 
 	it("never calls the planner, which is the entire point of the route", async () => {
 		const { env, run } = fakeEnv();
 
-		await resumeRun(db as never, "original-1", env, "http://localhost");
+		await resumeRun(db, "original-1", env, "http://localhost");
 
 		expect(modelsCalled(run)).toEqual([IMAGE_MODEL]);
 	});
@@ -163,10 +163,10 @@ describe("resumeRun", () => {
 	it("writes two rows, the text one already settled with no cost and the planner marked skipped", async () => {
 		const { env } = fakeEnv();
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 		if (!outcome.ok) throw new Error("expected a run");
 
-		const { all, text, image } = await rowsOf(db, outcome.result.p_invoc_id);
+		const { all, text, image } = await rowsOf(db, outcome.result.pipeline_id);
 		expect(all).toHaveLength(2);
 
 		// ADR-0001: one invocation is two rows. A resume that opened only an image
@@ -180,19 +180,19 @@ describe("resumeRun", () => {
 		expect(metadata(text).model).toBe(TEXT_MODEL);
 
 		expect(image?.status).toBe("completed");
-		expect(image?.imageR2Key).toBe(`patterns/${outcome.result.p_invoc_id}.jpg`);
-		expect(image?.costUsd).toBe(0.0009);
+		expect(image?.imageR2Key).toBe(`patterns/${outcome.result.pipeline_id}.jpg`);
+		expect(image?.costUsd).toBe(GATEWAY_COST_USD);
 	});
 
 	it("marks both rows with resumed_from and attempt, and neither row of an original", async () => {
 		const { env } = fakeEnv();
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 		if (!outcome.ok) throw new Error("expected a run");
 
 		// The image row is the one carrying cost_usd and image_r2_key, so it is what
 		// every cost query reads. Marking only the text row leaves the real gap open.
-		const resumed = await rowsOf(db, outcome.result.p_invoc_id);
+		const resumed = await rowsOf(db, outcome.result.pipeline_id);
 		for (const row of resumed.all) {
 			expect(metadata(row).resumed_from).toBe("original-1");
 			expect(metadata(row).attempt).toBe(2);
@@ -209,7 +209,7 @@ describe("resumeRun", () => {
 		const { env } = fakeEnv();
 		const before = await rowsOf(db, "original-1");
 
-		await resumeRun(db as never, "original-1", env, "http://localhost");
+		await resumeRun(db, "original-1", env, "http://localhost");
 
 		const after = await rowsOf(db, "original-1");
 		expect(after.all).toEqual(before.all);
@@ -223,19 +223,19 @@ describe("resumeRun", () => {
 		const { env, put } = fakeEnv();
 		put.mockRejectedValue(new Error("r2 unavailable"));
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 		if (!outcome.ok) throw new Error("expected a run, not a refusal");
 
 		expect(outcome.result.status).toBe("failed");
 		expect(outcome.result.params).toEqual(PARAMS);
 		expect(outcome.result.image_url).toBeNull();
-		expect(outcome.result.cost_usd).toBe(0.0009);
+		expect(outcome.result.cost_usd).toBe(GATEWAY_COST_USD);
 		expect(outcome.result.error).toMatch(/^image: /);
 
-		const { text, image } = await rowsOf(db, outcome.result.p_invoc_id);
+		const { text, image } = await rowsOf(db, outcome.result.pipeline_id);
 		expect(text?.status).toBe("completed");
 		expect(image?.status).toBe("failed");
-		expect(image?.costUsd).toBe(0.0009);
+		expect(image?.costUsd).toBe(GATEWAY_COST_USD);
 	});
 
 	it("still records a failed image row when opening that row is what failed", async () => {
@@ -245,13 +245,13 @@ describe("resumeRun", () => {
 		const { env } = fakeEnv();
 		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 		if (!outcome.ok) throw new Error("expected a run, not a refusal");
 
 		expect(outcome.result.status).toBe("failed");
 		expect(outcome.result.error).toMatch(/^image: /);
 
-		const { all, text, image } = await rowsOf(db, outcome.result.p_invoc_id);
+		const { all, text, image } = await rowsOf(db, outcome.result.pipeline_id);
 		expect(all).toHaveLength(2);
 		expect(text?.status).toBe("completed");
 		expect(image?.status).toBe("failed");
@@ -260,17 +260,17 @@ describe("resumeRun", () => {
 		expect(metadata(image).resumed_from).toBe("original-1");
 		expect(metadata(image).attempt).toBe(2);
 
-		await pruneCompletedRuns(db as never, 0);
-		expect((await rowsOf(db, outcome.result.p_invoc_id)).all).toHaveLength(2);
+		await pruneCompletedRuns(db, 0);
+		expect((await rowsOf(db, outcome.result.pipeline_id)).all).toHaveLength(2);
 	});
 
 	it("stamps the original's id as the root on both rows", async () => {
 		const { env } = fakeEnv();
 
-		const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 		if (!outcome.ok) throw new Error("expected a run");
 
-		const { all } = await rowsOf(db, outcome.result.p_invoc_id);
+		const { all } = await rowsOf(db, outcome.result.pipeline_id);
 		for (const row of all) {
 			expect(metadata(row).root).toBe("original-1");
 		}
@@ -280,16 +280,16 @@ describe("resumeRun", () => {
 		// `attempt` is depth and `resumed_from` is the immediate parent, so neither
 		// answers "how much has this concept cost". `root` does, in one query.
 		const failing = fakeEnv({ imageError: new Error("model unavailable") });
-		const first = await resumeRun(db as never, "original-1", failing.env, "http://localhost");
+		const first = await resumeRun(db, "original-1", failing.env, "http://localhost");
 		if (!first.ok) throw new Error("expected a run");
 
-		const second = await resumeRun(db as never, first.result.p_invoc_id, fakeEnv().env, "http://localhost");
+		const second = await resumeRun(db, first.result.pipeline_id, fakeEnv().env, "http://localhost");
 		if (!second.ok) throw new Error("expected a run");
 
-		const secondRows = await rowsOf(db, second.result.p_invoc_id);
+		const secondRows = await rowsOf(db, second.result.pipeline_id);
 		for (const row of secondRows.all) {
 			expect(metadata(row).root).toBe("original-1");
-			expect(metadata(row).resumed_from).toBe(first.result.p_invoc_id);
+			expect(metadata(row).resumed_from).toBe(first.result.pipeline_id);
 			expect(metadata(row).attempt).toBe(3);
 		}
 	});
@@ -299,13 +299,13 @@ describe("resumeRun", () => {
 		// this, a client looping on a failed run bills an image every time.
 		for (let i = 0; i < 2; i++) {
 			const { env } = fakeEnv({ imageError: new Error("model unavailable"), maxResumeAttempts: 2 });
-			const outcome = await resumeRun(db as never, "original-1", env, "http://localhost");
+			const outcome = await resumeRun(db, "original-1", env, "http://localhost");
 			if (!outcome.ok) throw new Error(`resume ${i + 1} should have been allowed`);
 			expect(outcome.result.status).toBe("failed");
 		}
 
 		const { env, run } = fakeEnv({ maxResumeAttempts: 2 });
-		const refused = await resumeRun(db as never, "original-1", env, "http://localhost");
+		const refused = await resumeRun(db, "original-1", env, "http://localhost");
 
 		expect(refused.ok).toBe(false);
 		if (refused.ok) return;
@@ -319,7 +319,7 @@ describe("resumeRun", () => {
 		// A cap on `attempt` would never fire; a cap on root does.
 		for (let i = 0; i < 2; i++) {
 			const { env } = fakeEnv({ imageError: new Error("model unavailable"), maxResumeAttempts: 2 });
-			await resumeRun(db as never, "original-1", env, "http://localhost");
+			await resumeRun(db, "original-1", env, "http://localhost");
 		}
 
 		const attempts = (await db.select().from(heliosRuns))
@@ -327,32 +327,32 @@ describe("resumeRun", () => {
 			.map((row) => (row.modelMetadata as { attempt?: number }).attempt);
 		expect(attempts.filter((a) => a === 2)).toHaveLength(2);
 
-		const refused = await resumeRun(db as never, "original-1", fakeEnv({ maxResumeAttempts: 2 }).env, "http://localhost");
+		const refused = await resumeRun(db, "original-1", fakeEnv({ maxResumeAttempts: 2 }).env, "http://localhost");
 		expect(refused.ok).toBe(false);
 	});
 
 	it("can itself be resumed, chaining attempt and pointing at the immediate parent", async () => {
 		const failing = fakeEnv({ imageError: new Error("model unavailable") });
-		const first = await resumeRun(db as never, "original-1", failing.env, "http://localhost");
+		const first = await resumeRun(db, "original-1", failing.env, "http://localhost");
 		if (!first.ok) throw new Error("expected a run");
 		expect(first.result.status).toBe("failed");
 
 		const working = fakeEnv();
-		const second = await resumeRun(db as never, first.result.p_invoc_id, working.env, "http://localhost");
+		const second = await resumeRun(db, first.result.pipeline_id, working.env, "http://localhost");
 		if (!second.ok) throw new Error("expected a run");
 		expect(second.result.status).toBe("completed");
 
-		const secondRows = await rowsOf(db, second.result.p_invoc_id);
+		const secondRows = await rowsOf(db, second.result.pipeline_id);
 		for (const row of secondRows.all) {
 			expect(metadata(row).attempt).toBe(3);
 			// The immediate parent, not the root. A chain of three reads back as one
 			// brief, three charges, one pattern.
-			expect(metadata(row).resumed_from).toBe(first.result.p_invoc_id);
+			expect(metadata(row).resumed_from).toBe(first.result.pipeline_id);
 		}
 
 		// All three runs stay inspectable.
 		const everything = await db.select().from(heliosRuns);
-		expect(new Set(everything.map((row) => row.pInvocId)).size).toBe(3);
+		expect(new Set(everything.map((row) => row.pipelineId)).size).toBe(3);
 	});
 });
 
@@ -364,11 +364,11 @@ describe("resumeRun refusals", () => {
 	});
 
 	/** A refusal must not have called the model or written anything. */
-	async function expectRefusal(pInvocId: string, pattern: RegExp) {
+	async function expectRefusal(pipelineId: string, pattern: RegExp) {
 		const { env, run } = fakeEnv();
 		const before = (await db.select().from(heliosRuns)).length;
 
-		const outcome = await resumeRun(db as never, pInvocId, env, "http://localhost");
+		const outcome = await resumeRun(db, pipelineId, env, "http://localhost");
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) return;
@@ -382,34 +382,71 @@ describe("resumeRun refusals", () => {
 	});
 
 	it("refuses when the planner never succeeded, since there are no params to reuse", async () => {
-		await startTextRun(db as never, "planner-failed", "a concept", { model: TEXT_MODEL });
-		await failRunningRuns(db as never, "planner-failed", null);
+		await startTextRun(db, {
+			pipelineId: "planner-failed",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL },
+		});
+		await failRunningRuns(db, "planner-failed", null);
 
 		await expectRefusal("planner-failed", /planner never succeeded/i);
 	});
 
 	it("refuses a run that already has an image, because that would be a second charge", async () => {
 		await seedImageFailure(db, "done-1");
-		await completeImageRun(db as never, "done-1", "patterns/done-1.jpg", 0.0009);
+		await completeImageRun(db, { pipelineId: "done-1", imageR2Key: "patterns/done-1.jpg", costUsd: 0.0009 });
 
 		await expectRefusal("done-1", /already has an image/i);
 	});
 
 	it("refuses while the image is still running, so a concurrent invocation is not double charged", async () => {
-		await startTextRun(db as never, "in-flight", "a concept", { model: TEXT_MODEL });
-		await completeTextRun(db as never, "in-flight", PARAMS, { model: TEXT_MODEL }, 0.001);
-		await startImageRun(db as never, "in-flight", "a concept", PARAMS, { model: IMAGE_MODEL, steps: 4 });
+		await startTextRun(db, {
+			pipelineId: "in-flight",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL },
+		});
+		await completeTextRun(db, "in-flight", PARAMS, { model: TEXT_MODEL }, 0.001);
+		await startImageRun(db, {
+			pipelineId: "in-flight",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			plannerParams: PARAMS,
+			modelMetadata: { model: IMAGE_MODEL, steps: 4 },
+		});
 
 		await expectRefusal("in-flight", /still being generated/i);
 	});
 
 	it("refuses when the stored params no longer satisfy the schema", async () => {
-		await startTextRun(db as never, "stale-params", "a concept", { model: TEXT_MODEL });
+		// Seeded as a whole resumable run, not just a text row: the params check
+		// sits behind the missing-image-row guard, so a lone text row would be
+		// refused for the wrong reason and this test would pass without ever
+		// reaching the branch it names.
+		await seedImageFailure(db, "stale-params");
 		await db
 			.update(heliosRuns)
-			.set({ status: "completed", plannerParams: { motif_type: "fan" } })
-			.where(eq(heliosRuns.pInvocId, "stale-params"));
+			.set({ plannerParams: { motif_type: "fan" } })
+			.where(and(eq(heliosRuns.pipelineId, "stale-params"), eq(heliosRuns.modality, "text")));
 
 		await expectRefusal("stale-params", /no longer valid/i);
+	});
+
+	it("refuses a run whose image row was never written, rather than billing a new image", async () => {
+		// ADR-0001 says an invocation is two rows. A lone completed text row means
+		// a write was lost — `runImageStage`'s rescue insert is itself inside a
+		// catch. Before this guard existed both status checks used `?.`, so
+		// `undefined` matched neither and execution fell through into the image
+		// call (AGENTS.md §7).
+		await startTextRun(db, {
+			pipelineId: "no-image-row",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL },
+		});
+		await completeTextRun(db, "no-image-row", PARAMS, { model: TEXT_MODEL }, 0.001);
+
+		await expectRefusal("no-image-row", /no image row at all/i);
 	});
 });

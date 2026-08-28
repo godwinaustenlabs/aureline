@@ -44,14 +44,14 @@ describe("buildAiRunOptions", () => {
         id: "helios",
         skipCache: true,
         cacheKey: "k",
-        metadata: { p_invoc_id: "abc" },
+        metadata: { pipeline_id: "abc" },
       })
     ).toEqual({
       gateway: {
         id: "helios",
         skipCache: true,
         cacheKey: "k",
-        metadata: { p_invoc_id: "abc" },
+        metadata: { pipeline_id: "abc" },
       },
     });
   });

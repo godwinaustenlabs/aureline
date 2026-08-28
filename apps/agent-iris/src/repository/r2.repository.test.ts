@@ -179,13 +179,30 @@ describe("readMotif", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("throws for a key that is not in Iris's bucket, and says why that can happen", async () => {
+	it("throws for a missing key, and names the bucket and the prefix convention", async () => {
 		const { bucket } = fakeBucket();
 
-		// The Helios-written case: identical binding name, different bucket. The
-		// message has to say so, or the next person reads a plain "not found" and
-		// goes looking for a deleted object that was never there.
-		await expect(readMotif(bucket, "patterns/motif.jpg")).rejects.toThrow(/different bucket/);
+		// A plain "not found" sends the next person looking for a deleted object.
+		// All three engines share `images-bucket` and separate by key prefix, so the
+		// likely cause is a wrong prefix, and the message has to say which is which.
+		await expect(readMotif(bucket, "patterns/motif.jpg")).rejects.toThrow(/images-bucket/);
+		await expect(readMotif(bucket, "patterns/motif.jpg")).rejects.toThrow(/prefix/);
+	});
+
+	it("reads a key under another engine's prefix, imposing no prefix rule of its own", async () => {
+		const { bucket } = fakeBucket();
+		// Written under Helios's prefix rather than Iris's.
+		//
+		// What this proves is that `readMotif` does not restrict reads to `iris/`.
+		// It does **not** prove the two engines share a bucket — `fakeBucket` is one
+		// bucket, so it cannot tell. That guarantee lives in `bucket_name` in both
+		// wrangler.jsonc files and nowhere a unit test can reach.
+		await bucket.put("patterns/from-helios.jpg", IMAGE, { httpMetadata: { contentType: "image/jpeg" } });
+
+		const { bytes, contentType } = await readMotif(bucket, "patterns/from-helios.jpg");
+
+		expect(bytes.byteLength).toBe(IMAGE.byteLength);
+		expect(contentType).toBe("image/jpeg");
 	});
 
 	it("throws for an object that exists but is empty", async () => {

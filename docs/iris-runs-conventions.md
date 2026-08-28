@@ -23,7 +23,7 @@ So:
 
 The last one is not a join yet. Each engine has its own D1 database this sprint, so a full-pipeline view means three queries filtered on the same `design_session_id` until the consolidation ticket merges them. Carrying the column now is what makes that eventual join possible.
 
-**Helios is not renamed yet.** It still calls its pipeline id `p_invoc_id`. A caller bridging the two has to supply Iris's `design_session_id` itself; Iris will not accept the old `source_p_invoc_id` field name and will not mint one.
+**Both engines now use the same two names.** Helios calls its pipeline id `pipeline_id` and requires a `design_session_id` on every request, exactly as Iris does (ADR-HELIOS-0001). A caller carries one `design_session_id` through both. Neither engine accepts the old `source_p_invoc_id` or `p_invoc_id` field names, and neither will mint a design id of its own.
 
 ## One invocation is always two rows
 

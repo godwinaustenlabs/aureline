@@ -52,7 +52,7 @@ That is not tidiness. The Agents SDK keeps its **own** tables (`cf_agents_*`, `_
 
 ## The audit model: one invocation is two rows
 
-Every `POST /generate` and every `POST /resume` writes **two rows sharing a `p_invoc_id`**, one `modality: "text"` and one `modality: "image"`.
+Every `POST /generate` and every `POST /resume` writes **two rows sharing a `pipeline_id`**, one `modality: "text"` and one `modality: "image"`. Every row also carries the `design_session_id` those runs belong to, which is what lets a whole design be read back across engines rather than one run of one of them (AGENTS.md §3).
 
 Not one wide row per invocation. The two model calls are genuinely different events: they happen at different times, cost different amounts, succeed and fail independently, and carry completely different metadata. One wide row would mean half its columns were null on every row and a schema change every time a stage gained a field. One row per call means "what did the image model cost this month" is a filter, not a sum over nullable columns. [ADR-0001](adr/0001-helios-audit-table-per-modality-row.md).
 
@@ -65,12 +65,13 @@ Not one wide row per invocation. The two model calls are genuinely different eve
 | Column | Holds |
 |---|---|
 | `id` | UUID primary key, minted in the Durable Object |
-| `p_invoc_id` | The invocation this row belongs to. Two rows share it |
+| `pipeline_id` | This run of Helios. Two rows share it. A re-run gets a new one |
+| `design_session_id` | The design, minted upstream and carried unchanged through every engine. Required on the request |
 | `modality` | `text` or `image` |
 | `status` | `running`, `completed` or `failed` |
 | `user_prompt` | The caller's concept, copied onto both rows |
 | `planner_params` | The validated `HeliosParams`, JSON. On both rows |
-| `image_r2_key` | Set on a successful image row only. Always `patterns/{p_invoc_id}.jpg` |
+| `image_r2_key` | Set on a successful image row only. Always `patterns/{pipeline_id}.jpg` |
 | `cost_usd` | Real dollars from the AI Gateway log. Nullable |
 | `model_metadata` | JSON, shape differs by modality |
 | `created_at` | Set on insert, defaults to `unixepoch()` |
@@ -104,7 +105,7 @@ A Durable Object accumulates runs forever unless something stops it, so `pruneCo
 
 Three properties of it matter:
 
-- **It prunes whole invocations**, grouping by `p_invoc_id`, so you never end up with an orphaned image row whose text sibling was deleted.
+- **It prunes whole invocations**, grouping by `pipeline_id`, so you never end up with an orphaned image row whose text sibling was deleted.
 - **It only ever deletes fully completed runs.** A failed run is never pruned, at any age. The failure record is the thing you came back for, and it is what makes a resume possible days later.
 - **It leaves `running` rows alone**, because a concurrent in-flight invocation is not garbage.
 
@@ -124,13 +125,13 @@ The whole thing **never throws**. Export is an audit concern, and it should not 
 
 `exportRuns` uses `insert().onConflictDoNothing()`, and that works because **`id` is minted in the Durable Object and travels with the row**. The same row exported twice carries the same primary key both times, so the second insert is a no-op.
 
-The consequence to know: whichever version lands in D1 **first** is the version D1 keeps forever. That is why only settled rows are ever exported, and it is one reason a resume mints a new `p_invoc_id` instead of rewriting the old run. By the time you resume, the failed rows are already in D1 and could not be updated even if you wanted to.
+The consequence to know: whichever version lands in D1 **first** is the version D1 keeps forever. That is why only settled rows are ever exported, and it is one reason a resume mints a new `pipeline_id` instead of rewriting the old run. By the time you resume, the failed rows are already in D1 and could not be updated even if you wanted to.
 
 Inserts are chunked at 9 rows because D1 caps a statement at 100 bound parameters and the table has 11 columns.
 
 ## Images
 
-`savePatternImage` in `repository/r2.repository.ts` is the only thing that writes to the bucket, under the key `patterns/{p_invoc_id}.jpg`. `readPatternImage` is the only thing that reads, and `GET /images/*` in `index.ts` is its only caller.
+`savePatternImage` in `repository/r2.repository.ts` is the only thing that writes to the bucket, under the key `patterns/{pipeline_id}.jpg`. `readPatternImage` is the only thing that reads, and `GET /images/*` in `index.ts` is its only caller.
 
 Nothing deletes from R2. A pruned run's row disappears from the Durable Object while its image stays in the bucket, reachable by its key, and still referenced by the D1 copy of the row. That is deliberate for now, and it means bucket cleanup is a future job rather than a solved one.
 

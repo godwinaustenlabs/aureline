@@ -26,8 +26,8 @@ export interface GatewayConfig {
   /**
    * Attached to the Gateway log row. Use it to carry the id of the run this
    * call belongs to, so a log entry can be joined back to an audit row
-   * (ADR-0001). Iris calls that id `pipeline_id`; Helios still calls it
-   * `p_invoc_id` and joins back to `helios_runs`.
+   * (ADR-0001). Both engines call that id `pipeline_id`, joining back to
+   * `iris_runs` and `helios_runs` respectively.
    */
   metadata?: Record<string, string | number | boolean | null>;
 }

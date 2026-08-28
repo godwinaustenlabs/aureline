@@ -20,7 +20,7 @@ export async function planConcept(
 	concept: string,
 	env: Env,
 	config: HeliosConfig,
-	p_invoc_id: string
+	pipeline_id: string
 ) {
 	const systemPrompt = buildPlannerSystemPrompt();
 	const userPrompt = buildPlannerUserPrompt(concept);
@@ -31,7 +31,7 @@ export async function planConcept(
 		config.textModel.model,
 		env.AI,
 		{
-			gateway: { id: env.AI_GATEWAY_ID, metadata: { p_invoc_id } },
+			gateway: { id: env.AI_GATEWAY_ID, metadata: { pipeline_id } },
 			maxRetries: config.maxRetries,
 			temperature: config.textModel.temperature,
 		}
@@ -43,7 +43,7 @@ export async function planConcept(
 	// until a routed call sets it, which makes it the only available signal
 	// that the call actually went through the Gateway.
 	if (!env.AI.aiGatewayLogId) {
-		console.warn(`planner: call for ${p_invoc_id} did not route through AI Gateway`);
+		console.warn(`planner: call for ${pipeline_id} did not route through AI Gateway`);
 	}
 
 	return result;

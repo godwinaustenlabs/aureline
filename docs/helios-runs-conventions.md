@@ -6,13 +6,35 @@ The same schema is used twice. The Durable Object holds a session's recent runs 
 
 ## One invocation is always two rows
 
-Every `POST /generate` and every `POST /resume` produces exactly two rows sharing a `p_invoc_id`: one `modality: "text"` and one `modality: "image"`. This holds **whether the invocation succeeded or failed**. There is no such thing as a one-row invocation once the planner has run, and any query may assume the pair exists.
+Every `POST /generate` and every `POST /resume` produces exactly two rows sharing a `pipeline_id`: one `modality: "text"` and one `modality: "image"`. This holds **whether the invocation succeeded or failed**. There is no such thing as a one-row invocation once the planner has run, and any query may assume the pair exists.
 
 The image row duplicates `planner_params` from its text sibling rather than requiring a join, so a failed image is inspectable on its own.
 
 The exception is a run that failed before the planner produced anything: those have a single `failed` text row and no image row, because there was never any image work to record.
 
-`p_invoc_id` is a UUID minted per invocation in `services/pipeline.ts`. It is **not** a Durable Object identifier: one DO accumulates many invocations. The DO is chosen by `session_id`, which never appears in this table.
+**Iris differs here, deliberately, and a cross-engine query has to know it.** `iris_runs` guarantees the pair even on a planner failure: `runPipeline`'s catch opens a `failed` image row when the run never reached the image stage, so Iris's equivalent of the row above is `failed`/`failed`. Helios's shape is the older decision (helios-sprint-1 ticket 07, decision 4) and it is not a bug — but it does mean **counting rows and dividing by two is wrong on `helios_runs` and right on `iris_runs`**. Group by the run id instead, in both.
+
+## The two ids, and the third that is not in this table
+
+Three things that all look like UUIDs and mean completely different things (AGENTS.md §3). Two of them are columns here; the third deliberately is not.
+
+**`pipeline_id` is one run of Helios.** A UUID minted per invocation in `services/pipeline.ts`. A re-run of the same design gets a new one, which is exactly how "which attempt is the latest" stays answerable. Two rows of one invocation share it.
+
+**`design_session_id` is the design.** Minted once upstream and carried unchanged through Helios, Iris and Atlas, so a pattern, the colouring of that pattern, and the placement of the result all answer to one id. Helios never mints it and never defaults it: it arrives on the request or the request is refused with a 400 (ADR-HELIOS-0001). A resume copies it off the run being resumed, so a retry stays part of the design it is retrying.
+
+**`session_id` is neither, and is not a column.** It picks which Durable Object serves the request (ADR-0005) and nothing more. One DO accumulates many invocations across many designs. It never appears in this table because it identifies no piece of work.
+
+You need both columns. `design_session_id` alone cannot tell two attempts apart. `pipeline_id` alone cannot connect a Helios pattern to the Iris run that coloured it.
+
+```sql
+-- every attempt at one design, newest first
+select pipeline_id, modality, status, cost_usd, created_at
+from helios_runs
+where design_session_id = ?
+order by created_at desc;
+```
+
+Iris names both columns identically, so the same query shape works against `iris_runs`. That is the point of the rename.
 
 ## Status, and which combinations are legal
 
@@ -30,11 +52,13 @@ Anything else is a bug worth reporting, in particular a `failed` text row next t
 
 ## Columns
 
+**`design_session_id`** is the design this run belongs to, copied onto both rows and never generated here. See the two-ids section above.
+
 **`user_prompt`** is the caller's concept, copied onto both rows.
 
 **`planner_params`** is the validated `HeliosParams` object. Empty on a text row that never got past the planner. Read it back through `HeliosParamsSchema` rather than trusting it: it is a JSON column typed `unknown`, and a row written under an older schema version must fail loudly rather than produce a nonsense image.
 
-**`image_r2_key`** is set on a successful image row only, always `patterns/{p_invoc_id}.jpg`. The key is deterministic, which is why a future recovery for "R2 saved but the row update failed" can find the object without regenerating it.
+**`image_r2_key`** is set on a successful image row only, always `patterns/{pipeline_id}.jpg`. The key is deterministic, which is why a future recovery for "R2 saved but the row update failed" can find the object without regenerating it.
 
 **`cost_usd`** — **read the warning below before summing this column.**
 
@@ -62,7 +86,7 @@ An image row carries `{ model, steps }`, where `steps` is what was actually sent
 
 ## What a resume is
 
-A resume is a **new invocation**, never a rewrite of the old one. It gets a fresh `p_invoc_id` and its own two rows. The original failed run is left exactly as it was, because that failure record is the point.
+A resume is a **new invocation**, never a rewrite of the old one. It gets a fresh `pipeline_id` and its own two rows. The original failed run is left exactly as it was, because that failure record is the point.
 
 Reusing the original id would not work even if we wanted it to: the failed rows are already in D1 by then, and `exportRuns` uses `onConflictDoNothing`, so whichever version landed first is the version D1 keeps forever.
 
@@ -79,7 +103,7 @@ These live in `model_metadata` rather than in columns of their own. If this is e
 ## Counting, so nobody invents their own definitions
 
 ```sql
-select p_invoc_id,
+select pipeline_id,
        json_extract(model_metadata, '$.root')         as root,
        json_extract(model_metadata, '$.attempt')      as attempt,
        json_extract(model_metadata, '$.resumed_from') as resumed_from,
@@ -98,7 +122,7 @@ Over image rows only:
 
 So a chain of three where the first two reached the model is one brief, three attempts, two charges, one pattern.
 
-**Everything about one brief is `where json_extract(model_metadata, '$.root') = ?`**, plus the original itself, which carries no `root` and is identified by its own `p_invoc_id`. That is the whole reason `root` exists.
+**Everything about one brief is `where json_extract(model_metadata, '$.root') = ?`**, plus the original itself, which carries no `root` and is identified by its own `pipeline_id`. That is the whole reason `root` exists.
 
 Counting text rows instead would double every figure.
 

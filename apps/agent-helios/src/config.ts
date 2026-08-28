@@ -107,6 +107,31 @@ function numberFromVar(raw: string | undefined, name: string, lastResort: number
 }
 
 /**
+ * Exactly what this file reads out of `Env`, and nothing else.
+ *
+ * Declared structurally rather than as `Pick<Env, …>` on purpose: `wrangler
+ * types` generates the vars as **literal** types (`MAX_RETRIES: "2"`), so a
+ * `Pick` would only accept the one value currently in `wrangler.jsonc` and a
+ * test exercising any other value could not build one without a cast. Widening
+ * to `string` here is what lets `config.test.ts` pass real values instead of
+ * casting its way past the type (AGENTS.md §4). The real `Env` still satisfies
+ * it, because a string literal is assignable to `string`.
+ *
+ * The vars are optional because a missing one is a real runtime case:
+ * `numberFromVar` warns and falls back rather than throwing.
+ */
+export type ConfigEnv = {
+	/** Narrowed to the one call this file makes — the bulk read. A test then
+	 * fakes one method instead of standing up a whole `KVNamespace`. */
+	CONFIG: { get(keys: string[], options?: { cacheTtl?: number }): Promise<Map<string, string | null>> };
+	PLANNER_MODEL: string;
+	IMAGE_MODEL: string;
+	MAX_RETRIES?: string;
+	RETENTION_LIMIT?: string;
+	MAX_RESUME_ATTEMPTS?: string;
+};
+
+/**
  * One entry per KV key: how to prepare its raw text, how to validate it, what
  * to fall back to, and how to render it in the log line.
  *
@@ -123,7 +148,7 @@ const FIELDS = [
 		schema: TextModelSchema,
 		prepare: prepareModelValue,
 		// The var carries a bare model id, so the fallback has no tuning fields.
-		fromVar: (env: Env): unknown => ({ model: env.PLANNER_MODEL }),
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.PLANNER_MODEL }),
 		describe: (value: unknown) => describeModel(value as TextModelConfig),
 	},
 	{
@@ -132,7 +157,7 @@ const FIELDS = [
 		var: "IMAGE_MODEL",
 		schema: ImageModelSchema,
 		prepare: prepareModelValue,
-		fromVar: (env: Env): unknown => ({ model: env.IMAGE_MODEL }),
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.IMAGE_MODEL }),
 		describe: (value: unknown) => describeModel(value as ImageModelConfig),
 	},
 	{
@@ -141,7 +166,7 @@ const FIELDS = [
 		var: "MAX_RETRIES",
 		schema: z.coerce.number().int().min(1).max(5),
 		prepare: (raw: string): unknown => raw,
-		fromVar: (env: Env): unknown => numberFromVar(env.MAX_RETRIES, "MAX_RETRIES", 2),
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_RETRIES, "MAX_RETRIES", 2),
 		describe: (value: unknown) => String(value),
 	},
 	{
@@ -150,7 +175,7 @@ const FIELDS = [
 		var: "RETENTION_LIMIT",
 		schema: z.coerce.number().int().min(1).max(100),
 		prepare: (raw: string): unknown => raw,
-		fromVar: (env: Env): unknown => numberFromVar(env.RETENTION_LIMIT, "RETENTION_LIMIT", 5),
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.RETENTION_LIMIT, "RETENTION_LIMIT", 5),
 		describe: (value: unknown) => String(value),
 	},
 	{
@@ -162,7 +187,7 @@ const FIELDS = [
 		// should not be able to authorise an unbounded bill.
 		schema: z.coerce.number().int().min(1).max(20),
 		prepare: (raw: string): unknown => raw,
-		fromVar: (env: Env): unknown => numberFromVar(env.MAX_RESUME_ATTEMPTS, "MAX_RESUME_ATTEMPTS", 3),
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_RESUME_ATTEMPTS, "MAX_RESUME_ATTEMPTS", 3),
 		describe: (value: unknown) => String(value),
 	},
 ] as const;
@@ -191,7 +216,7 @@ function describeModel(value: TextModelConfig | ImageModelConfig): string {
  * would freeze and dashboard edits would appear to do nothing. `cacheTtl` is the
  * cache.
  */
-export async function resolveConfig(env: Env): Promise<HeliosConfig> {
+export async function resolveConfig(env: ConfigEnv): Promise<HeliosConfig> {
 	let values: Map<string, string | null>;
 
 	try {

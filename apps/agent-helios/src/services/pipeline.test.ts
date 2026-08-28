@@ -6,6 +6,10 @@ import { planConcept } from "./planner";
 import { startTextRun, failRunningRuns, startImageRun, pruneCompletedRuns } from "../repository/do.repository";
 import { heliosRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
+import { fakeEnv as sharedEnv } from "./test-env";
+// The same fixture the shared fake planner returns, so an assertion on
+// `result.params` is comparing against what the model actually said.
+import { sampleParamsFull as VALID_PARAMS, SAMPLE_DESIGN_SESSION_ID } from "../fixtures/sample-params";
 
 // The planner and the storage writes are imported by pipeline.ts, so mocking
 // these two modules (with a delegate that calls the real thing by default) is
@@ -37,30 +41,17 @@ const VARS = {
 
 const ORIGIN = "http://localhost:8787";
 
-/** base64 for the bytes [72, 101, 108, 108, 111] ("Hello"). */
-const BASE64 = "SGVsbG8=";
 
-/** A schema-valid params object the planner hands back on a successful run. */
-const VALID_PARAMS: HeliosParams = {
-	motif_type: "art deco paisley",
-	repeat_type: "half-drop",
-	scale: "medium",
-	density: "balanced",
-	line_weight: "medium",
-	texture_technique: "hatching",
-	contrast_level: "high",
-	style: "traditional",
-};
 
-const REQ: HeliosRequest = { concept: "art deco paisley" };
+const REQ: HeliosRequest = { concept: "art deco paisley", design_session_id: SAMPLE_DESIGN_SESSION_ID };
 
 /**
- * Fake `Env` for the whole pipeline. `AI.run` dispatches on model name: the
- * planner model returns a Chat-Completions envelope carrying `VALID_PARAMS`,
- * the image model a base64 image. Each can be overridden (or turned into a
- * throw) per test. Storage, R2 and D1 are stubbed; the D1 binding is made to
- * throw so `exportAndPrune`'s try/catch swallows it, matching ticket 07's
- * "a failed export does not fail the run".
+ * Fake `Env` for the whole pipeline, from the shared definition.
+ *
+ * `throwingD1` is on by default here, deliberately: these tests assert that a
+ * failed export does not fail the run (helios-sprint-1 ticket 07), and that is
+ * only meaningful against a `DB` that actually breaks. The export-lands-in-D1
+ * assertions pass `throwingD1: false` to get a database that really writes.
  */
 function fakeEnv(
 	overrides: {
@@ -69,51 +60,14 @@ function fakeEnv(
 		maxRetries?: number;
 		patternsPut?: "ok" | "fail";
 		aiGatewayLogId?: string | null;
+		throwingD1?: boolean;
 	} = {},
 ) {
-	const vars = {
-		...VARS,
-		...(overrides.maxRetries !== undefined ? { MAX_RETRIES: String(overrides.maxRetries) } : {}),
-	};
-
-	const run = vi.fn(async (model: string) => {
-		if (model === vars.PLANNER_MODEL) {
-			if (overrides.planner instanceof Error) throw overrides.planner;
-			return (
-				overrides.planner ?? { response: JSON.stringify(VALID_PARAMS), usage: { neurons: 102 } }
-			);
-		}
-		if (overrides.image instanceof Error) throw overrides.image;
-		return overrides.image ?? { image: BASE64 };
-	});
-
-	const getLog = vi.fn().mockResolvedValue({ cost: 0.0019008 });
-	const gateway = vi.fn().mockReturnValue({ getLog });
-	const aiGatewayLogId = overrides.aiGatewayLogId !== undefined ? overrides.aiGatewayLogId : "log-1";
-
-	const patternsPut = vi.fn().mockResolvedValue({});
-	if (overrides.patternsPut === "fail") patternsPut.mockRejectedValue(new Error("r2 down"));
-
-	const env = {
-		AI: { run, gateway, aiGatewayLogId },
-		AI_GATEWAY_ID: vars.AI_GATEWAY_ID,
-		// Empty KV → every value resolves from the vars above.
-		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
-		PATTERNS: { put: patternsPut, get: vi.fn() },
-		// The D1 driver calls prepare only when a query actually runs, so this
-		// throws inside exportAndPrune and is swallowed.
-		DB: { prepare: () => { throw new Error("d1 unavailable in tests"); } },
-		PLANNER_MODEL: vars.PLANNER_MODEL,
-		IMAGE_MODEL: vars.IMAGE_MODEL,
-		MAX_RETRIES: vars.MAX_RETRIES,
-		RETENTION_LIMIT: vars.RETENTION_LIMIT,
-	} as unknown as Env;
-
-	return { env, run, gateway, getLog, patternsPut };
+	return sharedEnv({ throwingD1: overrides.throwingD1 ?? true, ...overrides });
 }
 
-async function rowsFor(db: ReturnType<typeof createTestDb>, pInvocId: string) {
-	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+async function rowsFor(db: ReturnType<typeof createTestDb>, pipelineId: string) {
+	return db.select().from(heliosRuns).where(eq(heliosRuns.pipelineId, pipelineId));
 }
 
 describe("runPipeline failure behaviour", () => {
@@ -135,18 +89,48 @@ describe("runPipeline failure behaviour", () => {
 	it("completes a happy path with real params and a full image url", async () => {
 		const { env } = fakeEnv();
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("completed");
 		expect(result.params).toEqual(VALID_PARAMS);
 		expect(result.cost_usd).toBe(0.0019008);
-		expect(result.image_url).toBe(`${ORIGIN}/images/patterns/${result.p_invoc_id}.jpg`);
+		expect(result.image_url).toBe(`${ORIGIN}/images/patterns/${result.pipeline_id}.jpg`);
 		expect(result.error).toBeNull();
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		expect(rows.find((row) => row.modality === "image")?.status).toBe("completed");
+	});
+
+	it("carries design_session_id from the request onto both rows and into the result", async () => {
+		// The chain AGENTS.md §3 describes, end to end: the id arrives on the
+		// request, lands on every row of the run, and comes back out so Iris and
+		// Atlas can carry the same one forward. A column written but never read back
+		// is how that chain breaks without anyone noticing.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.design_session_id).toBe(SAMPLE_DESIGN_SESSION_ID);
+		// Not the pipeline id, which is minted per run. Two different things.
+		expect(result.design_session_id).not.toBe(result.pipeline_id);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		expect(rows).toHaveLength(2);
+		expect(rows.every((row) => row.designSessionId === SAMPLE_DESIGN_SESSION_ID)).toBe(true);
+	});
+
+	it("gives two runs of one design different pipeline ids and the same design id", async () => {
+		// What makes "which attempt is the latest" answerable while still grouping
+		// the attempts together.
+		const { env } = fakeEnv();
+
+		const first = await runPipeline(db, REQ, env, ORIGIN);
+		const second = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(first.pipeline_id).not.toBe(second.pipeline_id);
+		expect(first.design_session_id).toBe(second.design_session_id);
 	});
 
 	it("records the planner's cost in dollars, not in neurons", async () => {
@@ -155,9 +139,9 @@ describe("runPipeline failure behaviour", () => {
 		// modalities was out by four orders of magnitude.
 		const { env } = fakeEnv();
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
-		const textRow = (await rowsFor(db, result.p_invoc_id)).find((row) => row.modality === "text");
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		expect(textRow?.costUsd).toBe(0.0019008);
 		expect(textRow?.costUsd).not.toBe(102);
 		// The neuron figure is not lost, it just belongs in usage rather than in a
@@ -168,7 +152,7 @@ describe("runPipeline failure behaviour", () => {
 	it("records the image cost when the image billed and the R2 save then fails", async () => {
 		const { env } = fakeEnv({ patternsPut: "fail" });
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		// The money left the account, so it is reported on the failure too.
 		expect(result.status).toBe("failed");
@@ -177,7 +161,7 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.cost_usd).toBe(0.0019008);
 		expect(result.error).toMatch(/^image:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(imageRow?.status).toBe("failed");
@@ -188,7 +172,7 @@ describe("runPipeline failure behaviour", () => {
 	it("marks a planner failure as one failed text row and no image row", async () => {
 		const { env } = fakeEnv({ planner: new Error("boom") });
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.params).toBeNull();
@@ -196,28 +180,37 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.cost_usd).toBeNull();
 		expect(result.error).toMatch(/^planner:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].modality).toBe("text");
 		expect(rows[0].status).toBe("failed");
 		expect(rows[0].completedAt).not.toBeNull();
 	});
 
-	it("fails at validate when the planner returns a shape that fails the schema", async () => {
-		vi.mocked(planConcept).mockResolvedValueOnce({
-			data: { ...VALID_PARAMS, repeat_type: "not-a-real-repeat" } as never,
-			usage: undefined,
-			model: VARS.PLANNER_MODEL,
+	it("fails at the planner stage when the model returns a shape that fails the schema", async () => {
+		// Fed in as the model's own reply rather than by stubbing `planConcept`
+		// past its own validation. That is what a drifting model actually looks
+		// like, and it exercises the real planner, the real parse and the real
+		// retry budget instead of three stubs.
+		//
+		// This replaces a test that asserted `/^validate:/` by handing
+		// `planConcept` a pre-parsed object behind an `as never`. The pipeline's
+		// own `HeliosParamsSchema.parse` is still there and still worth having as
+		// defence in depth, but it sits behind `getTextualModelOutput`, which
+		// validates against the same schema and retries first — so nothing that
+		// arrives through the model can reach it. Its rejection is covered as data
+		// in `contract.test.ts` instead (AGENTS.md §5).
+		const { env } = fakeEnv({
+			planner: { response: JSON.stringify({ ...VALID_PARAMS, repeat_type: "not-a-real-repeat" }) },
 		});
-		const { env } = fakeEnv();
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.params).toBeNull();
-		expect(result.error).toMatch(/^validate:/);
+		expect(result.error).toMatch(/^planner:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].status).toBe("failed");
 	});
@@ -225,7 +218,7 @@ describe("runPipeline failure behaviour", () => {
 	it("keeps the paid planner params when only the image fails", async () => {
 		const { env } = fakeEnv({ image: new Error("flux down") });
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		// The planner succeeded; its params must survive the image failure.
 		expect(result.status).toBe("failed");
@@ -234,7 +227,7 @@ describe("runPipeline failure behaviour", () => {
 		// The image call threw before a cost could be read, so none is reported.
 		expect(result.cost_usd).toBeNull();
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		const textRow = rows.find((row) => row.modality === "text");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(textRow?.status).toBe("completed");
@@ -248,18 +241,18 @@ describe("runPipeline failure behaviour", () => {
 		// The cleanup write breaks too, and must not escape as a throw.
 		vi.mocked(failRunningRuns).mockRejectedValueOnce(new Error("cleanup down"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.error).toMatch(/^persist:/);
 	});
 
 	it("leaves a concurrent invocation's running row alone", async () => {
-		await insertRow(db, { pInvocId: "other-inflight", modality: "text", status: "running" });
-		await insertRow(db, { pInvocId: "other-inflight", modality: "image", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "text", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "image", status: "running" });
 		const { env } = fakeEnv({ planner: new Error("boom") });
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 
@@ -271,7 +264,7 @@ describe("runPipeline failure behaviour", () => {
 	it("runs the planner exactly maxRetries times on a planner failure", async () => {
 		const { env, run } = fakeEnv({ planner: new Error("boom"), maxRetries: 2 });
 
-		await runPipeline(db as never, REQ, env, ORIGIN);
+		await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(run.mock.calls.filter((call) => call[0] === VARS.PLANNER_MODEL)).toHaveLength(2);
 	});
@@ -279,7 +272,7 @@ describe("runPipeline failure behaviour", () => {
 	it("honours a maxRetries of 3", async () => {
 		const { env, run } = fakeEnv({ planner: new Error("boom"), maxRetries: 3 });
 
-		await runPipeline(db as never, REQ, env, ORIGIN);
+		await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(run.mock.calls.filter((call) => call[0] === VARS.PLANNER_MODEL)).toHaveLength(3);
 	});
@@ -291,13 +284,13 @@ describe("runPipeline failure behaviour", () => {
 		const { env } = fakeEnv();
 		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("failed");
 		expect(result.error).toMatch(/^image:/);
 		expect(result.params).toEqual(VALID_PARAMS);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		const imageRow = rows.find((row) => row.modality === "image");
@@ -312,20 +305,20 @@ describe("runPipeline failure behaviour", () => {
 		const { env } = fakeEnv();
 		vi.mocked(startImageRun).mockRejectedValueOnce(new Error("storage hiccup"));
 
-		const result = await runPipeline(db as never, REQ, env, ORIGIN);
+		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		// A limit of 0 prunes every fully completed run. This one has a failed row,
 		// so it must survive. Before the failed row was recorded it was a single
 		// completed text row, and this deleted it.
-		await pruneCompletedRuns(db as never, 0);
+		await pruneCompletedRuns(db, 0);
 
-		expect(await rowsFor(db, result.p_invoc_id)).toHaveLength(2);
+		expect(await rowsFor(db, result.pipeline_id)).toHaveLength(2);
 	});
 
 	it("calls the image model exactly once on an image failure", async () => {
 		const { env, run } = fakeEnv({ image: new Error("flux down") });
 
-		await runPipeline(db as never, REQ, env, ORIGIN);
+		await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(run.mock.calls.filter((call) => call[0] === VARS.IMAGE_MODEL)).toHaveLength(1);
 	});

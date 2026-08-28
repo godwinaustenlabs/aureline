@@ -49,7 +49,7 @@ All declared in `apps/agent-helios/wrangler.jsonc`.
 | `HeliosAgent` | Durable Object | class `HeliosAgent`, migration tag `v1`, `new_sqlite_classes` | Simulated in `.wrangler/state/` |
 | `AI` | Workers AI | The account's Workers AI | **Calls the real API. Every call bills.** |
 | `DB` | D1 | `helios-d1` | Simulated locally |
-| `PATTERNS` | R2 | `helios-bucket` | Simulated locally |
+| `PATTERNS` | R2 | `images-bucket` | Shared with Iris and Atlas, separated by key prefix. Simulated locally |
 | `CONFIG` | KV | namespace titled `HELIOS_CONFIG` | Simulated locally, and empty on a fresh clone |
 
 Plus `compatibility_date: "2026-07-27"`, `compatibility_flags: ["nodejs_compat"]`, observability on, and source maps uploaded.
@@ -89,9 +89,9 @@ The split is between a **transport error** and a **run outcome**, and it is the 
 | 405 | `{ "error": "POST required" }` | Right path, wrong method |
 | 409 | `{ "error": "..." }` | A resume was refused before doing anything. Nothing written, nothing billed |
 
-**A failed run is a 200 carrying `"status": "failed"`.** The HTTP request succeeded even though the run did not, and the response is a full `HeliosResult` with the failing stage prefixed onto `error`: `planner:`, `validate:` or `image:`. There is a real `p_invoc_id` and there may be a real `cost_usd`, because the money can leave the account before the failure happens.
+**A failed run is a 200 carrying `"status": "failed"`.** The HTTP request succeeded even though the run did not, and the response is a full `HeliosResult` with the failing stage prefixed onto `error`: `planner:`, `validate:` or `image:`. There is a real `pipeline_id` and there may be a real `cost_usd`, because the money can leave the account before the failure happens.
 
-A 4xx has no `p_invoc_id`, because there was never an invocation to name.
+A 4xx has no `pipeline_id`, because there was never an invocation to name.
 
 `runPipeline` and `resumeRun` **never throw**. Every path returns a settled result, so the HTTP layer only has to deal with outcomes.
 
@@ -108,18 +108,18 @@ All in `packages/shared-types/src/v1/messages.ts`.
 }
 ```
 
-`session_id` is **not** the invocation's identity. One object accumulates many invocations, each with its own `p_invoc_id`. Omit it and you land on the shared object named `default`.
+`session_id` is **not** the invocation's identity. One object accumulates many invocations, each with its own `pipeline_id`. Omit it and you land on the shared object named `default`.
 
 ### `HeliosResumeRequest`
 
 ```ts
 {
-  p_invoc_id: string   // 1 to 128 chars, the run to resume
+  pipeline_id: string   // 1 to 128 chars, the run to resume
   session_id?: string  // same meaning as above
 }
 ```
 
-The resumed run gets a **new** `p_invoc_id`. This one is never reused.
+The resumed run gets a **new** `pipeline_id`. This one is never reused.
 
 ### `HeliosParams`
 
@@ -146,7 +146,7 @@ This eight field list is a starting point pending validation against real textil
 
 ```ts
 {
-  p_invoc_id: string
+  pipeline_id: string
   status: "running" | "completed" | "failed"
   params: HeliosParams | null
   image_url: string | null

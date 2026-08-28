@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "3ee4427d-5c02-4e5b-a01e-23e824f0df04",
+  "id": "78cdb0ea-9b6a-4806-a005-94c7df69dcb7",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "helios_runs": {
@@ -14,8 +14,15 @@
           "notNull": true,
           "autoincrement": false
         },
-        "p_invoc_id": {
-          "name": "p_invoc_id",
+        "pipeline_id": {
+          "name": "pipeline_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "design_session_id": {
+          "name": "design_session_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true,

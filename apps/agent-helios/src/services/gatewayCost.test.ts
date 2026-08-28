@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { readGatewayCost } from "./gatewayCost";
+import { fakeEnv as sharedEnv } from "./test-env";
 
-/** An `env` carrying just the two things `readGatewayCost` touches. */
-function fakeEnv(getLog: ReturnType<typeof vi.fn>, aiGatewayLogId: string | null = "log-1") {
-	return {
-		AI_GATEWAY_ID: "helios",
-		AI: { aiGatewayLogId, gateway: vi.fn().mockReturnValue({ getLog }) },
-	} as unknown as Env;
+/**
+ * An `env` carrying the two things `readGatewayCost` touches.
+ *
+ * Wraps the shared fake rather than assembling its own, so there is one `Env`
+ * definition in the app. The log read is this file's whole subject, so the spy
+ * is injected rather than taken from the default.
+ */
+function fakeEnv(getLog: ReturnType<typeof vi.fn>, aiGatewayLogId: string | null = "log-1"): Env {
+	return sharedEnv({ getLog, aiGatewayLogId }).env;
 }
 
 describe("readGatewayCost", () => {

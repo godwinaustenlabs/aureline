@@ -14,7 +14,7 @@ import type { IrisD1Db } from "../db/client";
  * `height` are recorded inside `model_metadata` rather than becoming columns
  * of their own (iris-03 decision 9).
  *
- * Helios uses 9 because `helios_runs` has 11 columns. Copying that number
+ * Helios uses 8 because `helios_runs` has 12 columns. Copying that number
  * across is the single most likely mistake in this file: it looks right, every
  * small export works, and it fails the first time one carries eight or more
  * rows, which is exactly when there is real history worth not losing.

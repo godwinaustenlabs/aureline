@@ -49,7 +49,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 	}
 
 	if (url.pathname.startsWith("/images/")) {
-		// Everything after "/images/" is the R2 key, e.g. "patterns/{p_invoc_id}.jpg"
+		// Everything after "/images/" is the R2 key, e.g. "patterns/{pipeline_id}.jpg"
 		const key = url.pathname.slice("/images/".length);
 		const object = await readPatternImage(env.PATTERNS, key);
 

@@ -15,7 +15,7 @@ import { exportAndPrune, runImageStage } from "./pipeline";
  * Either the route refused before doing anything, or a run happened and settled.
  *
  * A refusal is a precondition failure, not a run outcome: nothing was written
- * and nothing was billed, so there is no `p_invoc_id` to report and it is not a
+ * and nothing was billed, so there is no `pipeline_id` to report and it is not a
  * `HeliosResult`. The HTTP layer turns it into a 409. Everything past the first
  * write comes back as `ok: true` carrying a settled `HeliosResult`, success or
  * failure alike, exactly like `runPipeline`.
@@ -30,7 +30,7 @@ export type ResumeOutcome = { ok: false; reason: string } | { ok: true; result: 
  * call usually fails again for the same reason and every attempt spends the
  * expensive model, so a person decides rather than a loop (ticket 08, decision 2).
  *
- * The resumed run is a new invocation with its own `p_invoc_id` and its own two
+ * The resumed run is a new invocation with its own `pipeline_id` and its own two
  * rows. The original is left exactly as it was, because the failure record is
  * the thing ticket 08 exists to preserve.
  *
@@ -38,17 +38,17 @@ export type ResumeOutcome = { ok: false; reason: string } | { ok: true; result: 
  */
 export async function resumeRun(
 	db: HeliosDb,
-	p_invoc_id: string,
+	pipeline_id: string,
 	env: Env,
 	origin: string,
 ): Promise<ResumeOutcome> {
-	const rows = await getRunRows(db, p_invoc_id);
+	const rows = await getRunRows(db, pipeline_id);
 
-	// Four separate refusals rather than one generic error. They mean genuinely
-	// different things to whoever is holding the failed run, and the third is the
+	// Five separate refusals rather than one generic error. They mean genuinely
+	// different things to whoever is holding the failed run, and the fourth is the
 	// one standing between us and paying for the same image twice.
 	if (rows.length === 0) {
-		return { ok: false, reason: `no run ${p_invoc_id} in this session` };
+		return { ok: false, reason: `no run ${pipeline_id} in this session` };
 	}
 
 	const textRow = rows.find((row) => row.modality === "text");
@@ -60,10 +60,31 @@ export async function resumeRun(
 	}
 
 	const imageRow = rows.find((row) => row.modality === "image");
-	if (imageRow?.status === "completed") {
+
+	// `undefined` before any status is read, because the two guards below use
+	// `?.` and a missing row matches neither of them. Without this, a run with no
+	// image row falls straight through into generating and billing another image
+	// (AGENTS.md §7) — the shape that produced the runaway loop this engine is
+	// named for in that section.
+	//
+	// It is reachable: `runImageStage` rescues a never-opened image row with
+	// `insertFailedImageRun`, and that rescue has its own catch. When it is the
+	// thing that broke, the invocation settles as a lone text row and ADR-0001's
+	// two-rows invariant has been violated by a lost write. Refusing is the
+	// cheap answer — the run's own metadata is what a resume reads its attempt
+	// count from, and that is exactly what cannot be trusted here.
+	if (!imageRow) {
+		return {
+			ok: false,
+			reason:
+				"this run has no image row at all, so its record is incomplete and resuming would build on a run whose state was never written. Send a new POST /generate",
+		};
+	}
+
+	if (imageRow.status === "completed") {
 		return { ok: false, reason: "this run already has an image, and resuming would generate and charge for a second one" };
 	}
-	if (imageRow?.status === "running") {
+	if (imageRow.status === "running") {
 		return { ok: false, reason: "this run's image is still being generated. Wait for it to settle before resuming" };
 	}
 
@@ -83,7 +104,7 @@ export async function resumeRun(
 
 	// The original this brief started from. Inherited unchanged down the chain, so
 	// every attempt at one concept shares it however deep or wide the retries go.
-	const root = parent.root ?? p_invoc_id;
+	const root = parent.root ?? pipeline_id;
 
 	// The money guard. `attempt` cannot do this job: it is depth from the
 	// original, so resuming the same failed run ten times gives ten siblings all
@@ -97,12 +118,16 @@ export async function resumeRun(
 		};
 	}
 
-	const newInvocId = crypto.randomUUID();
+	// A new run of Helios, so a new pipeline id. The design is the same one, so
+	// `design_session_id` is copied off the run being resumed rather than minted
+	// or re-sent: a retry belongs to the design it is retrying (AGENTS.md §3).
+	const newPipelineId = crypto.randomUUID();
+	const designSessionId = textRow.designSessionId;
 
 	// `resumed_from` points at the immediate parent, not the root, so a resume of
 	// a resume reads back as one more step rather than a fork. `root` is what
 	// makes counting one query instead of a walk back up the chain.
-	const marker = { root, resumed_from: p_invoc_id, attempt: parent.attempt + 1 };
+	const marker = { root, resumed_from: pipeline_id, attempt: parent.attempt + 1 };
 
 	// Held outside the try for the same reason `runPipeline` holds it: the image
 	// call bills before the R2 save and the row update, so a failure in either
@@ -110,28 +135,41 @@ export async function resumeRun(
 	let imageCost: number | null = null;
 
 	try {
-		await insertResumedTextRun(db, newInvocId, textRow.userPrompt, params, {
-			// The model that actually produced these params, carried over from the
-			// parent. Naming the currently configured planner instead would credit a
-			// model that was never called for this row.
-			model: parent.model ?? config.textModel.model,
-			...marker,
-			planner_skipped: true,
+		await insertResumedTextRun(db, {
+			pipelineId: newPipelineId,
+			designSessionId,
+			userPrompt: textRow.userPrompt,
+			plannerParams: params,
+			modelMetadata: {
+				// The model that actually produced these params, carried over from the
+				// parent. Naming the currently configured planner instead would credit a
+				// model that was never called for this row.
+				model: parent.model ?? config.textModel.model,
+				...marker,
+				planner_skipped: true,
+			},
 		});
 
-		const outcome = await runImageStage(db, env, config, newInvocId, textRow.userPrompt, params, marker);
+		const outcome = await runImageStage(db, env, config, {
+			pipelineId: newPipelineId,
+			designSessionId,
+			concept: textRow.userPrompt,
+			params,
+			metadataExtras: marker,
+		});
 
 		imageCost = outcome.costUsd;
 		if (!outcome.ok) {
 			throw outcome.cause;
 		}
 
-		await exportAndPrune(db, env, newInvocId, config.retentionLimit);
+		await exportAndPrune(db, env, newPipelineId, config.retentionLimit);
 
 		return {
 			ok: true,
 			result: {
-				p_invoc_id: newInvocId,
+				pipeline_id: newPipelineId,
+				design_session_id: designSessionId,
 				status: "completed",
 				params,
 				image_url: `${origin}/images/${outcome.imageR2Key}`,
@@ -144,17 +182,18 @@ export async function resumeRun(
 		// settled. Wrapped in its own try because when storage is what broke, this
 		// write breaks too, and a throw from inside a catch escapes the function.
 		try {
-			await failRunningRuns(db, newInvocId, imageCost);
+			await failRunningRuns(db, newPipelineId, imageCost);
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
 
-		await exportAndPrune(db, env, newInvocId, config.retentionLimit);
+		await exportAndPrune(db, env, newPipelineId, config.retentionLimit);
 
 		return {
 			ok: true,
 			result: {
-				p_invoc_id: newInvocId,
+				pipeline_id: newPipelineId,
+				design_session_id: designSessionId,
 				status: "failed",
 				// Kept, not nulled. The params are what made this run resumable in the
 				// first place, and a failed resume is itself resumable.

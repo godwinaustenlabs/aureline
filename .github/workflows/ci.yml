@@ -19,6 +19,7 @@ on:
     branches:
       - dev-iris
       - dev-atlas
+      - dev-helios
       - dev
     # A PR touching only docs/tickets has nothing for install/typecheck/test to
     # check, so skip the run rather than burning a runner on it. Safe while this

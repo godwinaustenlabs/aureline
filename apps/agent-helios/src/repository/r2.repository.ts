@@ -7,15 +7,15 @@ const PATTERNS_PREFIX = "patterns";
 
 /**
  * Saves the image and returns its key.
- * Key format: patterns/{p_invoc_id}.jpg
+ * Key format: patterns/{pipeline_id}.jpg
  */
 export async function savePatternImage(
 	bucket: R2Bucket,
-	pInvocId: string,
+	pipelineId: string,
 	image: Uint8Array,
 	contentType: string,
 ): Promise<string> {
-	const key = `${PATTERNS_PREFIX}/${pInvocId}.jpg`;
+	const key = `${PATTERNS_PREFIX}/${pipelineId}.jpg`;
 
 	await bucket.put(key, image, {
 		httpMetadata: {

@@ -3,6 +3,7 @@ import type { HeliosParams } from "@aureline/shared-types";
 import { buildImagePrompt } from "../prompts";
 import { generateImage, type GeneratedImage } from "./imageGenerator";
 import type { HeliosConfig } from "../config";
+import { fakeEnv as sharedEnv } from "./test-env";
 
 const PARAMS: HeliosParams = {
 	motif_type: "art deco paisley",
@@ -41,6 +42,10 @@ const BASE64 = "SGVsbG8=";
 /**
  * Builds a fake `Env` whose `AI` binding returns a stubbed image and a stubbed
  * gateway log. No Worker runtime and no model call, so the suite stays free.
+ *
+ * Delegates to the shared fake so there is one `Env` definition in the app.
+ * `generateImage` only ever calls the image model, so `runResult` maps onto the
+ * shared fake's image reply.
  */
 function fakeEnv(overrides: {
 	runResult?: unknown;
@@ -50,19 +55,10 @@ function fakeEnv(overrides: {
 	const { runResult = { image: BASE64 }, logResult = { cost: 0.0019008 }, aiGatewayLogId = "log-123" } =
 		overrides;
 
-	const run = vi.fn().mockResolvedValue(runResult);
 	const getLog = vi.fn().mockResolvedValue(logResult);
-	const gateway = vi.fn().mockReturnValue({ getLog });
+	const { env, run, gateway } = sharedEnv({ image: runResult, getLog, aiGatewayLogId });
 
-	return {
-		env: {
-			AI: { run, gateway, aiGatewayLogId },
-			AI_GATEWAY_ID: "helios",
-		} as unknown as Env,
-		run,
-		getLog,
-		gateway,
-	};
+	return { env, run, getLog, gateway };
 }
 
 describe("generateImage", () => {
@@ -81,7 +77,12 @@ describe("generateImage", () => {
 		expect(prompt).toMatch(/Do not include: .+\.$/);
 
 		expect(run).toHaveBeenCalledTimes(1);
-		const [, input, options] = run.mock.calls[0];
+		// `Ai.run` is typed with `unknown` arguments, which is its real shape, so
+		// what the call carried is narrowed here rather than read off an inferred
+		// signature that only happened to match.
+		const [, rawInput, rawOptions] = run.mock.calls[0];
+		const input = rawInput as { prompt: string; steps: number; width: number; height: number };
+		const options = rawOptions as { gateway: unknown };
 		expect(input.prompt).toBe(prompt);
 		expect(input.steps).toBe(4);
 		expect(input.width).toBe(1024);
@@ -90,7 +91,7 @@ describe("generateImage", () => {
 		// The gateway options carry the invocation id and bypass the cache.
 		expect(options.gateway).toEqual({
 			id: "helios",
-			metadata: { p_invoc_id: "p-123" },
+			metadata: { pipeline_id: "p-123" },
 			cacheTtl: expect.any(Number),
 			skipCache: true,
 		});
@@ -101,7 +102,8 @@ describe("generateImage", () => {
 
 		await generateImage(PARAMS, CONFIG, env, "p-123");
 
-		expect(run.mock.calls[0][2].gateway.skipCache).toBe(true);
+		const options = run.mock.calls[0][2] as { gateway: { skipCache: boolean } };
+		expect(options.gateway.skipCache).toBe(true);
 	});
 
 	it("returns the decoded image bytes and their content type", async () => {
@@ -149,6 +151,7 @@ describe("generateImage", () => {
 
 		await generateImage(PARAMS, config, env, "p-123");
 
-		expect(run.mock.calls[0][1].steps).toBe(8);
+		const input = run.mock.calls[0][1] as { steps: number };
+		expect(input.steps).toBe(8);
 	});
 });

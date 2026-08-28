@@ -15,33 +15,74 @@ import { heliosRuns, type HeliosRun, type NewHeliosRun } from "../db/schema";
 type ModelMetadata = NewHeliosRun["modelMetadata"];
 
 /**
+ * What every row-opening function needs to write a row.
+ *
+ * One object rather than a line-up of positional strings (AGENTS.md §6). Three
+ * of these are adjacent strings, and before this they were passed positionally:
+ * swapping any two compiled, ran, and corrupted a row. Now a swap is a compile
+ * error.
+ *
+ * Field order mirrors `db/schema.ts`, so a reader checking a call site can check
+ * it by looking rather than by counting.
+ */
+type RowSeed = {
+	pipelineId: string;
+	designSessionId: string;
+	userPrompt: string;
+	/**
+	 * Either the planner's params, or `{}` when there are none — a run that
+	 * failed at persist, planner or validate still has to write its image row
+	 * (ADR-0001) and genuinely has nothing to put here.
+	 *
+	 * Spelled as a union rather than accepting `HeliosParams` and letting callers
+	 * cast `{}` into it. The empty case is real, so the type says so; and a
+	 * *wrong* shape still fails, because a half-built params object matches
+	 * neither branch.
+	 */
+	plannerParams: HeliosParams | Record<string, never>;
+	modelMetadata: ModelMetadata;
+};
+
+/**
  * Opens the text row as `running`, before the planner is called, so a crash
  * mid-call still leaves an inspectable audit trail.
  */
-export async function startTextRun(
-	db: HeliosDb,
-	pInvocId: string,
-	userPrompt: string,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
+export async function startTextRun(db: HeliosDb, seed: Omit<RowSeed, "plannerParams">): Promise<void> {
 	await db.insert(heliosRuns).values({
-		pInvocId,
+		...seed,
 		modality: "text",
 		status: "running",
-		userPrompt,
 		plannerParams: {},
-		modelMetadata,
 	});
 }
 
-/** Settles the text row with the params the planner actually produced. */
+/**
+ * Settles the text row with the params the planner actually produced.
+ *
+ * **Throws when there is no text row to settle.** A bare `UPDATE ... WHERE`
+ * against a row that is not there matches nothing and resolves exactly as if it
+ * had worked, so "the insert never landed" and "the insert landed fine" were
+ * indistinguishable from here. That is not theoretical at this call site: if
+ * `startTextRun` silently no-opped, the pipeline would carry on into the image
+ * stage and return `status: "completed"` for an invocation with no rows in the
+ * table at all (AGENTS.md §7).
+ */
 export async function completeTextRun(
 	db: HeliosDb,
-	pInvocId: string,
+	pipelineId: string,
 	params: HeliosParams,
 	modelMetadata: ModelMetadata,
 	costUsd: number | null,
 ): Promise<void> {
+	const [existing] = await db
+		.select({ id: heliosRuns.id })
+		.from(heliosRuns)
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "text")));
+
+	if (!existing) {
+		throw new Error(`no text row to settle for pipeline_id ${pipelineId}`);
+	}
+
 	await db
 		.update(heliosRuns)
 		.set({
@@ -51,7 +92,7 @@ export async function completeTextRun(
 			costUsd,
 			completedAt: new Date(),
 		})
-		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "text")));
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "text")));
 }
 
 /**
@@ -65,20 +106,11 @@ export async function completeTextRun(
  * `costUsd` is left null deliberately. Copying the original planner's cost here
  * would bill the same planner call twice across our cost reports.
  */
-export async function insertResumedTextRun(
-	db: HeliosDb,
-	pInvocId: string,
-	userPrompt: string,
-	params: HeliosParams,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
+export async function insertResumedTextRun(db: HeliosDb, seed: RowSeed): Promise<void> {
 	await db.insert(heliosRuns).values({
-		pInvocId,
+		...seed,
 		modality: "text",
 		status: "completed",
-		userPrompt,
-		plannerParams: params,
-		modelMetadata,
 		completedAt: new Date(),
 	});
 }
@@ -87,20 +119,11 @@ export async function insertResumedTextRun(
  * Opens the image row as `running`, duplicating planner_params from its text
  * sibling rather than requiring a join (ADR-0001).
  */
-export async function startImageRun(
-	db: HeliosDb,
-	pInvocId: string,
-	userPrompt: string,
-	params: HeliosParams,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
+export async function startImageRun(db: HeliosDb, seed: RowSeed): Promise<void> {
 	await db.insert(heliosRuns).values({
-		pInvocId,
+		...seed,
 		modality: "image",
 		status: "running",
-		userPrompt,
-		plannerParams: params,
-		modelMetadata,
 	});
 }
 
@@ -117,35 +140,47 @@ export async function startImageRun(
  * Inserted already `failed` rather than opened and then settled, since the
  * thing being recorded has already happened.
  */
-export async function insertFailedImageRun(
-	db: HeliosDb,
-	pInvocId: string,
-	userPrompt: string,
-	params: HeliosParams,
-	modelMetadata: ModelMetadata,
-): Promise<void> {
+export async function insertFailedImageRun(db: HeliosDb, seed: RowSeed): Promise<void> {
 	await db.insert(heliosRuns).values({
-		pInvocId,
+		...seed,
 		modality: "image",
 		status: "failed",
-		userPrompt,
-		plannerParams: params,
-		modelMetadata,
 		completedAt: new Date(),
 	});
 }
 
-/** Settles the image row with its R2 key and cost. */
+/**
+ * Settles the image row with its R2 key and cost.
+ *
+ * **Throws when there is no image row to settle.** The caller has just paid for
+ * an image by the time this runs, and an `UPDATE` that matches zero rows reports
+ * success just as loudly as one that matched. Silently failing to record a spent
+ * image is how a run that cost real money ends up looking like it never happened
+ * (AGENTS.md §7).
+ */
 export async function completeImageRun(
 	db: HeliosDb,
-	pInvocId: string,
-	imageR2Key: string,
-	costUsd: number | null,
+	settle: {
+		pipelineId: string;
+		imageR2Key: string;
+		costUsd: number | null;
+	},
 ): Promise<void> {
+	const { pipelineId, imageR2Key, costUsd } = settle;
+
+	const [existing] = await db
+		.select({ id: heliosRuns.id })
+		.from(heliosRuns)
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "image")));
+
+	if (!existing) {
+		throw new Error(`no image row to settle for pipeline_id ${pipelineId}`);
+	}
+
 	await db
 		.update(heliosRuns)
 		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
-		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.modality, "image")));
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "image")));
 }
 
 /**
@@ -159,13 +194,13 @@ export async function completeImageRun(
  */
 export async function failRunningRuns(
 	db: HeliosDb,
-	pInvocId: string,
+	pipelineId: string,
 	costUsd: number | null = null,
 ): Promise<void> {
 	await db
 		.update(heliosRuns)
 		.set({ status: "failed", completedAt: new Date(), ...(costUsd !== null && { costUsd }) })
-		.where(and(eq(heliosRuns.pInvocId, pInvocId), eq(heliosRuns.status, "running")));
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.status, "running")));
 }
 
 /**
@@ -183,6 +218,14 @@ export async function failRunningRuns(
  *
  * Filtered in memory rather than through `json_extract` because a DO holds a
  * handful of rows and Drizzle hands the JSON column back already parsed.
+ *
+ * **A row whose metadata cannot be read counts toward the cap.** It used to be
+ * filtered out by a `?.root === root` that treated unreadable and "belongs to a
+ * different chain" as the same answer, so a row that failed to serialise made
+ * the cap generous rather than strict. This is a spend limit, so the unknown
+ * case errs toward refusing rather than toward another image call (AGENTS.md §7).
+ * An original run is a different matter and is still not counted: its metadata
+ * is perfectly readable and simply carries no `root`.
  */
 export async function countResumeAttempts(db: HeliosDb, root: string): Promise<number> {
 	const rows = await db
@@ -190,12 +233,21 @@ export async function countResumeAttempts(db: HeliosDb, root: string): Promise<n
 		.from(heliosRuns)
 		.where(eq(heliosRuns.modality, "image"));
 
-	return rows.filter((row) => (row.modelMetadata as { root?: unknown } | null)?.root === root).length;
+	return rows.filter((row) => {
+		const metadata = row.modelMetadata;
+
+		if (metadata === null || typeof metadata !== "object") {
+			console.warn(`resume cap: image row with unreadable model_metadata counted toward root ${root}`);
+			return true;
+		}
+
+		return (metadata as { root?: unknown }).root === root;
+	}).length;
 }
 
 /** The rows for one invocation. */
-export async function getRunRows(db: HeliosDb, pInvocId: string): Promise<HeliosRun[]> {
-	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+export async function getRunRows(db: HeliosDb, pipelineId: string): Promise<HeliosRun[]> {
+	return db.select().from(heliosRuns).where(eq(heliosRuns.pipelineId, pipelineId));
 }
 
 /**
@@ -239,7 +291,7 @@ export async function pruneCompletedRuns(db: HeliosDb, retentionLimit: number): 
 	// request, and this scan only grows: failed runs are never pruned.
 	const allRows = await db
 		.select({
-			pInvocId: heliosRuns.pInvocId,
+			pipelineId: heliosRuns.pipelineId,
 			status: heliosRuns.status,
 			createdAt: heliosRuns.createdAt,
 		})
@@ -247,18 +299,18 @@ export async function pruneCompletedRuns(db: HeliosDb, retentionLimit: number): 
 
 	const byRun = new Map<string, (typeof allRows)[number][]>();
 	for (const row of allRows) {
-		const existing = byRun.get(row.pInvocId);
+		const existing = byRun.get(row.pipelineId);
 		if (existing) {
 			existing.push(row);
 		} else {
-			byRun.set(row.pInvocId, [row]);
+			byRun.set(row.pipelineId, [row]);
 		}
 	}
 
 	const completedRuns = [...byRun.entries()]
 		.filter(([, rows]) => rows.every((row) => row.status === "completed"))
-		.map(([pInvocId, rows]) => ({
-			pInvocId,
+		.map(([pipelineId, rows]) => ({
+			pipelineId,
 			latestCreatedAt: Math.max(...rows.map((row) => row.createdAt.getTime())),
 		}))
 		.sort((a, b) => b.latestCreatedAt - a.latestCreatedAt);
@@ -268,8 +320,8 @@ export async function pruneCompletedRuns(db: HeliosDb, retentionLimit: number): 
 
 	await db.delete(heliosRuns).where(
 		inArray(
-			heliosRuns.pInvocId,
-			runsToDelete.map((run) => run.pInvocId),
+			heliosRuns.pipelineId,
+			runsToDelete.map((run) => run.pipelineId),
 		),
 	);
 
