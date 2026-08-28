@@ -46,3 +46,13 @@ export const sampleParamsAlternate: HeliosParams = {
 /** base64 for the bytes [72, 101, 108, 108, 111] ("Hello"). Not a real image:
  * nothing in Helios decodes it, the image model's reply is passed to R2 as-is. */
 export const SAMPLE_IMAGE_BASE64 = "SGVsbG8=";
+
+/**
+ * The design a test run belongs to.
+ *
+ * Shared so that every suite asserting the id travels from request to row to
+ * result is asserting on the *same* value. Two suites with two literals can
+ * both pass while the id they each check is one they wrote themselves a line
+ * earlier, which is not the thing worth checking.
+ */
+export const SAMPLE_DESIGN_SESSION_ID = "design-7f3a";

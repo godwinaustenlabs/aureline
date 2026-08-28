@@ -41,7 +41,7 @@ export function resolveSteps(config: HeliosConfig): number {
  * parameters via Flux Schnell (ADR-0004), strictly following them (no
  * unrequested creative drift).
  *
- * `env` carries the `AI` binding and the gateway id; `p_invoc_id` reaches the
+ * `env` carries the `AI` binding and the gateway id; `pipeline_id` reaches the
  * gateway's `metadata` so the log row can be joined back to `helios_runs`. The
  * model and its parameters come from `config.imageModel`, which is resolved
  * from KV once per invocation — never from `env.IMAGE_MODEL` (ADR-0008).
@@ -54,7 +54,7 @@ export async function generateImage(
 	params: HeliosParams,
 	config: HeliosConfig,
 	env: Env,
-	p_invoc_id: string
+	pipeline_id: string
 ): Promise<GeneratedImage> {
 	const prompt = buildFluxPrompt(params);
 	const steps = resolveSteps(config);
@@ -71,7 +71,7 @@ export async function generateImage(
 		{
 			gateway: {
 				id: env.AI_GATEWAY_ID,
-				metadata: { p_invoc_id },
+				metadata: { pipeline_id },
 				// The gateway caches image replies for an hour, and we have no seed to
 				// vary the cache key — without this flag the same concept keeps
 				// returning the exact same cached image (ticket 06, decision 4).

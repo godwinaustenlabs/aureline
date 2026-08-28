@@ -91,7 +91,7 @@ describe("generateImage", () => {
 		// The gateway options carry the invocation id and bypass the cache.
 		expect(options.gateway).toEqual({
 			id: "helios",
-			metadata: { p_invoc_id: "p-123" },
+			metadata: { pipeline_id: "p-123" },
 			cacheTtl: expect.any(Number),
 			skipCache: true,
 		});

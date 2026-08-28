@@ -43,6 +43,7 @@ Four things that would otherwise cost you an hour:
 - **Run `npx tsc --noEmit` from inside `apps/agent-helios`, not the repo root.** At the root, `npx` resolves TypeScript 7, which rejects this project's `"moduleResolution": "node"` with TS5108. The workspace-local TypeScript 5 is the one that matters. Known wart, not something you broke.
 - **`.dev.vars` is not needed today.** `.dev.vars.example` exists and is deliberately empty of keys: it documents *why* no secret is required, which is that AI Gateway is reached through the pre-authenticated `AI` binding. Copy it only when a ticket adds a real secret.
 - **DO SQLite migrations apply themselves.** `onStart` runs them on every Durable Object wake-up and Drizzle tracks what is already applied. After editing `src/db/schema.ts`, run **both** `npm run db:generate` and `npm run db:generate:d1`. Forget the second and the export to D1 starts failing quietly.
+- **Regenerating an existing migration needs the old table gone first.** Drizzle generates a bare `CREATE TABLE` with no `IF NOT EXISTS`, so anything that already applied the previous version throws "table already exists" — and for a Durable Object that happens inside `onStart`, which breaks the session rather than just losing its history. Locally, delete `.wrangler/state/v3/do/` and `.wrangler/state/v3/d1/` and let the next request rebuild them. On the deployed worker this is a human step and is written down in [ADR-HELIOS-0001](adr/helios/0001-pipeline-id-and-design-session-id.md); do not improvise it.
 - **Local KV starts empty**, so config resolves entirely from the `wrangler.jsonc` vars and the log line reads `(var)` five times. That is correct. It is what the fallbacks are for.
 
 ## Scripts
@@ -152,11 +153,16 @@ curl localhost:8787/
 curl -s -X POST localhost:8787/generate -H 'content-type: application/json' -d '{}'
 # 400  {"error":"concept: Invalid input: expected string, received undefined"}
 
-curl -s -X POST localhost:8787/generate -H 'content-type: application/json' -d '{"concept":"   "}'
+curl -s -X POST localhost:8787/generate -H 'content-type: application/json' \
+  -d '{"concept":"   ","design_session_id":"design-1"}'
 # 400  {"error":"concept: Too small: expected string to have >=1 characters"}
 
+curl -s -X POST localhost:8787/generate -H 'content-type: application/json' \
+  -d '{"concept":"art deco paisley"}'
+# 400  {"error":"design_session_id: Invalid input: expected string, received undefined"}
+
 curl -s -X POST localhost:8787/resume -H 'content-type: application/json' -d '{}'
-# 400  {"error":"p_invoc_id: Invalid input: expected string, received undefined"}
+# 400  {"error":"pipeline_id: Invalid input: expected string, received undefined"}
 
 curl -s localhost:8787/generate
 # 405  {"error":"POST required"}
@@ -165,7 +171,9 @@ curl -s localhost:8787/nope
 # 404  Not found
 ```
 
-These all cost nothing and never reach a model. A 4xx carries no `p_invoc_id`, because no invocation ever existed.
+These all cost nothing and never reach a model. A 4xx carries no `pipeline_id`, because no invocation ever existed.
+
+`design_session_id` is **required and has no fallback**. Helios will not mint one, and it will not accept the old `p_invoc_id` name in its place (ADR-HELIOS-0001). A run that cannot be traced back to a design still spends money and still lands in the audit table, so it is refused before the pipeline starts.
 
 ### 5. Config resolution, free
 
@@ -189,25 +197,26 @@ Every refusal is a 409 that writes nothing and bills nothing, so they are all fr
 
 ```bash
 curl -s -X POST localhost:8787/resume -H 'content-type: application/json' \
-  -d '{"p_invoc_id":"does-not-exist"}'
+  -d '{"pipeline_id":"does-not-exist"}'
 # 409  {"error":"no run does-not-exist in this session"}
 ```
 
-Resume a `p_invoc_id` that already succeeded and you should get the refusal about it already having an image. That one is the guard standing between you and paying for the same picture twice, so it is worth confirming it works.
+Resume a `pipeline_id` that already succeeded and you should get the refusal about it already having an image. That one is the guard standing between you and paying for the same picture twice, so it is worth confirming it works.
 
 ### 7. Happy path, **billed, about $0.0029**
 
 ```bash
 curl -s -X POST localhost:8787/generate \
   -H 'content-type: application/json' \
-  -d '{"concept":"art deco paisley"}'
+  -d '{"concept":"art deco paisley","design_session_id":"design-1"}'
 ```
 
-Expect **200** and a `HeliosResult` whose `p_invoc_id` is a UUID, `status` is `"completed"`, `error` is `null`, `params` carries all eight fields with values inside their allowed sets, and `image_url` points at a real object:
+Expect **200** and a `HeliosResult` whose `pipeline_id` is a UUID, `design_session_id` is the one you sent back unchanged, `status` is `"completed"`, `error` is `null`, `params` carries all eight fields with values inside their allowed sets, and `image_url` points at a real object:
 
 ```json
 {
-  "p_invoc_id": "60c2e14f-2af6-4918-88f0-a7e7c61e6199",
+  "pipeline_id": "60c2e14f-2af6-4918-88f0-a7e7c61e6199",
+  "design_session_id": "design-1",
   "status": "completed",
   "params": {
     "motif_type": "paisley", "repeat_type": "half-drop", "scale": "medium",
@@ -224,13 +233,13 @@ The params come from the model, so they vary between calls and between concepts.
 
 The dev server logs one config line first. There should be **no** line reading `planner: call for <id> did not route through AI Gateway`. That warning means `AI_GATEWAY_ID` was empty or wrong and the call went straight to Workers AI, unlogged, which also means `cost_usd` will be null. It is the only signal this happened, since token counts come back either way.
 
-To confirm the call really reached the Gateway, open the Cloudflare dashboard under AI > AI Gateway > `helios`. The request appears in the log carrying its `p_invoc_id` as metadata.
+To confirm the call really reached the Gateway, open the Cloudflare dashboard under AI > AI Gateway > `helios`. The request appears in the log carrying its `pipeline_id` as metadata.
 
 ### 8. Fetch the image, free
 
 ```bash
 curl -s -o /tmp/pattern.jpg -w '%{http_code} %{content_type}\n' \
-  "http://localhost:8787/images/patterns/<p_invoc_id>.jpg"
+  "http://localhost:8787/images/patterns/<pipeline_id>.jpg"
 # 200 image/jpeg
 ```
 
@@ -240,21 +249,22 @@ A key with no object behind it returns 404.
 
 ```bash
 curl -s -X POST localhost:8787/agents/helios-agent/default \
-  -H 'content-type: application/json' -d '{"concept":"paisley"}'
+  -H 'content-type: application/json' -d '{"concept":"paisley","design_session_id":"design-1"}'
 ```
 
 Equivalent to `/generate` and billed the same way, so skip it unless you are specifically checking the SDK path. The agent name is **kebab-cased**: `/agents/HeliosAgent/default` returns 400.
 
 ### 10. Session scoping, **billed, one call per session**
 
-Two requests to the same `session_id` land on the same Durable Object and still get different `p_invoc_id`s, because ids belong to the invocation and not the object.
+Two requests to the same `session_id` land on the same Durable Object and still get different `pipeline_id`s, because ids belong to the invocation and not the object. Send the same `design_session_id` on both and they stay grouped as one design while remaining separately identifiable — that is the whole reason there are two ids (AGENTS.md §3).
 
 You can prove the routing half of this **for free**, because an empty concept is rejected before the pipeline starts and so never reaches a model:
 
 ```bash
 for s in alpha beta alpha; do
   curl -s -X POST localhost:8787/generate -H 'content-type: application/json' \
-    -d "{\"concept\":\"\",\"session_id\":\"$s\"}" -o /dev/null -w "%{http_code}\n"
+    -d "{\"concept\":\"\",\"design_session_id\":\"design-1\",\"session_id\":\"$s\"}" \
+    -o /dev/null -w "%{http_code}\n"
 done
 # 400 three times, and three Durable Objects were reached without billing anything
 ```
@@ -266,8 +276,9 @@ done
 Add `throw new Error("model call failed");` as the first line of `planConcept` in `src/services/planner.ts`, save, wait for the reload, then POST a concept. Throwing before the model call keeps this free:
 
 ```json
-{ "p_invoc_id": "...", "status": "failed", "params": null,
-  "image_url": null, "cost_usd": null, "error": "planner: model call failed" }
+{ "pipeline_id": "...", "design_session_id": "design-1", "status": "failed",
+  "params": null, "image_url": null, "cost_usd": null,
+  "error": "planner: model call failed" }
 ```
 
 Move the throw into the validate stage instead and the prefix becomes `validate:`. Both must return HTTP **200**, because a failed run is a pipeline outcome and not a transport error.
@@ -278,7 +289,7 @@ Move the throw into the validate stage instead and the prefix becomes `validate:
 
 Each invocation writes to the Durable Object's own SQLite under `.wrangler/state/v3/do/`, then exports to the local D1 under `.wrangler/state/v3/d1/`. The `readRun` function in `repository/d1.repository.ts` is the intended read path, so prefer it over a hand-typed query.
 
-A completed run is **two rows sharing one `p_invoc_id`**: the `text` row carries the planner's params, model, token counts and dollar cost; the `image` row carries the R2 key and the image's cost. A failed image run has the same two rows with the image one marked `failed`, and that is the state `POST /resume` recovers.
+A completed run is **two rows sharing one `pipeline_id`**: the `text` row carries the planner's params, model, token counts and dollar cost; the `image` row carries the R2 key and the image's cost. Both also carry the `design_session_id` from the request, so `where design_session_id = ?` reads back every attempt at one design. A failed image run has the same two rows with the image one marked `failed`, and that is the state `POST /resume` recovers.
 
 What each column means, and where the traps are, is in [helios-runs-conventions.md](helios-runs-conventions.md).
 

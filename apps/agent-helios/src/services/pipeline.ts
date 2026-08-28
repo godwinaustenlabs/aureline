@@ -71,7 +71,7 @@ function imageModelMetadata(config: HeliosConfig) {
 export async function exportAndPrune(
 	db: HeliosDb,
 	env: Env,
-	p_invoc_id: string,
+	pipeline_id: string,
 	retentionLimit: number,
 ): Promise<void> {
 	try {
@@ -79,7 +79,7 @@ export async function exportAndPrune(
 		await exportRuns(getD1Db(env.DB), rows);
 		await pruneCompletedRuns(db, retentionLimit);
 	} catch (cause) {
-		console.error(`d1 export failed for ${p_invoc_id}:`, describeError(cause));
+		console.error(`d1 export failed for ${pipeline_id}:`, describeError(cause));
 	}
 }
 
@@ -113,11 +113,18 @@ export async function runImageStage(
 	db: HeliosDb,
 	env: Env,
 	config: HeliosConfig,
-	p_invoc_id: string,
-	concept: string,
-	params: HeliosParams,
-	metadataExtras: Record<string, unknown> = {},
+	// One object rather than six positional arguments, three of them adjacent
+	// strings (AGENTS.md §6). Field order mirrors `db/schema.ts`.
+	stage: {
+		pipelineId: string;
+		designSessionId: string;
+		concept: string;
+		params: HeliosParams;
+		metadataExtras?: Record<string, unknown>;
+	},
 ): Promise<ImageStageOutcome> {
+	const { pipelineId, designSessionId, concept, params, metadataExtras = {} } = stage;
+
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
@@ -133,15 +140,21 @@ export async function runImageStage(
 	let rowOpened = false;
 
 	try {
-		await startImageRun(db, p_invoc_id, concept, params, modelMetadata);
+		await startImageRun(db, {
+			pipelineId,
+			designSessionId,
+			userPrompt: concept,
+			plannerParams: params,
+			modelMetadata,
+		});
 		rowOpened = true;
 
-		const image = await generateImage(params, config, env, p_invoc_id);
+		const image = await generateImage(params, config, env, pipelineId);
 		costUsd = image.cost_usd;
 
-		const imageR2Key = await savePatternImage(env.PATTERNS, p_invoc_id, image.image, image.contentType);
+		const imageR2Key = await savePatternImage(env.PATTERNS, pipelineId, image.image, image.contentType);
 
-		await completeImageRun(db, p_invoc_id, imageR2Key, costUsd);
+		await completeImageRun(db, { pipelineId, imageR2Key, costUsd });
 
 		return { ok: true, imageR2Key, costUsd };
 	} catch (cause) {
@@ -151,9 +164,15 @@ export async function runImageStage(
 			// Nothing can be recorded then, and `cause` is still the failure worth
 			// reporting.
 			try {
-				await insertFailedImageRun(db, p_invoc_id, concept, params, modelMetadata);
+				await insertFailedImageRun(db, {
+					pipelineId,
+					designSessionId,
+					userPrompt: concept,
+					plannerParams: params,
+					modelMetadata,
+				});
 			} catch (rescueCause) {
-				console.error(`could not record the unopened image row for ${p_invoc_id}:`, describeError(rescueCause));
+				console.error(`could not record the unopened image row for ${pipelineId}:`, describeError(rescueCause));
 			}
 		}
 
@@ -177,9 +196,14 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 	const config = await resolveConfig(env);
 	console.log(describeConfig(config));
 
-	// Identity of this pipeline invocation. Generated per invocation, NOT derived
-	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
-	const p_invoc_id = crypto.randomUUID();
+	// Identity of this run of Helios. Generated per invocation, NOT derived from
+	// the Durable Object — one DO accumulates many invocations (ADR-0005).
+	const pipelineId = crypto.randomUUID();
+
+	// The design, not this run. It arrives on the request and is never minted
+	// here: a design id Helios invented would connect to nothing upstream or
+	// down, which is the whole thing it exists to do (AGENTS.md §3).
+	const designSessionId = req.design_session_id;
 
 	let stage: Stage = "persist";
 	let params: HeliosParams | null = null;
@@ -191,10 +215,15 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 	try {
 		// Inside the try so a storage failure is reported as a settled
 		// `failed` result rather than escaping as an opaque 500.
-		await startTextRun(db, p_invoc_id, req.concept, { model: config.textModel.model });
+		await startTextRun(db, {
+			pipelineId,
+			designSessionId,
+			userPrompt: req.concept,
+			modelMetadata: { model: config.textModel.model },
+		});
 
 		stage = "planner";
-		const planned = await planConcept(req.concept, env, config, p_invoc_id);
+		const planned = await planConcept(req.concept, env, config, pipelineId);
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
 		// on this binding, so the image stage would overwrite it. Real dollars, so
@@ -208,10 +237,15 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		const textModelMetadata = { model: planned.model, usage: planned.usage };
 
 		// Planner succeeded — settle the text row before the image row opens.
-		await completeTextRun(db, p_invoc_id, params, textModelMetadata, textCostUsd);
+		await completeTextRun(db, pipelineId, params, textModelMetadata, textCostUsd);
 
 		stage = "image";
-		const outcome = await runImageStage(db, env, config, p_invoc_id, req.concept, params);
+		const outcome = await runImageStage(db, env, config, {
+			pipelineId,
+			designSessionId,
+			concept: req.concept,
+			params,
+		});
 
 		// Recorded before anything can throw, so the catch below reports what the
 		// image actually cost rather than null.
@@ -220,10 +254,11 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			throw outcome.cause;
 		}
 
-		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+		await exportAndPrune(db, env, pipelineId, config.retentionLimit);
 
 		return {
-			p_invoc_id,
+			pipeline_id: pipelineId,
+			design_session_id: designSessionId,
 			status: "completed",
 			params,
 			image_url: `${origin}/images/${outcome.imageR2Key}`,
@@ -235,15 +270,16 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		// broke — and a throw from inside a catch escapes the function. Swallow
 		// it: `cause` is the failure worth reporting, this one is a symptom.
 		try {
-			await failRunningRuns(db, p_invoc_id, imageCost);
+			await failRunningRuns(db, pipelineId, imageCost);
 		} catch (cleanupCause) {
 			console.error("could not mark rows failed:", describeError(cleanupCause));
 		}
 
-		await exportAndPrune(db, env, p_invoc_id, config.retentionLimit);
+		await exportAndPrune(db, env, pipelineId, config.retentionLimit);
 
 		return {
-			p_invoc_id,
+			pipeline_id: pipelineId,
+			design_session_id: designSessionId,
 			status: "failed",
 			// Retained if the planner already produced valid params — partial state
 			// is kept rather than discarded, so a failure stays inspectable.

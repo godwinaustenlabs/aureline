@@ -1,7 +1,8 @@
+import type { HeliosParams } from "@aureline/shared-types";
 import { buildImagePrompt } from "../apps/agent-helios/src/prompts/image.prompt";
 
 //I have added the json params in excel sheet (which i sent seperately) from there u can copy and paste the params in below code to test the buildImagePrompt function for different params and see the output in console.
-const params = {
+const params: HeliosParams = {
   "motif_type": "geometric block",
   "repeat_type": "block",
   "scale": "medium",

@@ -9,7 +9,7 @@ import { createTestDb, insertRow } from "../repository/test-db";
 import { fakeEnv as sharedEnv } from "./test-env";
 // The same fixture the shared fake planner returns, so an assertion on
 // `result.params` is comparing against what the model actually said.
-import { sampleParamsFull as VALID_PARAMS } from "../fixtures/sample-params";
+import { sampleParamsFull as VALID_PARAMS, SAMPLE_DESIGN_SESSION_ID } from "../fixtures/sample-params";
 
 // The planner and the storage writes are imported by pipeline.ts, so mocking
 // these two modules (with a delegate that calls the real thing by default) is
@@ -43,7 +43,7 @@ const ORIGIN = "http://localhost:8787";
 
 
 
-const REQ: HeliosRequest = { concept: "art deco paisley" };
+const REQ: HeliosRequest = { concept: "art deco paisley", design_session_id: SAMPLE_DESIGN_SESSION_ID };
 
 /**
  * Fake `Env` for the whole pipeline, from the shared definition.
@@ -66,8 +66,8 @@ function fakeEnv(
 	return sharedEnv({ throwingD1: overrides.throwingD1 ?? true, ...overrides });
 }
 
-async function rowsFor(db: ReturnType<typeof createTestDb>, pInvocId: string) {
-	return db.select().from(heliosRuns).where(eq(heliosRuns.pInvocId, pInvocId));
+async function rowsFor(db: ReturnType<typeof createTestDb>, pipelineId: string) {
+	return db.select().from(heliosRuns).where(eq(heliosRuns.pipelineId, pipelineId));
 }
 
 describe("runPipeline failure behaviour", () => {
@@ -94,13 +94,43 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.status).toBe("completed");
 		expect(result.params).toEqual(VALID_PARAMS);
 		expect(result.cost_usd).toBe(0.0019008);
-		expect(result.image_url).toBe(`${ORIGIN}/images/patterns/${result.p_invoc_id}.jpg`);
+		expect(result.image_url).toBe(`${ORIGIN}/images/patterns/${result.pipeline_id}.jpg`);
 		expect(result.error).toBeNull();
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		expect(rows.find((row) => row.modality === "image")?.status).toBe("completed");
+	});
+
+	it("carries design_session_id from the request onto both rows and into the result", async () => {
+		// The chain AGENTS.md §3 describes, end to end: the id arrives on the
+		// request, lands on every row of the run, and comes back out so Iris and
+		// Atlas can carry the same one forward. A column written but never read back
+		// is how that chain breaks without anyone noticing.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.design_session_id).toBe(SAMPLE_DESIGN_SESSION_ID);
+		// Not the pipeline id, which is minted per run. Two different things.
+		expect(result.design_session_id).not.toBe(result.pipeline_id);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		expect(rows).toHaveLength(2);
+		expect(rows.every((row) => row.designSessionId === SAMPLE_DESIGN_SESSION_ID)).toBe(true);
+	});
+
+	it("gives two runs of one design different pipeline ids and the same design id", async () => {
+		// What makes "which attempt is the latest" answerable while still grouping
+		// the attempts together.
+		const { env } = fakeEnv();
+
+		const first = await runPipeline(db, REQ, env, ORIGIN);
+		const second = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(first.pipeline_id).not.toBe(second.pipeline_id);
+		expect(first.design_session_id).toBe(second.design_session_id);
 	});
 
 	it("records the planner's cost in dollars, not in neurons", async () => {
@@ -111,7 +141,7 @@ describe("runPipeline failure behaviour", () => {
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
-		const textRow = (await rowsFor(db, result.p_invoc_id)).find((row) => row.modality === "text");
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		expect(textRow?.costUsd).toBe(0.0019008);
 		expect(textRow?.costUsd).not.toBe(102);
 		// The neuron figure is not lost, it just belongs in usage rather than in a
@@ -131,7 +161,7 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.cost_usd).toBe(0.0019008);
 		expect(result.error).toMatch(/^image:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(imageRow?.status).toBe("failed");
@@ -150,7 +180,7 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.cost_usd).toBeNull();
 		expect(result.error).toMatch(/^planner:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].modality).toBe("text");
 		expect(rows[0].status).toBe("failed");
@@ -180,7 +210,7 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.params).toBeNull();
 		expect(result.error).toMatch(/^planner:/);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].status).toBe("failed");
 	});
@@ -197,7 +227,7 @@ describe("runPipeline failure behaviour", () => {
 		// The image call threw before a cost could be read, so none is reported.
 		expect(result.cost_usd).toBeNull();
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		const textRow = rows.find((row) => row.modality === "text");
 		const imageRow = rows.find((row) => row.modality === "image");
 		expect(textRow?.status).toBe("completed");
@@ -218,8 +248,8 @@ describe("runPipeline failure behaviour", () => {
 	});
 
 	it("leaves a concurrent invocation's running row alone", async () => {
-		await insertRow(db, { pInvocId: "other-inflight", modality: "text", status: "running" });
-		await insertRow(db, { pInvocId: "other-inflight", modality: "image", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "text", status: "running" });
+		await insertRow(db, { pipelineId: "other-inflight", modality: "image", status: "running" });
 		const { env } = fakeEnv({ planner: new Error("boom") });
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
@@ -260,7 +290,7 @@ describe("runPipeline failure behaviour", () => {
 		expect(result.error).toMatch(/^image:/);
 		expect(result.params).toEqual(VALID_PARAMS);
 
-		const rows = await rowsFor(db, result.p_invoc_id);
+		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.find((row) => row.modality === "text")?.status).toBe("completed");
 		const imageRow = rows.find((row) => row.modality === "image");
@@ -282,7 +312,7 @@ describe("runPipeline failure behaviour", () => {
 		// completed text row, and this deleted it.
 		await pruneCompletedRuns(db, 0);
 
-		expect(await rowsFor(db, result.p_invoc_id)).toHaveLength(2);
+		expect(await rowsFor(db, result.pipeline_id)).toHaveLength(2);
 	});
 
 	it("calls the image model exactly once on an image failure", async () => {

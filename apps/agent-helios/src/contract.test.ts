@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HeliosParamsSchema, HeliosRequestSchema, HeliosResumeRequestSchema } from "@aureline/shared-types";
-import { sampleParamsAlternate, sampleParamsFull } from "./fixtures/sample-params";
+import { sampleParamsAlternate, sampleParamsFull, SAMPLE_DESIGN_SESSION_ID } from "./fixtures/sample-params";
 
 /**
  * The wire contract's boundaries, tested from the side that matters: what gets
@@ -17,10 +17,11 @@ import { sampleParamsAlternate, sampleParamsFull } from "./fixtures/sample-param
 
 const VALID_REQUEST = {
 	concept: "art deco paisley in deep jewel tones",
+	design_session_id: SAMPLE_DESIGN_SESSION_ID,
 };
 
 describe("HeliosRequestSchema", () => {
-	it("accepts a bare concept, since that is all Helios needs to start", () => {
+	it("accepts a concept and a design session id, which is all Helios needs to start", () => {
 		expect(HeliosRequestSchema.safeParse(VALID_REQUEST).success).toBe(true);
 	});
 
@@ -29,14 +30,38 @@ describe("HeliosRequestSchema", () => {
 	});
 
 	it("rejects an empty or whitespace-only concept", () => {
-		expect(HeliosRequestSchema.safeParse({ concept: "" }).success).toBe(false);
-		expect(HeliosRequestSchema.safeParse({ concept: "   " }).success).toBe(false);
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, concept: "" }).success).toBe(false);
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, concept: "   " }).success).toBe(false);
 	});
 
 	it("rejects an over-long concept rather than sending it to a model", () => {
-		expect(HeliosRequestSchema.safeParse({ concept: "x".repeat(1001) }).success).toBe(false);
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, concept: "x".repeat(1001) }).success).toBe(false);
 		// The boundary itself is fine, so the limit is off-by-one safe.
-		expect(HeliosRequestSchema.safeParse({ concept: "x".repeat(1000) }).success).toBe(true);
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, concept: "x".repeat(1000) }).success).toBe(true);
+	});
+
+	it("rejects a request with no design_session_id, rather than minting one", () => {
+		// Destructured away rather than cast away: a missing field is ordinary data
+		// to `safeParse`, which takes `unknown`.
+		const { design_session_id: _absent, ...withoutIt } = VALID_REQUEST;
+
+		// A run that cannot be traced back to a design still spends money and still
+		// lands in the audit table, so refusing is cheaper than accepting.
+		expect(HeliosRequestSchema.safeParse(withoutIt).success).toBe(false);
+	});
+
+	it("rejects an empty design_session_id, which would trace back to nothing", () => {
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, design_session_id: "" }).success).toBe(false);
+		expect(HeliosRequestSchema.safeParse({ ...VALID_REQUEST, design_session_id: "   " }).success).toBe(false);
+	});
+
+	it("rejects the old p_invoc_id name instead of quietly accepting it", () => {
+		const { design_session_id: _absent, ...withoutIt } = VALID_REQUEST;
+
+		// Decision 3 of the ticket, made executable: there is no alias and no
+		// fallback. Accepting the old name "just in case" is how the confusion
+		// between the two ids started.
+		expect(HeliosRequestSchema.safeParse({ ...withoutIt, p_invoc_id: "run-a" }).success).toBe(false);
 	});
 
 	it("treats session_id as optional, because it only picks the Durable Object", () => {
@@ -50,13 +75,33 @@ describe("HeliosRequestSchema", () => {
 });
 
 describe("HeliosResumeRequestSchema", () => {
-	it("takes a p_invoc_id, since a resume names one run of one engine", () => {
-		expect(HeliosResumeRequestSchema.safeParse({ p_invoc_id: "run-a" }).success).toBe(true);
+	it("takes a pipeline_id, since a resume names one run of one engine", () => {
+		expect(HeliosResumeRequestSchema.safeParse({ pipeline_id: "run-a" }).success).toBe(true);
 	});
 
 	it("rejects a resume that names no run", () => {
 		expect(HeliosResumeRequestSchema.safeParse({}).success).toBe(false);
-		expect(HeliosResumeRequestSchema.safeParse({ p_invoc_id: "" }).success).toBe(false);
+		expect(HeliosResumeRequestSchema.safeParse({ pipeline_id: "" }).success).toBe(false);
+	});
+
+	it("rejects the old p_invoc_id name, so a stale caller fails loudly", () => {
+		// A 400 rather than a resume of `undefined`, which `getRunRows` would answer
+		// with no rows and the route would report as "no run in this session" — the
+		// wrong refusal for the actual problem.
+		expect(HeliosResumeRequestSchema.safeParse({ p_invoc_id: "run-a" }).success).toBe(false);
+	});
+
+	it("does not take a design_session_id, because a resume inherits the design", () => {
+		// Not rejected, just ignored: zod strips unknown keys by default. The point
+		// is that the resumed run's design comes off the row being resumed, so
+		// nothing a caller sends here could redirect it to a different design.
+		const parsed = HeliosResumeRequestSchema.safeParse({
+			pipeline_id: "run-a",
+			design_session_id: "some-other-design",
+		});
+
+		expect(parsed.success).toBe(true);
+		expect(parsed.success && "design_session_id" in parsed.data).toBe(false);
 	});
 });
 

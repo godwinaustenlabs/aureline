@@ -20,7 +20,8 @@ import { heliosRuns } from "../db/schema";
 const HELIOS_RUNS_DDL = `
 	CREATE TABLE helios_runs (
 		id TEXT PRIMARY KEY,
-		p_invoc_id TEXT NOT NULL,
+		pipeline_id TEXT NOT NULL,
+		design_session_id TEXT NOT NULL,
 		modality TEXT NOT NULL,
 		status TEXT NOT NULL,
 		user_prompt TEXT NOT NULL,
@@ -182,9 +183,10 @@ export function createFailingD1(): D1Database {
  * each test can set up exact created_at ordering and status combinations. */
 export async function insertRow(
 	db: HeliosDb,
-	overrides: Partial<typeof heliosRuns.$inferInsert> & { pInvocId: string; modality: "text" | "image" },
+	overrides: Partial<typeof heliosRuns.$inferInsert> & { pipelineId: string; modality: "text" | "image" },
 ) {
 	await db.insert(heliosRuns).values({
+		designSessionId: "design-1",
 		status: "completed",
 		userPrompt: "a pattern",
 		plannerParams: {},

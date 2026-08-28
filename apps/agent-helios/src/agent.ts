@@ -33,10 +33,10 @@ export class HeliosAgent extends Agent<Env> {
 		// Read-only and free. It must never be able to reach a model: it is the
 		// route a page is allowed to call on load and on every refresh.
 		if (request.method === "GET" && url.pathname === "/runs") {
-			const pInvocId = url.searchParams.get("p_invoc_id")?.trim();
+			const pipelineId = url.searchParams.get("pipeline_id")?.trim();
 			// Rows exactly as stored, not reshaped. Whatever reads this is
 			// debugging, and the stored shape is the thing worth seeing.
-			return json({ runs: pInvocId ? await getRunRows(db, pInvocId) : await listRuns(db) });
+			return json({ runs: pipelineId ? await getRunRows(db, pipelineId) : await listRuns(db) });
 		}
 
 		if (request.method !== "POST") {
@@ -51,7 +51,7 @@ export class HeliosAgent extends Agent<Env> {
 				return error(firstIssueMessage(parsed.error), 400);
 			}
 
-			const outcome = await resumeRun(db, parsed.data.p_invoc_id, this.env, url.origin);
+			const outcome = await resumeRun(db, parsed.data.pipeline_id, this.env, url.origin);
 			// A refusal never became an invocation: no rows, no model call, nothing
 			// billed. 409 rather than a `failed` result, which would claim a run
 			// happened. A run that did happen and failed still comes back as a 200.
@@ -61,7 +61,7 @@ export class HeliosAgent extends Agent<Env> {
 		const parsed = HeliosRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			// A malformed request never became a pipeline invocation, so there is no
-			// p_invoc_id to report — this is a transport error, not a run outcome.
+			// pipeline_id to report — this is a transport error, not a run outcome.
 			return error(firstIssueMessage(parsed.error), 400);
 		}
 

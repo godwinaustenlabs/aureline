@@ -8,7 +8,7 @@
 
 **Blocked by:** helios-02. Without the typed test database the rename produces silence at every test call site instead of errors.
 
-**Status:** not started.
+**Status:** done.
 
 **Owner:** Maaz Bin Asif. **Reviewer:** to be assigned.
 
@@ -31,12 +31,13 @@
 
 ## Checklist
 
-- [ ] `schema.ts` renamed, `design_session_id` added as the third column
-- [ ] both migrations regenerated, neither hand-edited, `HELIOS_RUNS_DDL` updated in the same commit
-- [ ] `MAX_ROWS_PER_INSERT` re-derived to 8 with the arithmetic in the comment
-- [ ] `RowSeed` added; the five row-opening functions and `runImageStage` converted
-- [ ] `HeliosRequestSchema` requires `design_session_id`; resume schema and `HeliosResult` renamed
-- [ ] the query-string key, the R2 key comment and the shared `aiGateway.ts` comment updated
-- [ ] `tests/run-concept.ts` annotated with the real `HeliosParams`
-- [ ] `docs/helios-runs-conventions.md` gains the two-ids section
-- [ ] `docs/adr/helios/0001-*.md` records the rename and the clean break
+- [x] `schema.ts` renamed, `design_session_id` added as the third column
+- [x] both migrations regenerated, neither hand-edited, `HELIOS_RUNS_DDL` updated in the same commit
+- [x] `MAX_ROWS_PER_INSERT` re-derived to 8 with the arithmetic in the comment
+- [x] `RowSeed` added; the five row-opening functions and `runImageStage` converted
+- [x] `HeliosRequestSchema` requires `design_session_id`; resume schema and `HeliosResult` renamed
+- [x] the query-string key, the R2 key comment and the shared `aiGateway.ts` comment updated
+- [x] `tests/run-concept.ts` annotated with the real `HeliosParams`
+- [x] the docs sweep: `running-locally.md`, `database.md`, `spec.md`, `flows.md`, `architecture.md`
+- [x] `docs/helios-runs-conventions.md` gains the two-ids section
+- [x] `docs/adr/helios/0001-*.md` records the rename and the clean break

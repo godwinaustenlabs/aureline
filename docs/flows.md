@@ -23,7 +23,7 @@ Total cost about **$0.0029**.
 1. **`agent.ts`, `onRequest`.** Not a POST is a 405. The body is parsed and checked against `HeliosRequestSchema`. A failure is a 400 with the first Zod issue, and no invocation exists.
 2. **`pipeline.ts`, `runPipeline`.** From here nothing throws. Every path returns a settled `HeliosResult`.
 3. **`resolveConfig(env)`.** One batched KV read for all five keys, cached at the edge for 60 seconds, falling back to `wrangler.jsonc` vars on anything going wrong. Read **once** per invocation, so every stage sees one snapshot. Reading per service would let two reads straddle a dashboard edit and write a row that is half old model and half new. Logs one `config: ...` line.
-4. **`crypto.randomUUID()`** mints `p_invoc_id`. This is the invocation's identity, not the object's.
+4. **`crypto.randomUUID()`** mints `pipeline_id`. This is the invocation's identity, not the object's.
 5. **`startTextRun`** writes the text row as `running`. Inside the try block, so DO storage being unavailable comes back as a settled failed result rather than an opaque 500.
 6. **`planner.ts`, `planConcept`.** Builds the system and user prompts from `prompts/planner.prompt.ts`, then calls `callPlannerModel` in `tools.ts`, which calls `getTextualModelOutput` in shared-utils. That converts `HeliosParamsSchema` to a JSON schema, sends a Chat Completions request with `response_format: json_schema` through AI Gateway, unwraps the reply, and validates. **On a schema mismatch or a thrown call it retries, up to `max_retries` total attempts.** *Billed, about $0.001 per attempt.*
 7. **`readGatewayCost(env)`, immediately.** `env.AI.aiGatewayLogId` holds only the **most recent** routed call on the binding, so this has to be read here. Read it after the image stage and you get the image's cost written onto the text row.
@@ -31,7 +31,7 @@ Total cost about **$0.0029**.
 9. **`completeTextRun`** settles the text row: status `completed`, the params, `{ model, usage }` metadata, and the dollar cost. The provider's neuron figure is not lost, it rides inside `usage`.
 10. **`runImageStage`.** Broken out below because `/resume` calls it too.
 11. **`exportAndPrune`.** Copies every settled row in this object to D1, then prunes to `retention_limit`, and only prunes if the export worked. Never throws.
-12. **Respond 200** with the params, `image_url` of `{origin}/images/patterns/{p_invoc_id}.jpg`, and `cost_usd`.
+12. **Respond 200** with the params, `image_url` of `{origin}/images/patterns/{pipeline_id}.jpg`, and `cost_usd`.
 
 ### Inside `runImageStage`
 
@@ -39,7 +39,7 @@ Total cost about **$0.0029**.
 2. **`imageGenerator.ts`, `generateImage`.** `buildImagePrompt` in `prompts/image.prompt.ts` turns the eight params into one flowing sentence. Clause order matters because Flux weights early clauses more heavily. Flux has no negative prompt, so exclusions become a `Do not include:` clause. A prompt over 2048 characters throws **before** the billed call.
 3. **`env.AI.run`** through the gateway with `skipCache: true`. The gateway would otherwise cache image replies for an hour, and with no seed to vary the key two identical briefs would get the same picture. *Billed, about $0.0019.*
 4. **`costUsd` is assigned the moment the model returns**, before anything else can fail. Everything after this point has already been paid for.
-5. **`savePatternImage`** writes the bytes to R2 under `patterns/{p_invoc_id}.jpg`.
+5. **`savePatternImage`** writes the bytes to R2 under `patterns/{pipeline_id}.jpg`.
 6. **`completeImageRun`** settles the row with the key and the cost.
 
 `runImageStage` **builds no `HeliosResult`**. It returns `{ ok, costUsd, ... }` and lets each caller shape its own response, so result building stays whole in one place per caller rather than split across two functions.
@@ -97,7 +97,7 @@ Refusal 5 is why `planner_params` is re-validated through `HeliosParamsSchema` i
 
 ### The three markers
 
-A resume is a **new invocation**. New `p_invoc_id`, its own two rows, and the original left exactly as it was, because that failure record is the point. It could not overwrite the original anyway: those rows are already in D1 by now, and `onConflictDoNothing` means whichever version landed first is the one D1 keeps.
+A resume is a **new invocation**. New `pipeline_id`, its own two rows, and the original left exactly as it was, because that failure record is the point. It could not overwrite the original anyway: those rows are already in D1 by now, and `onConflictDoNothing` means whichever version landed first is the one D1 keeps.
 
 Three fields go into `model_metadata` on **both** rows:
 
@@ -152,7 +152,7 @@ Runs at the end of every invocation, success or failure, in `exportAndPrune`.
 
 1. **`getSettledRows`** reads every row in this object that is not `running`.
 2. **`exportRuns`** inserts them into D1 in chunks of 9, with `onConflictDoNothing`. Repeats are harmless because `id` was minted in the Durable Object and travels with the row.
-3. **`pruneCompletedRuns`** deletes all but the newest `retention_limit` fully completed invocations, grouped by `p_invoc_id`. Failed runs and `running` rows are never touched.
+3. **`pruneCompletedRuns`** deletes all but the newest `retention_limit` fully completed invocations, grouped by `pipeline_id`. Failed runs and `running` rows are never touched.
 
 Step 3 only happens if steps 1 and 2 succeeded. Any failure logs and returns, because export is an audit concern and should not cost the caller their result. Free.
 
