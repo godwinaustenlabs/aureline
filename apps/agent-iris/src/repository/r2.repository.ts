@@ -53,12 +53,17 @@ export async function readColoredImage(bucket: R2Bucket, key: string): Promise<R
  *   caller wiring the two engines together copies a URL across, not a key.
  * - **An R2 key**, read through this Worker's `PATTERNS` binding.
  *
- * One trap on the key form, and it is not obvious from the binding name. Iris's
- * `PATTERNS` is `images-bucket`; Helios's identically-named `PATTERNS` is
- * `helios-bucket`. They are different buckets. A key that Helios wrote resolves
- * here only if someone copied the object across by hand, which is exactly how
- * `patterns/motif.jpg` came to exist in `images-bucket` for local testing. The
- * URL form has no such limitation and is the one to prefer.
+ * The key form works across engines, because all three bind `PATTERNS` to the
+ * same `images-bucket` and separate by key prefix. A `patterns/…` key Helios
+ * wrote therefore resolves through this binding directly, with nothing copied
+ * by hand. That was not always true: Helios used to own a separate
+ * `helios-bucket`, and a key handed across then produced a plain miss that read
+ * like a deleted object.
+ *
+ * Prefer the URL form anyway. It is what Helios actually returns from its own
+ * pipeline, so a caller wiring the two together is passing one along rather than
+ * reaching into another engine's key space — and it keeps working if the buckets
+ * are ever split again.
  *
  * Throws, naming the ref, on every failure path. This read happens **before**
  * the image model is called, so a failure here costs nothing — which is only
@@ -126,9 +131,10 @@ async function readMotifFromBucket(
 
 	if (!object) {
 		throw new Error(
-			`motif "${key}" not found in Iris's bucket. If Helios wrote it, note that ` +
-				`Helios writes to a different bucket and the object has to be copied across; ` +
-				`passing the URL Helios returned avoids this entirely.`,
+			`motif "${key}" not found in images-bucket. Every engine shares this bucket ` +
+				`and separates by key prefix, so check the prefix is right ` +
+				`(Helios writes "patterns/", Iris "iris/", Atlas "atlas/"); ` +
+				`passing the URL Helios returned avoids guessing at keys entirely.`,
 		);
 	}
 

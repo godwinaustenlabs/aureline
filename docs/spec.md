@@ -49,7 +49,7 @@ All declared in `apps/agent-helios/wrangler.jsonc`.
 | `HeliosAgent` | Durable Object | class `HeliosAgent`, migration tag `v1`, `new_sqlite_classes` | Simulated in `.wrangler/state/` |
 | `AI` | Workers AI | The account's Workers AI | **Calls the real API. Every call bills.** |
 | `DB` | D1 | `helios-d1` | Simulated locally |
-| `PATTERNS` | R2 | `helios-bucket` | Simulated locally |
+| `PATTERNS` | R2 | `images-bucket` | Shared with Iris and Atlas, separated by key prefix. Simulated locally |
 | `CONFIG` | KV | namespace titled `HELIOS_CONFIG` | Simulated locally, and empty on a fresh clone |
 
 Plus `compatibility_date: "2026-07-27"`, `compatibility_flags: ["nodejs_compat"]`, observability on, and source maps uploaded.
