@@ -124,8 +124,102 @@ describe("runPipeline", () => {
 		// iris-08: text row metadata carries model, usage, and prompt_version
 		const textMeta = textRow?.modelMetadata as Record<string, unknown>;
 		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
-		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v2");
 		expect(textMeta).toHaveProperty("usage");
+		expect(textMeta).toHaveProperty("had_reference_image", false);
+	});
+
+	it("records had_reference_image on the text row when one was attached", async () => {
+		// The reference image is transient and is never stored, so this flag is
+		// the only durable trace it existed. Without it, "why does this run look
+		// different from that one" is unanswerable from the audit table — which
+		// matters most after a `/resume`, since resume re-runs the image stage
+		// from these stored params and never sees an image at all.
+		const { env } = fakeEnv();
+		const withImage: IrisRequest = {
+			...REQ,
+			image: { bytes: new Uint8Array([137, 80, 78, 71]), contentType: "image/png" },
+		};
+
+		const result = await runPipeline(db, withImage, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		const rows = await rowsFor(db, result.pipeline_id);
+		const textMeta = rows.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
+		expect(textMeta).toHaveProperty("had_reference_image", true);
+	});
+
+	/**
+	 * Reads the multipart form the image model was actually sent.
+	 *
+	 * The body is parsed rather than inspected structurally. A `JSON.stringify`
+	 * of it renders `{}` — a `ReadableStream` has no enumerable properties — so
+	 * an assertion against the serialized form passes whatever was really sent,
+	 * which is no assertion at all.
+	 */
+	async function imageCallForm(run: ReturnType<typeof fakeEnv>["run"]): Promise<FormData> {
+		const imageCall = run.mock.calls.find(([model]) => model.startsWith("@cf/black-forest-labs"));
+		if (!imageCall) throw new Error("the image model was never called");
+
+		const { body, contentType } = (imageCall[1] as { multipart: { body: BodyInit; contentType: string } }).multipart;
+		return new Response(body, { headers: { "content-type": contentType } }).formData();
+	}
+
+	it("sends the reference image to the image model, second after the motif", async () => {
+		// Supersedes ADR-SHARED-0003, which stopped the reference at the planner.
+		// Iris still colours Helios's motif — that is what `input_image_0` is — and
+		// the reference rides alongside it as a colour source.
+		//
+		// **Position is the contract.** The prompt names them in this order ("the
+		// first is the pattern to colour, the second is a colour reference"), so a
+		// swap here leaves both the prompt and the array valid while the model
+		// recolours the photograph and reads the pattern as a palette.
+		const { env, run } = fakeEnv();
+		const png = new Uint8Array([137, 80, 78, 71]);
+
+		await runPipeline(db, { ...REQ, image: { bytes: png, contentType: "image/png" } }, env, ORIGIN);
+
+		const form = await imageCallForm(run);
+		expect(form.get("input_image_0")).not.toBeNull();
+		expect(form.get("input_image_1")).not.toBeNull();
+
+		// Identified by their bytes, not by position alone — that is the only way
+		// to catch the two being swapped.
+		const motif = new Uint8Array(await (form.get("input_image_0") as File).arrayBuffer());
+		const reference = new Uint8Array(await (form.get("input_image_1") as File).arrayBuffer());
+		expect(Array.from(motif.subarray(0, 2))).toEqual([0xff, 0xd8]);
+		expect(Array.from(reference.subarray(0, 4))).toEqual([137, 80, 78, 71]);
+
+		// And the model is told which is which. Without this the two images are
+		// just as likely to be blended.
+		expect(form.get("prompt")).toContain("The first is the pattern to colour");
+	});
+
+	it("sends the motif alone when no reference image was attached", async () => {
+		// The regression promise: a request without an upload builds the same
+		// one-element call it always did.
+		const { env, run } = fakeEnv();
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		const form = await imageCallForm(run);
+		expect(form.get("input_image_0")).not.toBeNull();
+		expect(form.get("input_image_1")).toBeNull();
+		expect(form.get("prompt")).not.toContain("The first is the pattern to colour");
+	});
+
+	it("records on the image row that the reference reached the model", async () => {
+		const { env } = fakeEnv();
+		const png = new Uint8Array([137, 80, 78, 71]);
+
+		const result = await runPipeline(db, { ...REQ, image: { bytes: png, contentType: "image/png" } }, env, ORIGIN);
+
+		const imageRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "image");
+		const meta = imageRow?.modelMetadata as Record<string, unknown>;
+		expect(meta).toHaveProperty("reference_image_sent", true);
+		// A PNG, so its size could not be read. Null rather than absent: the row
+		// says nobody measured, instead of implying a size.
+		expect(meta).toHaveProperty("reference_dimensions", null);
 	});
 
 	/**
@@ -171,7 +265,7 @@ describe("runPipeline", () => {
 		const rows = await rowsFor(db, result.pipeline_id);
 		const textMeta = rows.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
 		expect(textMeta).toHaveProperty("prompt_source", "code");
-		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v2");
 		expect(textMeta).toHaveProperty("prompt_updated_at", null);
 	});
 
@@ -361,6 +455,8 @@ describe("runPipeline", () => {
 			height: 1024,
 			inputDimensions: { width: 128, height: 128 },
 			cost_usd: 0.0171,
+			referenceImageSent: false,
+			referenceDimensions: null,
 		});
 		patternsPut.mockRejectedValueOnce(new Error("R2 unavailable"));
 
@@ -428,7 +524,7 @@ describe("runImageStage re-entry (iris-10's /resume)", () => {
 		// ...and so does what `startImageRun` wrote, because `completeImageRun`
 		// merges rather than replaces.
 		expect(metadata.model).toBe("@cf/black-forest-labs/flux-2-klein-9b");
-		expect(metadata.prompt_version).toBe("iris-color-v1");
+		expect(metadata.prompt_version).toBe("iris-color-v3");
 		// ...alongside the dimensions, which completeImageRun adds after the
 		// markers are already on the row.
 		expect(metadata.output_dimensions).toEqual({ width: 128, height: 128 });

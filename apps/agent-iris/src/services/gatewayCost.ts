@@ -32,6 +32,13 @@ const READ_BACKOFF_MS = [400, 1600];
  * The log id is captured once, up front, for exactly that reason: the retries
  * below must not re-read a property another stage may have moved on.
  *
+ * **Only ever call this for a call that actually routed through the gateway.**
+ * An ungated call does not clear `aiGatewayLogId` — it leaves whatever the last
+ * routed call put there. So calling this after one does not return null; it
+ * returns the *previous* stage's cost and attributes it to this one. Iris's
+ * image call is ungated and reports its null directly (see `ungatedCallCost` in
+ * `colorizer.ts`) rather than coming through here.
+ *
  * **Only the last attempt is visible.** When the planner retries, each attempt
  * is its own gateway call and this returns the cost of the final one, not the
  * sum. A run whose planner retried therefore under-reports slightly. The
@@ -42,9 +49,7 @@ const READ_BACKOFF_MS = [400, 1600];
  *
  * A missing, failed or unlogged cost is always tolerated as `null`. Cost is an
  * audit concern and must never fail a run that otherwise worked (iris-08
- * decision 5). Today the Iris image stage always lands here: that call passes
- * no gateway id, so there is no log id and no cost to read.
- * Every path to that null logs first, though. The three ways it can happen —
+ * decision 5). Every path to that null logs first, though. The three ways it can happen —
  * no log id, a throw, a log with no cost on it — are indistinguishable from
  * the outside, and a silent null in a cost report reads as a free run.
  *

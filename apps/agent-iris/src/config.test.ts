@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { CONFIG_CACHE_TTL, describeConfig, resolveConfig, type ConfigEnv } from "./config";
+import { CONFIG_CACHE_TTL, describeConfig, plannerModelFor, resolveConfig, type ConfigEnv } from "./config";
 
 const VARS = {
 	PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
+	VISION_PLANNER_MODEL: "@cf/meta/llama-3.2-11b-vision-instruct",
 	IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 	AI_GATEWAY_ID: "iris",
 	RETENTION_LIMIT: "5",
@@ -12,6 +13,7 @@ const VARS = {
 
 const ALL_KEYS = [
 	"text_model",
+	"vision_planner_model",
 	"image_model",
 	"max_retries",
 	"retention_limit",
@@ -44,6 +46,7 @@ function fakeEnv(
 /** The shape actually stored in the IRIS_CONFIG namespace. */
 const FULL_KV = {
 	text_model: '{ "model": "@cf/openai/gpt-oss-120b", "temperature": 1 }',
+	vision_planner_model: '{ "model": "@cf/meta/llama-3.2-11b-vision-instruct" }',
 	image_model:
 		'{ "model": "@cf/black-forest-labs/flux-2-klein-9b", "width": 1024, "height": 1024, "steps": 4 }',
 	max_retries: "3",
@@ -69,6 +72,7 @@ describe("resolveConfig", () => {
 
 		expect(config).toEqual({
 			textModel: { model: "@cf/openai/gpt-oss-120b", temperature: 1 },
+			visionTextModel: { model: "@cf/meta/llama-3.2-11b-vision-instruct" },
 			imageModel: {
 				model: "@cf/black-forest-labs/flux-2-klein-9b",
 				width: 1024,
@@ -80,6 +84,7 @@ describe("resolveConfig", () => {
 			maxResumeAttempts: 4,
 			source: {
 				textModel: "kv",
+				visionTextModel: "kv",
 				imageModel: "kv",
 				maxRetries: "kv",
 				retentionLimit: "kv",
@@ -203,12 +208,14 @@ describe("resolveConfig", () => {
 
 		expect(config).toEqual({
 			textModel: { model: VARS.PLANNER_MODEL },
+			visionTextModel: { model: VARS.VISION_PLANNER_MODEL },
 			imageModel: { model: VARS.IMAGE_MODEL },
 			maxRetries: 2,
 			retentionLimit: 5,
 			maxResumeAttempts: 3,
 			source: {
 				textModel: "var",
+				visionTextModel: "var",
 				imageModel: "var",
 				maxRetries: "var",
 				retentionLimit: "var",
@@ -239,6 +246,7 @@ describe("describeConfig", () => {
 
 		expect(line).toBe(
 			"config: text_model=@cf/openai/gpt-oss-120b(temperature=1) (kv) " +
+				"vision_planner_model=@cf/meta/llama-3.2-11b-vision-instruct (kv) " +
 				"image_model=@cf/black-forest-labs/flux-2-klein-9b(width=1024,height=1024,steps=4) (kv) " +
 				"max_retries=3 (kv) retention_limit=5 (var) max_resume_attempts=4 (kv)"
 		);
@@ -272,5 +280,59 @@ describe("max_resume_attempts", () => {
 
 		expect(config.maxResumeAttempts).toBe(3);
 		expect(config.source.maxResumeAttempts).toBe("var");
+	});
+});
+
+describe("plannerModelFor", () => {
+	it("uses the vision model when one is configured", async () => {
+		const config = await resolveConfig(fakeEnv(FULL_KV).env);
+
+		expect(plannerModelFor(config).model).toBe("@cf/meta/llama-3.2-11b-vision-instruct");
+	});
+
+	it("carries the vision model's own temperature, not the text model's", async () => {
+		// The failure this catches is quiet and expensive: reading the id from one
+		// model and the temperature from the other tunes a model that is not the
+		// one being called, on every billed request.
+		const { env } = fakeEnv({
+			...FULL_KV,
+			vision_planner_model:
+				'{ "model": "@cf/meta/llama-3.2-11b-vision-instruct", "temperature": 0.3 }',
+		});
+
+		expect(plannerModelFor(await resolveConfig(env))).toEqual({
+			model: "@cf/meta/llama-3.2-11b-vision-instruct",
+			temperature: 0.3,
+		});
+	});
+
+	it("falls back to the text model when the vision var is empty", async () => {
+		// The off switch. An empty var is how this is turned off without a deploy,
+		// so it has to resolve to the text model rather than to an empty model id
+		// that would reach `ai.run` and fail there.
+		const { vision_planner_model: _absent, ...rest } = FULL_KV;
+		const { env } = fakeEnv(rest, { VISION_PLANNER_MODEL: "" });
+
+		expect(plannerModelFor(await resolveConfig(env))).toEqual({
+			model: "@cf/openai/gpt-oss-120b",
+			temperature: 1,
+		});
+	});
+
+	it("falls back to the text model when the vision var is absent entirely", async () => {
+		const { vision_planner_model: _absent, ...rest } = FULL_KV;
+		const { env } = fakeEnv(rest, { VISION_PLANNER_MODEL: undefined });
+
+		expect(plannerModelFor(await resolveConfig(env)).model).toBe("@cf/openai/gpt-oss-120b");
+	});
+
+	it("falls back to the var, with a warning, when KV holds an invalid vision model", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, vision_planner_model: '{ "temperature": 0.5 }' });
+
+		const config = await resolveConfig(env);
+
+		expect(config.source.visionTextModel).toBe("var");
+		expect(config.visionTextModel).toEqual({ model: VARS.VISION_PLANNER_MODEL });
+		expect(warn).toHaveBeenCalled();
 	});
 });

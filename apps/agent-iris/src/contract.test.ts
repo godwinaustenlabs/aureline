@@ -117,6 +117,26 @@ describe("IrisParamsSchema", () => {
 		expect(IrisParamsSchema.safeParse({ ...sampleParamsFull, mood: "  " }).success).toBe(false);
 	});
 
+	it("rejects params with no image_prompt", () => {
+		const { image_prompt: _absent, ...withoutIt } = sampleParamsFull;
+
+		// Required from the start, before RAG exists to make it useful. The
+		// mechanism has to work end to end now so that turning RAG on later is a
+		// content change and not a code change (phase-1-plan §3).
+		expect(IrisParamsSchema.safeParse(withoutIt).success).toBe(false);
+	});
+
+	it("rejects an empty or whitespace-only image_prompt", () => {
+		expect(IrisParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "" }).success).toBe(false);
+		expect(IrisParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "   " }).success).toBe(false);
+	});
+
+	it("rejects an image_prompt over 500 characters", () => {
+		// One character either side of the boundary, so an off-by-one is visible.
+		expect(IrisParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "x".repeat(500) }).success).toBe(true);
+		expect(IrisParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "x".repeat(501) }).success).toBe(false);
+	});
+
 	it("rejects the half-built params object that used to pass the tests", () => {
 		// This exact value sat in do.repository.test.ts behind an `as never` and
 		// was never checked by anything. It is here so it can never come back.

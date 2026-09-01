@@ -72,6 +72,9 @@ export function fakeEnv(
 		getLog?: ReturnType<typeof vi.fn>;
 		maxResumeAttempts?: string;
 		throwingD1?: boolean;
+		/** Turns the vision planner on for this env. Empty (the default) leaves it
+		 *  off and `plannerModelFor` falls back to `PLANNER_MODEL`. */
+		visionPlannerModel?: string;
 	} = {},
 ) {
 	// All three parameters are declared, and the return is `unknown`, because
@@ -117,6 +120,9 @@ export function fakeEnv(
 		PATTERNS: { put: patternsPut, get: patternsGet },
 		DB: d1,
 		PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
+		// Empty by default, so `plannerModelFor` falls back to PLANNER_MODEL and
+		// every existing suite keeps calling the model it always did.
+		VISION_PLANNER_MODEL: overrides.visionPlannerModel ?? "",
 		IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 		MAX_RETRIES: "2",
 		RETENTION_LIMIT: "5",

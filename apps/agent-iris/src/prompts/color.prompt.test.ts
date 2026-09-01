@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { IrisParams } from "@aureline/shared-types";
 import { IrisParamsSchema } from "@aureline/shared-types";
-import { buildColorPrompt, IRIS_COLOR_PROMPT_VERSION } from "./color.prompt";
+import {
+  buildColorPrompt,
+  buildImageModelPrompt,
+  IRIS_COLOR_PROMPT_VERSION,
+} from "./color.prompt";
 import { COLOR_GLOSSARY } from "./color.glossary";
 
 /**
@@ -20,6 +24,7 @@ const CASES: ReadonlyArray<{ name: string; params: IrisParams }> = [
       saturation: "muted",
       background_treatment: "textured",
       mood: "earthy warm",
+      image_prompt: "Let the sand carry the texture and keep the ivory clean.",
     },
   },
   {
@@ -31,6 +36,7 @@ const CASES: ReadonlyArray<{ name: string; params: IrisParams }> = [
       saturation: "balanced",
       background_treatment: "solid",
       mood: "opulent traditional",
+      image_prompt: "Confine the gold to the finest details.",
     },
   },
   {
@@ -41,6 +47,7 @@ const CASES: ReadonlyArray<{ name: string; params: IrisParams }> = [
       saturation: "vibrant",
       background_treatment: "transparent",
       mood: "stark modern",
+      image_prompt: "Hold the charcoal flat and even, with no gradient.",
     },
   },
 ];
@@ -110,6 +117,90 @@ describe("buildColorPrompt", () => {
   it("exports a version id", () => {
     // Prompts are never edited in place; the id is how a stored run says which
     // wording produced it.
-    expect(IRIS_COLOR_PROMPT_VERSION).toBe("iris-color-v1");
+    expect(IRIS_COLOR_PROMPT_VERSION).toBe("iris-color-v3");
+  });
+});
+
+describe("buildImageModelPrompt", () => {
+  const { params } = CASES[1];
+
+  it("is the deterministic prompt followed by image_prompt, in that order", () => {
+    // The exact composed string, not a `toContain` on each half. Order is the
+    // whole contract here — the deterministic layer has to come first, because
+    // the model weights earlier clauses more heavily and the free-form layer is
+    // only ever allowed to add.
+    expect(buildImageModelPrompt(params)).toBe(
+      `${buildColorPrompt(params)} Confine the gold to the finest details.`,
+    );
+  });
+
+  it("puts image_prompt after every deterministic clause", () => {
+    const composed = buildImageModelPrompt(params);
+
+    // Positional rather than presence-based: both halves being in the string
+    // would pass even if they were emitted the wrong way round.
+    expect(composed.indexOf("Confine the gold")).toBeGreaterThan(
+      composed.indexOf(params.mood),
+    );
+  });
+
+  it("does not alter buildColorPrompt's own output", () => {
+    // The two layers stay separable. A reader looking at a run has to be able
+    // to tell which words we wrote and which the planner did.
+    expect(buildImageModelPrompt(params).startsWith(buildColorPrompt(params))).toBe(true);
+  });
+
+  it("trims surrounding whitespace from image_prompt", () => {
+    const padded: IrisParams = { ...params, image_prompt: "  Keep it flat.  " };
+
+    expect(buildImageModelPrompt(padded)).toBe(`${buildColorPrompt(padded)} Keep it flat.`);
+  });
+
+  it("varies with image_prompt alone", () => {
+    // Without this, everything above would still pass if the function ignored
+    // `image_prompt` and returned `buildColorPrompt` unchanged.
+    const other: IrisParams = { ...params, image_prompt: "Something else entirely." };
+
+    expect(buildImageModelPrompt(other)).not.toBe(buildImageModelPrompt(params));
+  });
+});
+
+describe("buildImageModelPrompt and the reference image clause", () => {
+  const { params } = CASES[1];
+
+  it("adds nothing at all without a reference image", () => {
+    // The regression promise as an equality rather than a `not.toContain`: a run
+    // with no upload must produce the exact string it produced before this
+    // existed, not merely one that lacks the new clause.
+    expect(buildImageModelPrompt(params, { hasReferenceImage: false })).toBe(
+      buildImageModelPrompt(params),
+    );
+  });
+
+  it("leads with the clause naming which image is which", () => {
+    // First, not appended. The model has to know which picture the palette
+    // instruction applies to before it reads the palette instruction.
+    const prompt = buildImageModelPrompt(params, { hasReferenceImage: true });
+
+    expect(prompt.startsWith("You are given two images.")).toBe(true);
+    expect(prompt).toContain("The first is the pattern to colour");
+    expect(prompt).toContain("The second is a colour reference");
+  });
+
+  it("tells the model to take colour from the reference but not its shapes", () => {
+    // Shape, motif, line weight and repeat belong to Helios. A reference that
+    // alters the drawing has broken the engine boundary, not just this run.
+    expect(buildImageModelPrompt(params, { hasReferenceImage: true })).toContain(
+      "never its shapes or motifs",
+    );
+  });
+
+  it("keeps the deterministic half and image_prompt intact, in the same order", () => {
+    // The clause is added in front of the existing string, not woven into it —
+    // so a reader can still tell which words came from us, which from the
+    // planner, and which from this.
+    const withReference = buildImageModelPrompt(params, { hasReferenceImage: true });
+
+    expect(withReference.endsWith(buildImageModelPrompt(params))).toBe(true);
   });
 });

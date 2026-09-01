@@ -352,6 +352,41 @@ describe("resumeRun success", () => {
 		expect(planConcept).not.toHaveBeenCalled();
 	});
 
+	it("sends the motif alone, even when the original run had a reference image", async () => {
+		// Resume is unchanged by the reference-image work and has to stay that way.
+		// The image is transient and was never persisted, so a resumed run has none
+		// to send — and the two flags then disagree by design: the text row's
+		// `had_reference_image` says the params were shaped by a picture, the image
+		// row's `reference_image_sent` says this attempt's pixels were not. Without
+		// both, "why does the retry look different" has no answer.
+		const { env, run } = fakeEnv();
+		await seedResumableRun(db, {
+			textMetadata: { model: "@cf/openai/gpt-oss-120b", had_reference_image: true },
+		});
+
+		const outcome = await resumeRun(db, PARENT, env, ORIGIN);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+
+		const imageCall = run.mock.calls.find(([model]) => model.startsWith("@cf/black-forest-labs"));
+		if (!imageCall) throw new Error("the image model was never called");
+		const { body, contentType } = (imageCall[1] as { multipart: { body: BodyInit; contentType: string } }).multipart;
+		const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
+
+		// One image, the motif. `input_image_1` is where a reference would land.
+		expect(form.get("input_image_0")).not.toBeNull();
+		expect(form.get("input_image_1")).toBeNull();
+
+		const rows = await rowsFor(db, outcome.result.pipeline_id);
+		const imageMeta = rows.find((row) => row.modality === "image")?.modelMetadata as Record<string, unknown>;
+		expect(imageMeta).toHaveProperty("reference_image_sent", false);
+
+		// The original's own record is untouched.
+		const parent = await rowsFor(db, PARENT);
+		const parentText = parent.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
+		expect(parentText).toHaveProperty("had_reference_image", true);
+	});
+
 	it("puts root, resumed_from and attempt on both rows of the resumed run", async () => {
 		const { env } = fakeEnv();
 		await seedResumableRun(db);

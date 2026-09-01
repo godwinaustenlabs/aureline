@@ -14,4 +14,5 @@ export {
 export {
   IRIS_COLOR_PROMPT_VERSION,
   buildColorPrompt,
+  buildImageModelPrompt,
 } from "./color.prompt";

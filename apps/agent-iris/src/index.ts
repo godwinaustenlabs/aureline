@@ -1,6 +1,7 @@
 import { getAgentByName, routeAgentRequest } from "agents";
 import { readColoredImage } from "./repository/r2.repository";
 import { preflight, withCors } from "./cors";
+import { readSessionId } from "./http";
 
 // The Durable Object class must be exported from the Worker's main module for
 // wrangler's `class_name: "IrisAgent"` binding to resolve.
@@ -71,18 +72,28 @@ async function route(request: Request, env: Env): Promise<Response> {
 /**
  * Which Durable Object serves this request (ADR-0005).
  *
- * A POST carries its session in the JSON body, a GET has no body at all and
- * carries it in the query string. Both are read, because a GET falling through
- * to the shared `default` instance would report an empty history for every
- * named session while looking like it worked.
+ * A POST carries its session in its body — JSON or multipart, and `readSessionId`
+ * handles both — while a GET has no body at all and carries it in the query
+ * string. Both are read, because a GET falling through to the shared `default`
+ * instance would report an empty history for every named session while looking
+ * like it worked.
+ *
+ * The multipart case matters here for the same reason: reading a multipart body
+ * as JSON throws, the throw is swallowed, and every request carrying a reference
+ * image would land on `default` with nothing anywhere saying so.
  */
 async function scopeKey(request: Request): Promise<string> {
-	if (request.method !== "POST") {
-		return normaliseSession(new URL(request.url).searchParams.get("session_id"));
-	}
+	const session =
+		request.method === "POST"
+			? normaliseSession(await readSessionId(request))
+			: normaliseSession(new URL(request.url).searchParams.get("session_id"));
 
-	const body = await request.clone().json<{ session_id?: unknown }>().catch(() => undefined);
-	return normaliseSession(body?.session_id);
+	// Logged because the failure this replaced was silent: an unreadable body
+	// routed to `default` with nothing anywhere saying so. Seeing `default` here
+	// when you typed a session id is the whole signal.
+	console.log(`route: ${request.method} ${new URL(request.url).pathname} -> DO "${session}"`);
+
+	return session;
 }
 
 /** A usable session name, or the shared instance an omitted one lands on. */

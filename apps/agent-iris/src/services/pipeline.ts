@@ -1,5 +1,11 @@
 import { getD1Db, type IrisDb } from "../db/client";
-import { IrisParamsSchema, type IrisParams, type IrisRequest, type IrisResult } from "@aureline/shared-types";
+import {
+	IrisParamsSchema,
+	type IrisParams,
+	type IrisRequest,
+	type IrisResult,
+	type ReferenceImage,
+} from "@aureline/shared-types";
 import { planConcept } from "./planner";
 import { colorizeMotif } from "./colorizer";
 import { readGatewayCost } from "./gatewayCost";
@@ -125,10 +131,20 @@ export async function runImageStage(
 		concept: string;
 		motifRef: string;
 		params: IrisParams;
+		/**
+		 * The user's reference image, when this invocation carried one.
+		 *
+		 * Optional, and `/resume` simply omits it — the image is transient and was
+		 * never persisted, so a resumed run has none and behaves exactly as it
+		 * always did. Nothing in `resume.ts` had to change for that to be true,
+		 * which is why this is shaped as an optional field rather than a parameter
+		 * every caller must answer.
+		 */
+		referenceImage?: ReferenceImage;
 		metadataExtras?: Record<string, unknown>;
 	},
 ): Promise<ImageStageOutcome> {
-	const { pipelineId, designSessionId, concept, motifRef, params, metadataExtras = {} } = stage;
+	const { pipelineId, designSessionId, concept, motifRef, params, referenceImage, metadataExtras = {} } = stage;
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
@@ -148,7 +164,7 @@ export async function runImageStage(
 		await startImageRun(db, seed);
 		rowOpened = true;
 
-		const image = await colorizeMotif(motifRef, params, config, env, pipelineId);
+		const image = await colorizeMotif(motifRef, params, config, env, pipelineId, referenceImage);
 		costUsd = image.cost_usd;
 
 		const imageR2Key = await saveColoredImage(env.PATTERNS, pipelineId, image.image, image.contentType);
@@ -174,6 +190,14 @@ export async function runImageStage(
 				output_dimensions: { width: image.width, height: image.height },
 				input_dimensions: image.inputDimensions,
 				original_dimensions: image.inputDimensions,
+				// Whether this attempt's *pixels* saw the reference, as opposed to
+				// the text row's `had_reference_image`, which says the planner did.
+				// They disagree on a resume, and the disagreement is the record.
+				reference_image_sent: image.referenceImageSent,
+				// Null when the bytes were not a readable JPEG — a PNG upload, most
+				// likely. The warning is in the log; the null is here so the row does
+				// not imply a size nobody measured.
+				reference_dimensions: image.referenceDimensions,
 			},
 		});
 
@@ -272,6 +296,11 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			concept: req.concept,
 			systemPrompt: plannerPrompt.text,
 			pipeline_id: pipelineId,
+			// The one hop the reference image takes on Iris. It is not passed to
+			// the image stage below and is never written anywhere — after this call
+			// returns, the only trace of it is whatever the planner put in `params`
+			// and `image_prompt` (ADR-SHARED-0003).
+			image: req.image,
 		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
@@ -297,6 +326,16 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			prompt_version: plannerPrompt.source === "code" ? IRIS_PLANNER_PROMPT_VERSION : null,
 			prompt_source: plannerPrompt.source,
 			prompt_updated_at: plannerPrompt.updatedAt,
+			/**
+			 * Whether a reference image reached the planner on this run.
+			 *
+			 * The image itself is transient and is never stored, so this flag is
+			 * the only durable trace it existed. It is what keeps "why does this
+			 * run look different from that one" answerable from the audit table
+			 * alone — including after a `/resume`, which re-runs the image stage
+			 * from these stored params and never sees an image at all.
+			 */
+			had_reference_image: req.image !== undefined,
 		};
 
 		// Planner succeeded — settle the text row before the image row opens.
@@ -309,6 +348,10 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			concept: req.concept,
 			motifRef: req.motif_ref,
 			params,
+			// The same image the planner saw. It now reaches the image model too, as
+			// `input_image_1` beside the motif — the picture used to influence the
+			// pixels only through the words the planner wrote about it.
+			referenceImage: req.image,
 		});
 
 		// Recorded before anything can throw, so the catch below reports what the

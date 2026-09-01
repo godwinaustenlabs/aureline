@@ -38,6 +38,17 @@ export interface ImageModelConfig {
 /** Resolved runtime config for a single pipeline invocation. */
 export interface IrisConfig {
 	textModel: TextModelConfig;
+	/**
+	 * The vision-capable planner, used for **every** request rather than only
+	 * those carrying a reference image.
+	 *
+	 * One model means one set of planner behaviour to tune and one prompt that
+	 * has to work. Switching per request would mean two of each, and a class of
+	 * bug that only appears once an image is attached — which is the hardest
+	 * kind to notice. `textModel` stays as the fallback, so reverting is a KV
+	 * edit rather than a deploy (ADR-0008, ADR-SHARED-0003).
+	 */
+	visionTextModel: TextModelConfig;
 	imageModel: ImageModelConfig;
 	maxRetries: number;
 	retentionLimit: number;
@@ -48,7 +59,10 @@ export interface IrisConfig {
 	 */
 	maxResumeAttempts: number;
 	/** Per-field provenance, for the log line. */
-	source: Record<"textModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts", ConfigSource>;
+	source: Record<
+		"textModel" | "visionTextModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts",
+		ConfigSource
+	>;
 }
 
 /** How long the edge may serve a cached KV read, in seconds.
@@ -128,6 +142,10 @@ export type ConfigEnv = {
 	 * fakes one method instead of standing up a whole `KVNamespace`. */
 	CONFIG: { get(keys: string[], options?: { cacheTtl?: number }): Promise<Map<string, string | null>> };
 	PLANNER_MODEL: string;
+	/** Optional, and the option is the point: an empty or absent value is the
+	 * signal to fall back to `PLANNER_MODEL`, which is how this is turned off
+	 * without a deploy. See `plannerModelFor`. */
+	VISION_PLANNER_MODEL?: string;
 	IMAGE_MODEL: string;
 	MAX_RETRIES?: string;
 	RETENTION_LIMIT?: string;
@@ -152,6 +170,20 @@ const FIELDS = [
 		prepare: prepareModelValue,
 		// The var carries a bare model id, so the fallback has no tuning fields.
 		fromVar: (env: ConfigEnv): unknown => ({ model: env.PLANNER_MODEL }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
+		key: "vision_planner_model",
+		field: "visionTextModel",
+		var: "VISION_PLANNER_MODEL",
+		schema: TextModelSchema,
+		prepare: prepareModelValue,
+		// Deliberately allowed to resolve to an empty model id. The vars are not
+		// re-validated by `resolveConfig`, so an unset var lands here as `{ model:
+		// "" }` — which `plannerModelFor` reads as "not configured" and answers by
+		// falling back to `textModel`. That is the off switch, and it is a KV or
+		// var edit rather than a deploy.
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.VISION_PLANNER_MODEL ?? "" }),
 		describe: (value: unknown) => describeModel(value as TextModelConfig),
 	},
 	{
@@ -259,6 +291,31 @@ export async function resolveConfig(env: ConfigEnv): Promise<IrisConfig> {
 	}
 
 	return { ...resolved, source } as IrisConfig;
+}
+
+/**
+ * Which planner model this invocation actually calls.
+ *
+ * The vision model when one is configured, and `textModel` when it is not. The
+ * choice does **not** depend on whether the request carries a reference image:
+ * one model per deployment means one set of behaviour to tune and one prompt
+ * that has to work, where branching on the request would mean two of each and
+ * a class of bug that appears only once someone attaches an image.
+ *
+ * The empty-model case is checked explicitly rather than with a `?.` or a `||`
+ * chain (AGENTS.md §7). "No vision model configured" is the ordinary state
+ * before one is chosen, and it has to be distinguishable from a configured one
+ * — the log line is where that distinction is answerable, so it is logged.
+ */
+export function plannerModelFor(config: IrisConfig): TextModelConfig {
+	const vision = config.visionTextModel;
+
+	if (vision === undefined || vision.model.trim().length === 0) {
+		console.log("planner: no vision model configured, using text_model");
+		return config.textModel;
+	}
+
+	return vision;
 }
 
 /** One-line summary of the resolved config and where each value came from. */
