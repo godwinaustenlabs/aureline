@@ -1,0 +1,31 @@
+{
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024", "DOM", "DOM.Iterable"],
+		"jsx": "react-jsx",
+
+		/* Vite bundles, so imports are resolved the way a bundler resolves them.
+		   This is deliberately NOT agent-helios's `"moduleResolution": "node"` — it
+		   is also what lets `npx tsc` from the repo root work here, since the TS 5108
+		   complaint documented in docs/running-locally.md is about `node`. */
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+
+		"noEmit": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true,
+		"forceConsistentCasingInFileNames": true,
+
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+
+		"skipLibCheck": true,
+		/* `node` is here for vite.config.ts, which is a build-time file rather than
+		   part of the bundle. */
+		"types": ["vite/client", "node"]
+	},
+	"include": ["src", "vite.config.ts"]
+}

@@ -1,0 +1,1151 @@
+/*
+ * Helios Playground — "the logbook".
+ *
+ * A dark, quiet document with a strict colour rule: **the page is monochrome,
+ * and colour only ever means something.** Every surface, rule and sentence is
+ * warm grey. Colour is spent exclusively on the two things a person has to read
+ * correctly at a glance — what a run did, and what a button will cost.
+ *
+ * The vocabulary, used consistently everywhere:
+ *
+ *   GREEN   it worked                 completed rows and chips
+ *   RED     it failed, or it removes  failed rows, error text, Forget
+ *   AMBER   this spends real money    Generate, Resume, the confirm button
+ *   BLUE    this is free              Check, Refresh, Randomise, run ids
+ *   VIOLET  refused, and billed nothing   the 409 panel
+ *   GREY    not a state at all        an absent row, Cancel
+ *
+ * Learn those six and the page needs no legend. A blue control can never cost
+ * money; an amber one always does.
+ *
+ * **Tuned for a long session, not for maximum contrast.** Pure white on pure
+ * black haloes — the text bleeds into the ground and the eye keeps refocusing,
+ * which is the fatigue this palette exists to avoid. The ground is a soft warm
+ * near-black rather than #000, the text a dimmed off-white rather than #fff,
+ * and every accent is desaturated well below neon. Body text still lands around
+ * 13:1, far past AA.
+ *
+ * Set as a document: Literata for sentences, JetBrains Mono for figures, and
+ * prose measured near 74 characters so the eye keeps its line.
+ *
+ * CSS only. No component in src/ knows this file exists beyond its class names.
+ */
+
+/* ============================================================ tokens */
+
+:root {
+	/* Ground and surfaces. Warm near-black, never #000. */
+	--ground: #141312;
+	--panel: #1c1b19;
+	--panel-header: #232120;
+	--recessed: #100f0e;
+	--mat: #2b2926;
+
+	/* Text, in three weights. All three clear AA on the surfaces above. */
+	--ink: #e6e2d8;
+	--ink-2: #b3ada0;
+	--ink-3: #8d8779;
+	--ink-reverse: #141312;
+
+	--rule: #38352f;
+	--rule-soft: #2a2723;
+
+	/* ---- the six signals. Desaturated for a dark ground; none is neon. ---- */
+
+	/* It worked. */
+	--ok: #63bf82;
+	--ok-wash: rgba(99, 191, 130, 0.12);
+
+	/* It failed, or this control removes something. */
+	--fail: #e8695a;
+	--fail-wash: rgba(232, 105, 90, 0.13);
+
+	/* This spends real money. The single most important signal on the page. */
+	--money: #e0a33c;
+	--money-wash: rgba(224, 163, 60, 0.13);
+
+	/* This is free — read-only, or purely local. */
+	--free: #66a8e0;
+	--free-wash: rgba(102, 168, 224, 0.12);
+
+	/* Refused: not an error and not a run, so neither red nor green. */
+	--refuse: #a894e8;
+	--refuse-wash: rgba(168, 148, 232, 0.12);
+
+	--serif: 'Literata', ui-serif, Georgia, 'Times New Roman', serif;
+	--mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+	--radius: 3px;
+	--radius-lg: 5px;
+
+	--shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28), 0 12px 30px -22px rgba(0, 0, 0, 0.85);
+
+	/* Hatching, for states that mean "in between". */
+	--hatch: repeating-linear-gradient(
+		-45deg,
+		transparent,
+		transparent 4px,
+		rgba(230, 226, 216, 0.05) 4px,
+		rgba(230, 226, 216, 0.05) 5px
+	);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--ground);
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: 15px;
+	line-height: 1.62;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+	background: var(--ink);
+	color: var(--ink-reverse);
+}
+
+:focus-visible {
+	outline: 2px solid var(--free);
+	outline-offset: 2px;
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--rule) transparent;
+}
+
+::-webkit-scrollbar {
+	width: 11px;
+	height: 11px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--rule);
+	border: 3px solid transparent;
+	background-clip: content-box;
+	border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--ink-3);
+	background-clip: content-box;
+}
+
+/* ============================================================ layout */
+
+.app {
+	max-width: 1620px;
+	margin: 0 auto;
+	padding: 28px 28px 80px;
+	display: grid;
+	grid-template-columns: minmax(340px, 410px) minmax(0, 1fr);
+	gap: 24px;
+	align-items: start;
+	counter-reset: panel;
+}
+
+@media (max-width: 1180px) {
+	.app {
+		grid-template-columns: 1fr;
+		padding: 20px 16px 60px;
+	}
+}
+
+.column {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+	min-width: 0;
+}
+
+/* ---------------------------------------------------------- masthead */
+
+.masthead {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px 22px;
+	padding: 0 2px 16px;
+	border-bottom: 1px solid var(--rule);
+}
+
+.masthead h1 {
+	margin: 0;
+	font-family: var(--serif);
+	font-size: 19px;
+	font-weight: 700;
+	color: var(--ink);
+}
+
+.masthead .tagline {
+	font-size: 13.5px;
+	font-style: italic;
+	color: var(--ink-3);
+}
+
+/* The meter. Amber, because it counts money, and boxed so it never blends in. */
+.masthead .tally {
+	margin-left: auto;
+	font-family: var(--mono);
+	font-size: 12.5px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+	color: var(--money);
+	white-space: nowrap;
+	padding: 4px 12px;
+	border: 1px solid var(--money);
+	border-radius: var(--radius);
+	background: var(--money-wash);
+}
+
+/* ---------------------------------------------------------- panels */
+
+.panel {
+	background: var(--panel);
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--radius-lg);
+	overflow: hidden;
+	box-shadow: var(--shadow-panel);
+	animation: panel-in 0.42s cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+
+.panel:nth-of-type(1) {
+	animation-delay: 0.02s;
+}
+.panel:nth-of-type(2) {
+	animation-delay: 0.07s;
+}
+.panel:nth-of-type(3) {
+	animation-delay: 0.12s;
+}
+
+@keyframes panel-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+
+.panel > header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 16px;
+	min-height: 44px;
+	background: var(--panel-header);
+	border-bottom: 1px solid var(--rule-soft);
+}
+
+/* Section numbering — 01 INPUT, 02 RESPONSE, 03 SCRATCHPAD, 04 RUN HISTORY.
+   A CSS counter, so no component had to learn its own position. */
+.panel > header::before {
+	counter-increment: panel;
+	content: counter(panel, decimal-leading-zero);
+	font-family: var(--mono);
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--ink-3);
+	padding-right: 12px;
+	border-right: 1px solid var(--rule);
+	align-self: stretch;
+	display: flex;
+	align-items: center;
+}
+
+.panel > header h2 {
+	margin: 0;
+	font-family: var(--serif);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--ink);
+}
+
+.panel > header .spacer {
+	margin-left: auto;
+}
+
+.panel > header .hint {
+	font-size: 12px;
+}
+
+.panel-body {
+	padding: 18px 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+/* ============================================================ fields */
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+}
+
+.field > label {
+	font-family: var(--serif);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.15em;
+	text-transform: uppercase;
+	color: var(--ink-2);
+}
+
+input[type='text'],
+input[type='url'],
+textarea,
+select {
+	width: 100%;
+	padding: 9px 11px;
+	background: var(--recessed);
+	color: var(--ink);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+	font-family: var(--mono);
+	font-size: 13.5px;
+	line-height: 1.5;
+	transition:
+		border-color 0.14s ease,
+		box-shadow 0.14s ease;
+}
+
+textarea {
+	resize: vertical;
+	min-height: 96px;
+	font-family: var(--serif);
+	font-size: 15px;
+	line-height: 1.6;
+}
+
+input::placeholder,
+textarea::placeholder {
+	color: var(--ink-3);
+	opacity: 0.72;
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+	border-color: var(--ink-3);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+	outline: none;
+	border-color: var(--free);
+	box-shadow: 0 0 0 3px var(--free-wash);
+}
+
+select {
+	appearance: none;
+	padding-right: 32px;
+	background-image: linear-gradient(45deg, transparent 50%, var(--ink-2) 50%), linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+	background-position:
+		calc(100% - 17px) calc(50% + 1px),
+		calc(100% - 12px) calc(50% + 1px);
+	background-size: 5px 5px;
+	background-repeat: no-repeat;
+}
+
+input[type='file'] {
+	font-family: var(--serif);
+	font-size: 13px;
+	color: var(--ink-2);
+}
+
+/* Free: it never leaves the browser. */
+input[type='file']::file-selector-button {
+	font-family: var(--serif);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	padding: 6px 12px;
+	margin-right: 12px;
+	background: var(--free-wash);
+	color: var(--free);
+	border: 1px solid var(--free);
+	border-radius: var(--radius);
+	cursor: pointer;
+}
+
+/* Explanatory prose, of which this page has a great deal. */
+.hint {
+	font-family: var(--serif);
+	font-size: 13.5px;
+	line-height: 1.6;
+	color: var(--ink-3);
+	max-width: 74ch;
+}
+
+.hint code,
+code {
+	font-family: var(--mono);
+	font-size: 0.88em;
+	color: var(--ink);
+	background: var(--recessed);
+	border: 1px solid var(--rule-soft);
+	border-radius: 2px;
+	padding: 0.08em 0.34em;
+}
+
+.hint.warn {
+	color: var(--money);
+	padding-left: 11px;
+	border-left: 2px solid var(--money);
+}
+
+.hint.error {
+	color: var(--fail);
+	padding-left: 11px;
+	border-left: 2px solid var(--fail);
+}
+
+.row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.row > :first-child {
+	flex: 1;
+	min-width: 0;
+}
+
+/* ============================================================ controls
+ *
+ * Every button is colour-coded by what pressing it does, and the coding is
+ * exhaustive: there is no neutral button anywhere except Cancel, which is
+ * neutral precisely because it is the one that does nothing.
+ *
+ *   BLUE   free            Check, Refresh, Randomise, selecting a run id
+ *   AMBER  spends money    Generate, Resume, the confirm button
+ *   RED    removes         Forget
+ *   GREY   does nothing    Cancel
+ */
+
+button {
+	font-family: var(--serif);
+	font-size: 13px;
+	font-weight: 500;
+	padding: 8px 14px;
+	border-radius: var(--radius);
+	cursor: pointer;
+	white-space: nowrap;
+	transition:
+		border-color 0.14s ease,
+		background 0.14s ease,
+		color 0.14s ease,
+		box-shadow 0.14s ease;
+}
+
+button:active:not(:disabled) {
+	transform: translateY(1px);
+}
+
+button:disabled {
+	opacity: 0.38;
+	cursor: not-allowed;
+}
+
+/* ---- free by default. Every small control on this page is read-only. ---- */
+
+button.small {
+	padding: 5px 10px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	color: var(--free);
+	background: var(--free-wash);
+	border: 1px solid rgba(102, 168, 224, 0.45);
+}
+
+button.small:hover:not(:disabled) {
+	border-color: var(--free);
+	background: rgba(102, 168, 224, 0.2);
+}
+
+/* ---- amber: this one spends real money ---- */
+
+/* The largest control on the page, and the only one that runs the planner. */
+button.primary {
+	width: 100%;
+	padding: 14px;
+	font-family: var(--serif);
+	font-size: 12.5px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: #21170a;
+	background: var(--money);
+	border: 1px solid var(--money);
+	box-shadow: 0 0 0 0 var(--money-wash);
+}
+
+button.primary:hover:not(:disabled) {
+	background: #eeb75a;
+	border-color: #eeb75a;
+	box-shadow: 0 0 0 4px var(--money-wash);
+}
+
+button.primary:disabled {
+	background: var(--panel-header);
+	color: var(--ink-3);
+	border-color: var(--rule);
+	opacity: 1;
+}
+
+/*
+ * Resume, in both places it appears: the history table and the result banner.
+ * Amber like Generate because it spends the same real money, but outlined
+ * rather than filled — it is the smaller of the two charges.
+ */
+.resume-cell button.small,
+.banner-row button.small {
+	color: var(--money);
+	background: var(--money-wash);
+	border-color: rgba(224, 163, 60, 0.5);
+}
+
+.resume-cell button.small:hover:not(:disabled),
+.banner-row button.small:hover:not(:disabled) {
+	border-color: var(--money);
+	background: rgba(224, 163, 60, 0.22);
+}
+
+/* ---- red: this one removes something ---- */
+
+button.danger {
+	color: var(--fail);
+	background: var(--fail-wash);
+	border-color: rgba(232, 105, 90, 0.45);
+}
+
+button.danger:hover:not(:disabled) {
+	border-color: var(--fail);
+	background: rgba(232, 105, 90, 0.22);
+}
+
+/* ---- grey: Cancel, the only control that does nothing ---- */
+
+.dialog .actions button:not(.primary) {
+	color: var(--ink-2);
+	background: transparent;
+	border: 1px solid var(--rule);
+}
+
+.dialog .actions button:not(.primary):hover {
+	border-color: var(--ink-3);
+	color: var(--ink);
+	background: var(--panel-header);
+}
+
+/* ---------------------------------------------------------- reference image */
+
+/* Hatched, because this field accepts a file and throws it away. */
+.reference {
+	border: 1px dashed var(--ink-3);
+	border-radius: var(--radius);
+	padding: 13px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	background: var(--hatch), var(--panel);
+}
+
+.reference .banner {
+	font-family: var(--serif);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--money);
+	background: var(--money-wash);
+	border: 1px solid var(--money);
+	border-radius: 2px;
+	padding: 3px 9px;
+	align-self: flex-start;
+}
+
+.reference img {
+	max-width: 100%;
+	max-height: 152px;
+	object-fit: contain;
+	border: 1px solid var(--rule);
+	border-radius: 2px;
+	align-self: flex-start;
+	/* Eased down: the engine has no idea this file exists, and a bright photo has
+	   no business being the brightest thing on a dark panel. */
+	filter: grayscale(1) brightness(0.82);
+}
+
+/* ============================================================ status
+ *
+ * Green worked, red failed, amber still going, grey means there is no row at
+ * all. A failure is filled rather than outlined so it carries more weight than
+ * everything around it.
+ */
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 9px;
+	border-radius: 2px;
+	font-family: var(--mono);
+	font-size: 11px;
+	font-weight: 500;
+	border: 1px solid currentColor;
+	color: var(--ink-3);
+	background: transparent;
+}
+
+.chip::before {
+	content: '';
+	width: 6px;
+	height: 6px;
+	flex: none;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.chip.completed {
+	color: var(--ok);
+	background: var(--ok-wash);
+}
+
+/* Filled, and the heaviest thing in its row. A failed run is the reason this
+   page exists, so it is never something you have to look for. */
+.chip.failed {
+	color: #2a0f0b;
+	background: var(--fail);
+	border-color: var(--fail);
+	font-weight: 700;
+}
+
+.chip.running {
+	color: var(--money);
+	background: var(--hatch), var(--money-wash);
+}
+
+/* Not a status but the absence of a row: no colour, hollow mark, dotted edge. */
+.chip.absent {
+	color: var(--ink-3);
+	border-style: dotted;
+	background: transparent;
+}
+
+.chip.absent::before {
+	background: transparent;
+	border: 1px solid currentColor;
+}
+
+/* ============================================================ outcome banners */
+
+.banner-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 15px 17px;
+	border: 1px solid var(--rule-soft);
+	border-left: 4px solid var(--ink-3);
+	border-radius: 0 var(--radius) var(--radius) 0;
+	background: var(--panel);
+}
+
+.banner-row.ok {
+	border-left-color: var(--ok);
+	background: linear-gradient(90deg, var(--ok-wash), transparent 46%), var(--panel);
+}
+
+.banner-row.fail {
+	border-left-color: var(--fail);
+	background: linear-gradient(90deg, var(--fail-wash), transparent 46%), var(--panel);
+}
+
+/* Neither an error nor a run: nothing was written and nothing was billed. */
+.banner-row.refusal {
+	border-left-color: var(--refuse);
+	background: linear-gradient(90deg, var(--refuse-wash), transparent 46%), var(--panel);
+}
+
+.banner-row.transport {
+	border-left-color: var(--money);
+	background: linear-gradient(90deg, var(--money-wash), transparent 46%), var(--panel);
+}
+
+.banner-row .title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-family: var(--serif);
+	font-size: 15px;
+	font-weight: 700;
+	margin-bottom: 7px;
+	color: var(--ink);
+}
+
+.banner-row.ok .title {
+	color: var(--ok);
+}
+
+.banner-row.fail .title {
+	color: var(--fail);
+}
+
+.banner-row.refusal .title {
+	color: var(--refuse);
+}
+
+.banner-row.transport .title {
+	color: var(--money);
+}
+
+.banner-row .body {
+	font-size: 13.5px;
+	line-height: 1.6;
+	color: var(--ink-3);
+	max-width: 74ch;
+}
+
+.banner-row .body strong {
+	color: var(--money);
+	font-family: var(--mono);
+	font-variant-numeric: tabular-nums;
+	font-weight: 700;
+}
+
+/* The backend's own sentence. Indented behind a rule and set in mono so it is
+   visibly quoted rather than paraphrased. */
+.banner-row .verbatim {
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 1.6;
+	color: var(--ink);
+	white-space: pre-wrap;
+	word-break: break-word;
+	padding-left: 12px;
+	border-left: 1px solid var(--rule);
+	max-width: 78ch;
+}
+
+/* ============================================================ scratchpad */
+
+.section {
+	border-top: 1px solid var(--rule-soft);
+	padding-top: 17px;
+}
+
+.section:first-child {
+	border-top: none;
+	padding-top: 0;
+}
+
+.section-title {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-family: var(--serif);
+	font-size: 11.5px;
+	font-weight: 700;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--ink);
+	margin: 0 0 4px;
+}
+
+.section-title::after {
+	content: '';
+	flex: 1;
+	height: 1px;
+	background: var(--rule);
+}
+
+.section-note {
+	font-family: var(--serif);
+	font-size: 13.5px;
+	font-style: italic;
+	line-height: 1.6;
+	color: var(--ink-3);
+	margin: 0 0 12px;
+	max-width: 74ch;
+}
+
+/*
+ * The readout, set as a ledger: labels right-aligned against a continuous
+ * hairline, figures left-aligned beyond it. The rule is drawn by the `dd`
+ * borders meeting with no row gap, so it stays unbroken however long a value
+ * wraps.
+ */
+.entries {
+	display: grid;
+	grid-template-columns: minmax(130px, 224px) minmax(0, 1fr);
+	gap: 0;
+	margin: 0;
+}
+
+.entries dt {
+	font-family: var(--serif);
+	font-size: 13px;
+	color: var(--ink-3);
+	text-align: right;
+	padding: 6px 16px 6px 0;
+}
+
+.entries dd {
+	margin: 0;
+	padding: 6px 0 6px 16px;
+	border-left: 1px solid var(--rule);
+	font-family: var(--mono);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink);
+	word-break: break-word;
+	min-width: 0;
+}
+
+.entries dt:nth-of-type(odd),
+.entries dd:nth-of-type(odd) {
+	background: rgba(230, 226, 216, 0.018);
+}
+
+/* A labelled gap. Italic serif, greyed, and deliberately uncoloured — an engine
+   gap is not a status, and it must never read as an empty box either. */
+.entries dd.missing {
+	font-family: var(--serif);
+	font-size: 13.5px;
+	font-style: italic;
+	color: var(--ink-3);
+	line-height: 1.55;
+	max-width: 74ch;
+}
+
+.entries dd > pre {
+	margin: 4px 0 6px;
+}
+
+@media (max-width: 680px) {
+	.entries {
+		grid-template-columns: 1fr;
+	}
+
+	.entries dt {
+		text-align: left;
+		padding: 10px 0 0;
+	}
+
+	.entries dd {
+		border-left: none;
+		padding-left: 0;
+	}
+}
+
+/* ============================================================ code blocks */
+
+pre {
+	margin: 0;
+	padding: 13px 15px;
+	background: var(--recessed);
+	border: 1px solid var(--rule-soft);
+	border-radius: var(--radius);
+	font-family: var(--mono);
+	font-size: 12.5px;
+	line-height: 1.6;
+	color: var(--ink-2);
+	overflow: auto;
+	max-height: 460px;
+	white-space: pre;
+	tab-size: 2;
+}
+
+pre.wrap {
+	white-space: pre-wrap;
+	word-break: break-word;
+	color: var(--ink);
+}
+
+/* ============================================================ the swatch */
+
+figure {
+	margin: 0;
+}
+
+/*
+ * The pattern, mounted like a specimen. The mat is mid-grey rather than white on
+ * purpose: the engine's output is mostly white, and dropping a full-brightness
+ * sheet straight onto a dark panel is the harshest thing this page could do to
+ * someone's eyes. The mat steps the eye up to it. The image itself is never
+ * filtered — this is a debugging tool and the pixels have to be the real ones.
+ */
+.pattern {
+	display: inline-block;
+	max-width: 100%;
+	padding: 16px;
+	background: var(--mat);
+	border: 1px solid var(--rule);
+	border-radius: 2px;
+	box-shadow: 0 14px 34px -24px rgba(0, 0, 0, 0.9);
+}
+
+.pattern img {
+	display: block;
+	max-width: 100%;
+	max-height: 560px;
+	object-fit: contain;
+	border: 1px solid var(--rule);
+}
+
+figcaption {
+	margin-top: 10px;
+	font-family: var(--mono);
+	font-size: 11.5px;
+	color: var(--ink-3);
+	word-break: break-all;
+	padding-left: 10px;
+	border-left: 1px solid var(--rule);
+	max-width: 78ch;
+}
+
+/* ============================================================ history table */
+
+.table-scroll {
+	overflow-x: auto;
+	margin: 0 -16px;
+	padding: 0 16px;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+thead th {
+	font-family: var(--serif);
+	font-size: 10.5px;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--ink-3);
+	text-align: left;
+	padding: 0 13px 9px;
+	border-bottom: 1px solid var(--rule);
+	white-space: nowrap;
+}
+
+tbody td {
+	padding: 10px 13px;
+	border-bottom: 1px solid var(--rule-soft);
+	font-family: var(--mono);
+	font-size: 12.5px;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-2);
+	white-space: nowrap;
+	vertical-align: top;
+}
+
+tbody tr:last-child td {
+	border-bottom: none;
+}
+
+tbody tr {
+	transition: background 0.12s ease;
+}
+
+tbody tr:hover td {
+	background: var(--panel-header);
+}
+
+/* The run the scratchpad is currently reading. Blue, because selecting one is
+   free — it re-reads rows already fetched. */
+tr.current td {
+	background: var(--free-wash);
+}
+
+tr.current td:first-child {
+	box-shadow: inset 3px 0 0 var(--free);
+}
+
+/* The one cell that wraps. Everything else in the table is an id, a timestamp
+   or a figure and reads better on one line; this carries a sentence. */
+.resume-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	align-items: flex-start;
+	white-space: normal;
+	max-width: 300px;
+}
+
+.resume-cell .hint {
+	font-size: 12.5px;
+	line-height: 1.45;
+	max-width: none;
+}
+
+.empty {
+	padding: 0;
+	font-family: var(--serif);
+	color: var(--ink-3);
+	font-size: 13.5px;
+	line-height: 1.62;
+	max-width: 74ch;
+}
+
+/* ============================================================ waiting */
+
+.waiting {
+	display: flex;
+	align-items: center;
+	gap: 13px;
+	padding: 19px 17px;
+	color: var(--ink-2);
+	font-family: var(--mono);
+	font-size: 13px;
+	background: var(--hatch), var(--panel);
+	border: 1px solid var(--rule);
+	border-radius: var(--radius);
+}
+
+/* An index mark sweeping a dial, not a loading donut. There is no stage-by-stage
+   progress to be had, so the indicator says only "still turning" — in amber,
+   because money is in flight while it turns. */
+.spinner {
+	width: 16px;
+	height: 16px;
+	flex: none;
+	border-radius: 50%;
+	border: 2px solid var(--rule);
+	border-top-color: var(--money);
+	animation: sweep 1s linear infinite;
+}
+
+@keyframes sweep {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ============================================================ spend dialog */
+
+.backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	background: rgba(8, 8, 7, 0.74);
+	backdrop-filter: blur(2px);
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+}
+
+.dialog {
+	width: 100%;
+	max-width: 500px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	padding: 26px;
+	background: var(--panel);
+	border: 1px solid var(--rule);
+	border-top: 4px solid var(--money);
+	border-radius: var(--radius-lg);
+	box-shadow: 0 34px 80px -30px rgba(0, 0, 0, 0.95);
+	animation: dialog-in 0.19s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes dialog-in {
+	from {
+		opacity: 0;
+		transform: translateY(9px) scale(0.986);
+	}
+}
+
+.dialog h2 {
+	margin: 0;
+	font-family: var(--serif);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--ink-3);
+}
+
+/* The figure, at the size it deserves. This is the number someone is agreeing
+   to spend, so it is read before any of the prose under it. */
+.dialog .cost {
+	font-family: var(--mono);
+	font-size: 32px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.02em;
+	color: var(--money);
+	padding-bottom: 14px;
+	border-bottom: 1px solid var(--rule);
+}
+
+.dialog p {
+	margin: 0;
+	font-family: var(--serif);
+	font-size: 13.5px;
+	line-height: 1.62;
+	color: var(--ink-2);
+}
+
+.dialog .actions {
+	display: flex;
+	gap: 10px;
+	justify-content: flex-end;
+	margin-top: 6px;
+}
+
+.dialog .actions button {
+	padding: 10px 20px;
+	text-transform: uppercase;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+}
+
+/* ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+
+	.spinner {
+		animation: sweep 2.4s linear infinite !important;
+	}
+}

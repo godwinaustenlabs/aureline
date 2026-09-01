@@ -1,0 +1,31 @@
+/**
+ * The playground's deploy target. A static build with no server side, so there
+ * is no `main` and no bindings: this Worker only serves `dist/`.
+ *
+ * https://developers.cloudflare.com/workers/static-assets/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+
+	/**
+	 * NOT free-form. This name decides the deployed origin, and
+	 * `https://frontend.aureline.workers.dev` is the exact string sitting in
+	 * `ALLOWED_ORIGINS` over in apps/agent-helios/wrangler.jsonc. Deploy under any
+	 * other name and every fetch fails at preflight with a 403 from a backend
+	 * nobody thought to change. If this has to move, the allow-list moves with it
+	 * in the same commit.
+	 */
+	"name": "frontend",
+	"compatibility_date": "2026-07-27",
+
+	"assets": {
+		"directory": "./dist",
+		// One HTML entry point and client-side state only, so anything that is not
+		// a built file should still land on index.html rather than a 404.
+		"not_found_handling": "single-page-application"
+	},
+
+	"observability": {
+		"enabled": true
+	}
+}
