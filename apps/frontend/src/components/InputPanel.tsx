@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
 import { GENERATE_COST_USD } from '../api/client';
+import { ReferenceImageField } from './ReferenceImageField';
 import { usd } from '../domain/format';
 import { newDesignSessionId } from '../domain/designSession';
 import { DEFAULT_SESSION, effectiveSession, normaliseSessionId, randomSessionId, type RememberedSession } from '../state/sessions';
@@ -20,6 +20,8 @@ interface Props {
 	onGenerate: () => void;
 	onPing: () => void;
 	connection: { ok: boolean; message: string } | null;
+	referenceImage: File | null;
+	onReferenceImage: (file: File | null) => void;
 }
 
 export function InputPanel({
@@ -38,6 +40,8 @@ export function InputPanel({
 	onGenerate,
 	onPing,
 	connection,
+	referenceImage,
+	onReferenceImage,
 }: Props) {
 	const normalised = normaliseSessionId(sessionField);
 	const target = effectiveSession(sessionField);
@@ -144,7 +148,7 @@ export function InputPanel({
 					</span>
 				</div>
 
-				<ReferenceImage />
+				<ReferenceImageField file={referenceImage} onFile={onReferenceImage} />
 
 				<div className="field">
 					<label htmlFor="base-url">API base URL</label>
@@ -166,54 +170,5 @@ export function InputPanel({
 				</button>
 			</div>
 		</section>
-	);
-}
-
-/**
- * In scope purely so the shape exists for a later sprint.
- *
- * The file is held **here**, in this component, and is never lifted into the
- * app's state or passed to anything that builds a request — so it is not merely
- * unsent, it has nowhere to be sent from. It is previewed locally and discarded.
- *
- * The label is the important half. Every person testing this page will otherwise
- * upload something, see it have no effect, and report it as a bug.
- */
-function ReferenceImage() {
-	const [preview, setPreview] = useState<string | null>(null);
-	const [name, setName] = useState<string | null>(null);
-
-	// An object URL is held by the document until it is revoked. This cleanup runs
-	// both when `preview` changes and when the component unmounts, so every URL
-	// created below is released exactly once.
-	useEffect(() => {
-		return () => {
-			if (preview) URL.revokeObjectURL(preview);
-		};
-	}, [preview]);
-
-	return (
-		<div className="field">
-			<label htmlFor="reference">Reference image</label>
-			<div className="reference">
-				<span className="banner">Not sent. Discarded in the browser.</span>
-				<span className="hint">
-					The planner does not accept a reference image yet — nothing in the pipeline reads one. This field exists so the shape is here
-					for a later sprint. The file never enters a request body.
-				</span>
-				<input
-					id="reference"
-					type="file"
-					accept="image/*"
-					onChange={(event) => {
-						const file = event.target.files?.[0] ?? null;
-						setPreview(file ? URL.createObjectURL(file) : null);
-						setName(file?.name ?? null);
-					}}
-				/>
-				{preview && <img src={preview} alt={`Local preview of ${name ?? 'the selected file'} — not sent to the worker`} />}
-				{name && <span className="hint">{name} — previewed locally, discarded on submit.</span>}
-			</div>
-		</div>
 	);
 }

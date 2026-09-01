@@ -2,6 +2,7 @@ import { usd } from '../domain/format';
 import type { IrisCallOutcome } from '../domain/irisOutcome';
 import { IRIS_GENERATE_COST_USD } from '../api/iris';
 import { Waiting } from './Waiting';
+import { ReferenceImageField } from './ReferenceImageField';
 
 /**
  * The Iris screen: colour an existing black-and-white motif.
@@ -33,6 +34,8 @@ interface Props {
 	onGenerate: () => void;
 	onPing: () => void;
 	connection: { ok: boolean; message: string } | null;
+	referenceImage: File | null;
+	onReferenceImage: (file: File | null) => void;
 	outcome: IrisCallOutcome | null;
 	/** Where the motif and design id came from, when they were carried across. */
 	handoffNote: string | null;
@@ -111,6 +114,12 @@ export function IrisPanel(props: Props) {
 								here is not the same object.
 							</span>
 						</div>
+
+						<ReferenceImageField
+							id="iris-reference"
+							file={props.referenceImage}
+							onFile={props.onReferenceImage}
+						/>
 
 						<div className="field">
 							<label htmlFor="iris-base">Iris base URL</label>

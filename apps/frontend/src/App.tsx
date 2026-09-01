@@ -81,6 +81,14 @@ export function App() {
 	const [sessions, setSessions] = useState<RememberedSession[]>(loadSessions);
 
 	const [validationError, setValidationError] = useState<string | null>(null);
+	// The reference image lives here rather than in `InputPanel`, because the
+	// request is built here. Holding it in the panel is what previously made it
+	// impossible to send.
+	const [referenceImage, setReferenceImage] = useState<File | null>(null);
+	// Iris's own, kept separate from Helios's. The two panels are different runs
+	// against different workers, and sharing one file between them would attach a
+	// picture to a run whose panel never showed it.
+	const [irisReferenceImage, setIrisReferenceImage] = useState<File | null>(null);
 	const [connection, setConnection] = useState<{ ok: boolean; message: string } | null>(null);
 
 	const [inFlight, setInFlight] = useState<{ startedAt: number } | null>(null);
@@ -277,7 +285,7 @@ export function App() {
 				setIrisInFlight({ startedAt: Date.now() });
 				setIrisOutcome(null);
 
-				const outcome = await generateIris(irisBaseUrl, validated.request);
+				const outcome = await generateIris(irisBaseUrl, validated.request, irisReferenceImage);
 
 				setIrisOutcome(outcome);
 				setIrisInFlight(null);
@@ -306,7 +314,11 @@ export function App() {
 			costUsd: GENERATE_COST_USD,
 			detail: `One planner call plus one image call, against the Durable Object named "${target}". About $0.001 of it is the planner and about $0.0019 the image.`,
 			confirmLabel: 'Spend it',
-			run: () => runBilledCall(target, () => generate(baseUrlRef.current, validated.request)),
+			// The file is read from state at call time rather than captured into
+			// `validated`: the schema validates the text fields, and a `File` is not
+			// the `{ bytes, contentType }` shape the contract carries — the engine
+			// builds that from the form part it receives.
+			run: () => runBilledCall(target, () => generate(baseUrlRef.current, validated.request, referenceImage)),
 		});
 	}
 
@@ -429,6 +441,8 @@ export function App() {
 					onGenerate={requestIrisGenerate}
 					onPing={() => void pingIris(irisBaseUrl).then(setIrisConnection)}
 					connection={irisConnection}
+					referenceImage={irisReferenceImage}
+					onReferenceImage={setIrisReferenceImage}
 					outcome={irisOutcome}
 					handoffNote={handoffNote}
 				/>
@@ -451,6 +465,8 @@ export function App() {
 					onGenerate={requestGenerate}
 					onPing={() => void checkConnection()}
 					connection={connection}
+					referenceImage={referenceImage}
+					onReferenceImage={setReferenceImage}
 				/>
 				<p className="hint">
 					Default base URL is <code>{DEFAULT_BASE_URL}</code>. <code>GET /runs</code>, <code>GET /</code> and the image bytes are all

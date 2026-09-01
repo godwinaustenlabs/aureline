@@ -1,6 +1,6 @@
 import type { IrisRequest } from '@aureline/shared-types';
 import { classifyIris, type IrisCallOutcome } from '../domain/irisOutcome';
-import { normaliseBaseUrl, send } from './client';
+import { normaliseBaseUrl, send, toFormData } from './client';
 
 /**
  * Every request this page makes to Iris.
@@ -13,13 +13,31 @@ import { normaliseBaseUrl, send } from './client';
 /** What one Iris generate costs, for the confirm dialog. Planner plus image. */
 export const IRIS_GENERATE_COST_USD = 0.0029;
 
-/** `POST /generate`. Billed. */
-export async function generateIris(baseUrl: string, request: IrisRequest): Promise<IrisCallOutcome> {
-	const { status, raw } = await send(`${normaliseBaseUrl(baseUrl)}/generate`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(request),
-	});
+/**
+ * `POST /generate`. Billed.
+ *
+ * Sends JSON when there is no reference image and `multipart/form-data` when
+ * there is — see `toFormData` in `api/client.ts` for why no `Content-Type` is
+ * set on the second path.
+ *
+ * On Iris the image reaches the planner only. The image model still receives
+ * `motif_ref`, which is Helios's output and the thing Iris exists to colour
+ * (ADR-SHARED-0003).
+ */
+export async function generateIris(
+	baseUrl: string,
+	request: IrisRequest,
+	image?: File | null,
+): Promise<IrisCallOutcome> {
+	const url = `${normaliseBaseUrl(baseUrl)}/generate`;
+
+	const { status, raw } = image
+		? await send(url, { method: 'POST', body: toFormData(request, image) })
+		: await send(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(request),
+			});
 
 	return classifyIris(status, raw);
 }
