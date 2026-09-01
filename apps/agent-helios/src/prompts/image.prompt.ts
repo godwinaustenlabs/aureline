@@ -6,16 +6,27 @@ import type { HeliosParams } from "@aureline/shared-types";
  * Structure and reasoning: docs/prompts/02-image-prompt-structure.md.
  *
  * This is a translator, not a prompt: a deterministic function from the eight
- * parameters to a Flux prompt. It holds no design judgement — the planner made
- * every creative decision already. If output looks wrong, the fix belongs in the
- * planner or in the phrase tables below, not in creative rewording here.
+ * structured parameters to a Flux prompt. It holds no design judgement — the
+ * planner made every creative decision already. If output looks wrong, the fix
+ * belongs in the planner or in the phrase tables below, not in creative
+ * rewording here.
+ *
+ * The ninth field, `image_prompt`, is the exception that proves the rule: it is
+ * the planner's own words, passed through untranslated and appended after every
+ * clause this file composes. It is the free-form half of the two-layer strategy
+ * in `docs/Project Wide/phase-1-plan.md` §6 — everything else here is the
+ * deterministic half.
  *
  * Clause order matters. Flux weights early clauses more heavily, so the format
  * declaration and motif lead and the exclusions trail.
  */
 
-/** Versioned identity of this prompt. Never edit a prompt in place — bump the ID. */
-export const IMAGE_PROMPT_ID = "helios-image-v1";
+/** Versioned identity of this prompt. Never edit a prompt in place — bump the ID.
+ *
+ * v2 appends the planner's `image_prompt` as a final positive clause.
+ * v3 adds a clause naming the user's reference image as a style input, on the
+ * runs that carry one. */
+export const IMAGE_PROMPT_ID = "helios-image-v3";
 
 /**
  * Phrase tables, keyed by the schema's own union types so that adding a value to
@@ -98,6 +109,24 @@ const FORMAT_DECLARATION =
 const MONOCHROME_LOCK =
 	"pure black ink on a pure white ground, no colour of any kind, no tint, no sepia, no cream";
 
+/**
+ * What the supplied image is *for*.
+ *
+ * Named as a reference for motif character and linework, and explicitly not as
+ * something to reproduce. Without this an image-to-image model treats the input
+ * as the thing to redraw, and a designer's photograph of a printed fabric comes
+ * back as a photograph of a printed fabric — colour, drape and all, every one of
+ * them on the exclusion list below.
+ *
+ * "Do not copy its colours" is stated here as well as in `MONOCHROME_LOCK`.
+ * Repetition rather than redundancy: the lock speaks about the output, this
+ * speaks about the input, and a model weighing a vivid picture against one
+ * clause of text needs both.
+ */
+const REFERENCE_IMAGE_CLAUSE =
+	"drawing on the supplied reference image for motif character and linework only, " +
+	"not copying its colours, framing, fabric drape or composition";
+
 const EXCLUSIONS = [
 	"colour",
 	"text, letters, numbers, signature or watermark",
@@ -127,6 +156,20 @@ export interface ImagePromptOptions {
 	 * things to draw unless it carries the "Do not include:" lead-in this adds.
 	 */
 	supportsNegativePrompt?: boolean;
+	/**
+	 * Whether a reference image is being sent to the model alongside this prompt.
+	 *
+	 * The model needs telling what to do with a picture it has been handed, and
+	 * the honest default is the dangerous one: an image-to-image model given a
+	 * photograph and no instruction will reproduce it — colour, framing, drape and
+	 * all. Every one of those is on the exclusion list.
+	 *
+	 * So this adds a clause naming the reference as a *style* input only. It does
+	 * not relax anything: the monochrome lock and the exclusions still follow it,
+	 * and they are ADR-0002 promises that no model-supplied or user-supplied input
+	 * is allowed to weaken.
+	 */
+	hasReferenceImage?: boolean;
 }
 
 /**
@@ -148,7 +191,7 @@ export function buildImagePrompt(
 	params: HeliosParams,
 	options: ImagePromptOptions = {},
 ): ImagePrompt {
-	const { supportsNegativePrompt = true } = options;
+	const { supportsNegativePrompt = true, hasReferenceImage = false } = options;
 	const isSilhouette = params.texture_technique === "solid-fill";
 
 	const style = clean(params.style);
@@ -164,7 +207,27 @@ export function buildImagePrompt(
 		TEXTURE_PHRASE[params.texture_technique],
 		CONTRAST_PHRASE[params.contrast_level],
 		`in ${article(style)} ${style} style`,
+		// Before the monochrome lock, so the lock has the last word on colour —
+		// which is the whole risk of handing a colour photograph to an
+		// image-to-image model.
+		...(hasReferenceImage ? [REFERENCE_IMAGE_CLAUSE] : []),
 		MONOCHROME_LOCK,
+		// The free-form layer, last among the positive clauses (phase-1-plan §6).
+		//
+		// **Last here, and not last in the finished string.** The phase-1 doc says
+		// "at the very end, after every other clause", which on the
+		// `supportsNegativePrompt: false` path would put it after
+		// `Do not include: colour, text, border, ...` — where a positive sentence
+		// reads as more things to draw, the exact inversion the
+		// `ImagePromptOptions` comment below warns about. Placing it here keeps
+		// what §6 actually guarantees: it only ever adds to the positive prompt
+		// and can never weaken the exclusions or the monochrome lock, which are
+		// ADR-0002 promises and are not model-writable. See ADR-SHARED-0003.
+		//
+		// It also sits after MONOCHROME_LOCK rather than before, so a planner that
+		// writes something colour-adjacent cannot get between the lock and the
+		// fields it governs.
+		params.image_prompt.trim(),
 	];
 
 	// One flowing descriptive sentence — Flux responds to natural language, not

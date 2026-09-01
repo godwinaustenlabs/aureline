@@ -14,7 +14,16 @@ export const GATEWAY_COST_USD = 0.0019008;
 /** The runtime config vars `resolveConfig` falls back to when KV is empty. */
 const VARS = {
 	PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
+	// Empty by default, so `plannerModelFor` falls back to PLANNER_MODEL and every
+	// existing suite keeps calling the model it always did. A test that wants the
+	// multimodal path opts in with the `visionPlannerModel` override.
+	VISION_PLANNER_MODEL: "",
 	IMAGE_MODEL: "@cf/black-forest-labs/flux-1-schnell",
+	// Set, matching wrangler.jsonc, so a suite that attaches a reference image
+	// exercises the multipart path rather than `imageModelFor`'s refusal. The
+	// refusal has its own test in `config.test.ts`, where it is the subject
+	// rather than an accident of the fake.
+	IMAGE_TO_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 	AI_GATEWAY_ID: "helios",
 	MAX_RETRIES: "2",
 	RETENTION_LIMIT: "5",
@@ -64,6 +73,9 @@ export function fakeEnv(
 		aiGatewayLogId?: string | null;
 		maxRetries?: number;
 		maxResumeAttempts?: number;
+		/** Turns the vision planner on for this env. Empty (the default) leaves it
+		 *  off and `plannerModelFor` falls back to `PLANNER_MODEL`. */
+		visionPlannerModel?: string;
 		patternsPut?: "ok" | "fail";
 		throwingD1?: boolean;
 	} = {},
@@ -74,6 +86,9 @@ export function fakeEnv(
 		...(overrides.maxResumeAttempts !== undefined
 			? { MAX_RESUME_ATTEMPTS: String(overrides.maxResumeAttempts) }
 			: {}),
+		...(overrides.visionPlannerModel !== undefined
+			? { VISION_PLANNER_MODEL: overrides.visionPlannerModel }
+			: {}),
 	};
 
 	// All three parameters are declared, and the return is `unknown`, because
@@ -82,7 +97,10 @@ export function fakeEnv(
 	// test that reads `run.mock.calls[0][2]` or queues a different reply then
 	// fails to compile against a fake that is merely under-described.
 	const run = vi.fn(async (model: string, _input?: unknown, _options?: unknown): Promise<unknown> => {
-		if (model === vars.PLANNER_MODEL) {
+		// Either planner id answers with a planner reply. Matching only
+		// `PLANNER_MODEL` would send a vision-model call down the image branch and
+		// return an image where the suite expected params.
+		if (model === vars.PLANNER_MODEL || (vars.VISION_PLANNER_MODEL !== "" && model === vars.VISION_PLANNER_MODEL)) {
 			if (overrides.planner instanceof Error) throw overrides.planner;
 			return overrides.planner ?? { response: JSON.stringify(sampleParamsFull), usage: { neurons: 102 } };
 		}
@@ -109,7 +127,9 @@ export function fakeEnv(
 		PATTERNS: { put: patternsPut, get: vi.fn() },
 		DB: d1,
 		PLANNER_MODEL: vars.PLANNER_MODEL,
+		VISION_PLANNER_MODEL: vars.VISION_PLANNER_MODEL,
 		IMAGE_MODEL: vars.IMAGE_MODEL,
+		IMAGE_TO_IMAGE_MODEL: vars.IMAGE_TO_IMAGE_MODEL,
 		MAX_RETRIES: vars.MAX_RETRIES,
 		RETENTION_LIMIT: vars.RETENTION_LIMIT,
 		MAX_RESUME_ATTEMPTS: vars.MAX_RESUME_ATTEMPTS,

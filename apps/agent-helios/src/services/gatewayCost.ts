@@ -32,6 +32,13 @@ const READ_BACKOFF_MS = [400, 1600];
  * The log id is captured once, up front, for exactly that reason: the retries
  * below must not re-read a property another stage may have moved on.
  *
+ * **Only ever call this for a call that actually routed through the gateway.**
+ * An ungated call does not clear `aiGatewayLogId` — it leaves whatever the last
+ * routed call put there. So calling this after one does not return null; it
+ * returns the *previous* stage's cost and attributes it to this one. Helios's
+ * image call is ungated whenever it takes the multipart path, and reports its
+ * null directly (see `ungatedCallCost` in `imageGenerator.ts`).
+ *
  * **Only the last attempt is visible.** When the planner retries, each attempt
  * is its own gateway call and this returns the cost of the final one, not the
  * sum. A run whose planner retried therefore under-reports slightly. The

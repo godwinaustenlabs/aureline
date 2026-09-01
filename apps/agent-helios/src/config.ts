@@ -33,12 +33,50 @@ export interface ImageModelConfig {
 	width?: number;
 	height?: number;
 	steps?: number;
+	/**
+	 * How the model is called. Absent means `"json"` — a `getImageModelOutput`
+	 * call with a JSON body, which is what every value in KV means today.
+	 *
+	 * Optional rather than required so that every value already in KV stays
+	 * valid. Making it required would invalidate both live values at once, and
+	 * an invalid value falls back to the var (ADR-0008) — so the result would be
+	 * silent config drift rather than a loud error.
+	 *
+	 * `"multipart"` is the flux-2-klein family's only accepted shape: a JSON body
+	 * is rejected with `5006: required properties at '/' are 'multipart'`.
+	 */
+	transport?: "json" | "multipart";
 }
 
 /** Resolved runtime config for a single pipeline invocation. */
 export interface HeliosConfig {
 	textModel: TextModelConfig;
+	/**
+	 * The vision-capable planner, used for **every** request rather than only
+	 * those carrying a reference image.
+	 *
+	 * One model means one set of planner behaviour to tune and one prompt that
+	 * has to work. Switching per request would mean two of each, and a class of
+	 * bug that only appears once an image is attached — which is the hardest
+	 * kind to notice. `textModel` stays as the fallback, so reverting is a KV
+	 * edit rather than a deploy (ADR-0008, ADR-SHARED-0003).
+	 */
+	visionTextModel: TextModelConfig;
+	/** The model called when the request carries **no** reference image. */
 	imageModel: ImageModelConfig;
+	/**
+	 * The model called when the request **does** carry a reference image.
+	 *
+	 * A second key rather than a field on `imageModel`, because these are two
+	 * genuinely different calls: this one is multipart and never routes through
+	 * the gateway, `imageModel` is JSON and does. Keeping them apart is what lets
+	 * a request with no image stay byte-for-byte the call it has always been —
+	 * cost tracking included — while a request with one changes.
+	 *
+	 * Resolves to an empty model id when unset, which `imageModelFor` reads as
+	 * "not configured" and refuses on rather than silently falling back.
+	 */
+	imageToImageModel: ImageModelConfig;
 	maxRetries: number;
 	retentionLimit: number;
 	/**
@@ -48,7 +86,16 @@ export interface HeliosConfig {
 	 */
 	maxResumeAttempts: number;
 	/** Per-field provenance, for the log line. */
-	source: Record<"textModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts", ConfigSource>;
+	source: Record<
+		| "textModel"
+		| "visionTextModel"
+		| "imageModel"
+		| "imageToImageModel"
+		| "maxRetries"
+		| "retentionLimit"
+		| "maxResumeAttempts",
+		ConfigSource
+	>;
 }
 
 /** How long the edge may serve a cached KV read, in seconds.
@@ -72,6 +119,7 @@ const ImageModelSchema = z.object({
 	width: z.number().int().min(64).max(2048).optional(),
 	height: z.number().int().min(64).max(2048).optional(),
 	steps: z.number().int().min(1).max(50).optional(),
+	transport: z.enum(["json", "multipart"]).optional(),
 });
 
 /**
@@ -128,7 +176,16 @@ export type ConfigEnv = {
 	 * fakes one method instead of standing up a whole `KVNamespace`. */
 	CONFIG: { get(keys: string[], options?: { cacheTtl?: number }): Promise<Map<string, string | null>> };
 	PLANNER_MODEL: string;
+	/** Optional, and the option is the point: an empty or absent value is the
+	 * signal to fall back to `PLANNER_MODEL`, which is how this is turned off
+	 * without a deploy. See `plannerModelFor`. */
+	VISION_PLANNER_MODEL?: string;
 	IMAGE_MODEL: string;
+	/** Optional for the same reason as `VISION_PLANNER_MODEL`: an empty or
+	 * absent value means no image-to-image model is configured, and
+	 * `imageModelFor` refuses a request carrying a reference image rather than
+	 * quietly sending it to a model that cannot read one. */
+	IMAGE_TO_IMAGE_MODEL?: string;
 	MAX_RETRIES?: string;
 	RETENTION_LIMIT?: string;
 	MAX_RESUME_ATTEMPTS?: string;
@@ -155,12 +212,42 @@ const FIELDS = [
 		describe: (value: unknown) => describeModel(value as TextModelConfig),
 	},
 	{
+		key: "vision_planner_model",
+		field: "visionTextModel",
+		var: "VISION_PLANNER_MODEL",
+		schema: TextModelSchema,
+		prepare: prepareModelValue,
+		// Deliberately allowed to resolve to an empty model id. The vars are not
+		// re-validated by `resolveConfig`, so an unset var lands here as `{ model:
+		// "" }` — which `plannerModelFor` reads as "not configured" and answers by
+		// falling back to `textModel`. That is the off switch, and it is a KV or
+		// var edit rather than a deploy.
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.VISION_PLANNER_MODEL ?? "" }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
 		key: "image_model",
 		field: "imageModel",
 		var: "IMAGE_MODEL",
 		schema: ImageModelSchema,
 		prepare: prepareModelValue,
 		fromVar: (env: ConfigEnv): unknown => ({ model: env.IMAGE_MODEL }),
+		describe: (value: unknown) => describeModel(value as ImageModelConfig),
+	},
+	{
+		key: "image_to_image_model",
+		field: "imageToImageModel",
+		var: "IMAGE_TO_IMAGE_MODEL",
+		schema: ImageModelSchema,
+		prepare: prepareModelValue,
+		// `transport` is stated rather than left to its default. This model is
+		// only ever reached through the multipart helper, so a value resolving to
+		// `"json"` here would describe a call that cannot be made — the klein
+		// family rejects a JSON body outright.
+		fromVar: (env: ConfigEnv): unknown => ({
+			model: env.IMAGE_TO_IMAGE_MODEL ?? "",
+			transport: "multipart",
+		}),
 		describe: (value: unknown) => describeModel(value as ImageModelConfig),
 	},
 	{
@@ -259,6 +346,73 @@ export async function resolveConfig(env: ConfigEnv): Promise<HeliosConfig> {
 	}
 
 	return { ...resolved, source } as HeliosConfig;
+}
+
+/**
+ * Which planner model this invocation actually calls.
+ *
+ * The vision model when one is configured, and `textModel` when it is not. The
+ * choice does **not** depend on whether the request carries a reference image:
+ * one model per deployment means one set of behaviour to tune and one prompt
+ * that has to work, where branching on the request would mean two of each and
+ * a class of bug that appears only once someone attaches an image.
+ *
+ * The empty-model case is checked explicitly rather than with a `?.` or a `||`
+ * chain (AGENTS.md §7). "No vision model configured" is the ordinary state
+ * before one is chosen, and it has to be distinguishable from a configured one
+ * — the log line is where that distinction is answerable, so it is logged.
+ */
+export function plannerModelFor(config: HeliosConfig): TextModelConfig {
+	const vision = config.visionTextModel;
+
+	if (vision === undefined || vision.model.trim().length === 0) {
+		console.log("planner: no vision model configured, using text_model");
+		return config.textModel;
+	}
+
+	return vision;
+}
+
+/**
+ * How an image model is actually called: JSON body, or multipart form.
+ *
+ * `transport` is optional in config so that existing KV values stay valid, and
+ * this is the one place that absence is turned into a decision. `"json"` is the
+ * default because it is what every value in KV means today.
+ */
+export function transportFor(model: ImageModelConfig): "json" | "multipart" {
+	return model.transport ?? "json";
+}
+
+/**
+ * Which image model this invocation actually calls.
+ *
+ * Unlike `plannerModelFor`, this **does** depend on the request. A reference
+ * image can only be sent to a model that accepts one, and that is not the same
+ * model as the text-to-image default — so this is the one branch in the engine
+ * that a user's upload is allowed to steer.
+ *
+ * **Refuses rather than falls back** when a reference image arrives and no
+ * image-to-image model is configured (AGENTS.md §7). The tempting alternative —
+ * quietly using `imageModel` — spends the image model producing a result that
+ * ignored the upload, and leaves an audit row that looks entirely normal. There
+ * is no way to tell that outcome from a working one afterwards, which is
+ * exactly why it throws before anything bills.
+ */
+export function imageModelFor(config: HeliosConfig, hasReferenceImage: boolean): ImageModelConfig {
+	if (!hasReferenceImage) {
+		return config.imageModel;
+	}
+
+	const i2i = config.imageToImageModel;
+	if (i2i === undefined || i2i.model.trim().length === 0) {
+		throw new Error(
+			"image: the request carries a reference image but no image_to_image_model is " +
+				"configured. Set the image_to_image_model KV key, or the IMAGE_TO_IMAGE_MODEL var.",
+		);
+	}
+
+	return i2i;
 }
 
 /** One-line summary of the resolved config and where each value came from. */

@@ -157,6 +157,11 @@ export async function insertFailedImageRun(db: HeliosDb, seed: RowSeed): Promise
  * success just as loudly as one that matched. Silently failing to record a spent
  * image is how a run that cost real money ends up looking like it never happened
  * (AGENTS.md §7).
+ *
+ * `modelMetadata` is **merged over** what the row already carries rather than
+ * replacing it. The row was opened before the call, so its metadata is a
+ * prediction; this is where the caller replaces the predicted fields with what
+ * actually happened, without discarding markers a resume put there.
  */
 export async function completeImageRun(
 	db: HeliosDb,
@@ -164,12 +169,13 @@ export async function completeImageRun(
 		pipelineId: string;
 		imageR2Key: string;
 		costUsd: number | null;
+		modelMetadata?: ModelMetadata;
 	},
 ): Promise<void> {
-	const { pipelineId, imageR2Key, costUsd } = settle;
+	const { pipelineId, imageR2Key, costUsd, modelMetadata = {} } = settle;
 
 	const [existing] = await db
-		.select({ id: heliosRuns.id })
+		.select({ modelMetadata: heliosRuns.modelMetadata })
 		.from(heliosRuns)
 		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "image")));
 
@@ -177,9 +183,14 @@ export async function completeImageRun(
 		throw new Error(`no image row to settle for pipeline_id ${pipelineId}`);
 	}
 
+	const mergedMetadata = {
+		...((existing.modelMetadata as Record<string, unknown> | null) ?? {}),
+		...(modelMetadata as Record<string, unknown>),
+	};
+
 	await db
 		.update(heliosRuns)
-		.set({ status: "completed", imageR2Key, costUsd, completedAt: new Date() })
+		.set({ status: "completed", imageR2Key, costUsd, modelMetadata: mergedMetadata, completedAt: new Date() })
 		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "image")));
 }
 

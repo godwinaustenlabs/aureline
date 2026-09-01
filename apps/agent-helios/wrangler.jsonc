@@ -80,8 +80,34 @@
 	"vars": {
 		// fallback default — the live value is CONFIG:text_model in KV
 		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
-		// fallback default — the live value is CONFIG:image_model in KV
+		// fallback default — the live value is CONFIG:vision_planner_model in KV.
+		//
+		// **PROVISIONAL, and not yet verified end to end.** Subhan owns the final
+		// model choice (phase-1-plan §5); this is a placeholder so the multimodal
+		// path is exercisable before that lands. The specific thing to verify on
+		// the first billed run is that it honours `response_format: json_schema`
+		// — the planner's entire contract depends on structured output, and a
+		// vision model that ignores it fails EVERY request, not only the ones
+		// carrying an image, because this model is used for all of them.
+		//
+		// Set it to "" to fall straight back to PLANNER_MODEL. That is the off
+		// switch, and it works from KV with no deploy.
+		"VISION_PLANNER_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
+		// fallback default — the live value is CONFIG:image_model in KV.
+		// Text-to-image, JSON body, routed through the gateway so its cost is
+		// recorded. Used for every request that carries NO reference image.
 		"IMAGE_MODEL": "@cf/black-forest-labs/flux-1-schnell",
+		// fallback default — the live value is CONFIG:image_to_image_model in KV.
+		// Used only when the request carries a reference image, because
+		// flux-1-schnell above is text-to-image and has no image input at all.
+		//
+		// This one is multipart, which cannot route through the AI Gateway (see
+		// docs/ai-gateway-multipart-findings.md), so runs that attach an image
+		// record a null cost. That is the trade, and it is recorded on the row.
+		//
+		// Set it to "" and a request carrying an image is REFUSED before billing
+		// rather than quietly falling back to a model that cannot read it.
+		"IMAGE_TO_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-9b",
 		// AI Gateway name, created in the dashboard under AI > AI Gateway.
 		// Empty string means direct Workers AI with no logging or caching.
 		// Deliberately NOT in KV: an empty or misspelled id makes the call fall

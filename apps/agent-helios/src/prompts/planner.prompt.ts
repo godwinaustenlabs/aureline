@@ -12,7 +12,7 @@ import type { HeliosParams } from "@aureline/shared-types";
  */
 
 /** Versioned identity of this prompt. Never edit a prompt in place — bump the ID. */
-export const PLANNER_PROMPT_ID = "helios-planner-v1";
+export const PLANNER_PROMPT_ID = "helios-planner-v2";
 
 /**
  * Per-value glosses, keyed by the schema's own union types.
@@ -101,6 +101,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "high",
 			style: "art deco",
+			image_prompt:
+				"Let the fan ribs radiate from a single point at the base of each motif so it reads as one fan rather than a cluster of arcs.",
 		},
 	},
 	{
@@ -114,6 +116,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "hatching",
 			contrast_level: "medium",
 			style: "vintage botanical illustration",
+			image_prompt:
+				"Draw each sprig with a visible stem and two or three leaves, in the manner of a specimen plate rather than a decorative flourish.",
 		},
 	},
 	{
@@ -128,6 +132,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "low",
 			style: "minimal",
+			image_prompt:
+				"Keep each leaf a single unbroken outline with no internal veining, so the sparseness reads as intentional.",
 		},
 	},
 	{
@@ -142,6 +148,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "cross-hatching",
 			contrast_level: "high",
 			style: "opulent traditional",
+			image_prompt:
+				"Fill the body of each paisley with dense internal ornament so the weight of the brief lands as detail rather than as scale.",
 		},
 	},
 	{
@@ -156,6 +164,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "high",
 			style: "folk",
+			image_prompt:
+				"Give every daisy the same number of petals and the same simple round centre, so the density reads as a repeat rather than as noise.",
 		},
 	},
 ];
@@ -191,7 +201,8 @@ The brief is a brief, not a keyword list — interpreting it is your job. Make t
 # Hard constraints
 
 - The output is black ink on a white ground. Never choose or mention colour.
-- All eight fields must be present. No nulls, no "n/a", no extra fields.
+- When a reference image is supplied, study it and let it inform your choices. Describe what you take from it in \`image_prompt\`. Read structure from it — motif, repeat, scale, density, linework — and never colour, which is not yours to decide.
+- All nine fields must be present. No nulls, no "n/a", no extra fields.
 - Every enumerated field takes exactly one of its listed values, spelled exactly as listed.
 
 # Output format
@@ -206,6 +217,7 @@ Return a JSON object with exactly these fields:
 - \`texture_technique\`: ${allowed(TEXTURE_TECHNIQUE)}
 - \`contrast_level\`: ${allowed(CONTRAST_LEVEL)}
 - \`style\`: free text — the visual idiom or period, as a lowercase noun phrase of one to three words
+- \`image_prompt\`: free text, one or two sentences, at most 500 characters — an instruction written **for the image model**, not for the user. Add only what the other fields cannot already express. Never contradict them, and never ask for anything to be left out.
 
 Return only the JSON object. No prose, no markdown fence, no explanation.
 
@@ -236,6 +248,8 @@ ${glossary(CONTRAST_LEVEL)}
   This is about INK DARKNESS, not spacing.
 
 **style** — the visual idiom or period the pattern belongs to (art deco, folk, botanical illustration, brutalist, and so on). This is where the brief's cultural register lands.
+
+**image_prompt** — your own note to the image model, in your own words. The eight fields above it are turned into a fixed sentence by our code; this is appended after it, and it is the only place you can say something that sentence cannot hold. Use it for what you noticed in this particular brief or reference image — how a motif should be drawn, how the elements should sit against each other. Write it as an instruction to a renderer. Do not restate the fields above, do not address the user, do not mention colour, and do not ask for anything to be excluded — the exclusions are added by our code and are not yours to change.
 
 # Choosing values
 

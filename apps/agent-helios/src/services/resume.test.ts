@@ -5,7 +5,7 @@ import { heliosRuns } from "../db/schema";
 import { createTestDb } from "../repository/test-db";
 import type { HeliosDb } from "../db/client";
 import { fakeEnv as sharedEnv, GATEWAY_COST_USD } from "./test-env";
-import { SAMPLE_DESIGN_SESSION_ID } from "../fixtures/sample-params";
+import { SAMPLE_DESIGN_SESSION_ID, sampleParamsFull } from "../fixtures/sample-params";
 import {
 	completeImageRun,
 	completeTextRun,
@@ -29,16 +29,8 @@ const TEXT_MODEL = "@cf/openai/gpt-oss-120b";
 const DESIGN_SESSION_ID = SAMPLE_DESIGN_SESSION_ID;
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
-const PARAMS: HeliosParams = {
-	motif_type: "art deco fan",
-	repeat_type: "half-drop",
-	scale: "medium",
-	density: "balanced",
-	line_weight: "medium",
-	texture_technique: "hatching",
-	contrast_level: "high",
-	style: "traditional",
-};
+// The shared fixture rather than an inline copy, which had drifted back in.
+const PARAMS: HeliosParams = sampleParamsFull;
 
 /** base64 for the bytes [72, 101, 108, 108, 111] ("Hello") */
 const BASE64 = "SGVsbG8=";
@@ -182,6 +174,51 @@ describe("resumeRun", () => {
 		expect(image?.status).toBe("completed");
 		expect(image?.imageR2Key).toBe(`patterns/${outcome.result.pipeline_id}.jpg`);
 		expect(image?.costUsd).toBe(GATEWAY_COST_USD);
+	});
+
+	it("sends no reference image, and takes the gateway-routed path that still reports a cost", async () => {
+		// Resume is unchanged by the reference-image work and has to stay that way.
+		// The image is transient and was never persisted, so a resumed run has none
+		// — which means it takes the JSON path, routes through the gateway, and
+		// reports a real cost. A resume that somehow reached the multipart branch
+		// would silently start reporting null costs for every retry.
+		const { env, run } = fakeEnv();
+
+		const outcome = await resumeRun(db, "original-1", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected a run");
+
+		const [model, input, options] = run.mock.calls[0] ?? [];
+		expect(model).toBe(IMAGE_MODEL);
+		expect(input).not.toHaveProperty("multipart");
+		expect(options).toBeDefined();
+
+		const { image } = await rowsOf(db, outcome.result.pipeline_id);
+		expect(metadata(image).transport).toBe("json");
+		expect(metadata(image).reference_image_sent).toBe(false);
+		expect(image?.costUsd).toBe(GATEWAY_COST_USD);
+	});
+
+	it("records reference_image_sent false even when the original run had one", async () => {
+		// The two flags disagree by design, and the disagreement is the record: the
+		// text row's `had_reference_image` says the params were shaped by a picture,
+		// the image row's `reference_image_sent` says this attempt's pixels were
+		// not. Without both, "why does the retry look different" has no answer.
+		await seedImageFailure(db, "had-image-1");
+		await db
+			.update(heliosRuns)
+			.set({ modelMetadata: { model: TEXT_MODEL, had_reference_image: true } })
+			.where(and(eq(heliosRuns.pipelineId, "had-image-1"), eq(heliosRuns.modality, "text")));
+		const { env } = fakeEnv();
+
+		const outcome = await resumeRun(db, "had-image-1", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected a run");
+
+		const { image } = await rowsOf(db, outcome.result.pipeline_id);
+		expect(metadata(image).reference_image_sent).toBe(false);
+
+		// And the original's own record is untouched.
+		const original = await rowsOf(db, "had-image-1");
+		expect(metadata(original.text).had_reference_image).toBe(true);
 	});
 
 	it("marks both rows with resumed_from and attempt, and neither row of an original", async () => {

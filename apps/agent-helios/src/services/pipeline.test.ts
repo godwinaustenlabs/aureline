@@ -167,8 +167,71 @@ describe("runPipeline failure behaviour", () => {
 		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		const meta = textRow?.modelMetadata as Record<string, unknown>;
 		expect(meta).toHaveProperty("prompt_source", "code");
-		expect(meta).toHaveProperty("prompt_version", "helios-planner-v1");
+		expect(meta).toHaveProperty("prompt_version", "helios-planner-v2");
 		expect(meta).toHaveProperty("prompt_updated_at", null);
+		expect(meta).toHaveProperty("had_reference_image", false);
+	});
+
+	it("records had_reference_image on the text row when one was attached", async () => {
+		// The reference image is transient and is never stored, so this flag is
+		// the only durable trace it existed. Without it, "why does this run look
+		// different from that one" is unanswerable from the audit table — which
+		// matters most after a `/resume`, since resume re-runs the image stage
+		// from these stored params and never sees an image at all.
+		const { env } = fakeEnv();
+		const withImage: HeliosRequest = {
+			...REQ,
+			image: { bytes: new Uint8Array([137, 80, 78, 71]), contentType: "image/png" },
+		};
+
+		const result = await runPipeline(db, withImage, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		expect(textRow?.modelMetadata as Record<string, unknown>).toHaveProperty(
+			"had_reference_image",
+			true,
+		);
+	});
+
+	it("records the model the image call actually used, not the one config predicted", async () => {
+		// The row is opened before the call, so its metadata starts as a guess. Once
+		// the model depends on whether an image was attached, that guess is wrong
+		// for exactly the runs this work is about — a row still naming
+		// flux-1-schnell after a call to klein is the lying audit row ADR-0001
+		// exists to prevent.
+		const { env } = fakeEnv();
+		const withImage: HeliosRequest = {
+			...REQ,
+			image: { bytes: new Uint8Array([137, 80, 78, 71]), contentType: "image/png" },
+		};
+
+		const result = await runPipeline(db, withImage, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		const imageRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "image");
+		const meta = imageRow?.modelMetadata as Record<string, unknown>;
+		expect(meta).toHaveProperty("model", "@cf/black-forest-labs/flux-2-klein-9b");
+		expect(meta).toHaveProperty("transport", "multipart");
+		expect(meta).toHaveProperty("reference_image_sent", true);
+		// A PNG, so the dimensions could not be read. Null rather than absent: the
+		// row says nobody measured, instead of implying a size.
+		expect(meta).toHaveProperty("reference_dimensions", null);
+		// No steps were sent on this path, so none is claimed.
+		expect(meta).not.toHaveProperty("steps");
+	});
+
+	it("records the text-to-image model and its steps when no image was attached", async () => {
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const imageRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "image");
+		const meta = imageRow?.modelMetadata as Record<string, unknown>;
+		expect(meta).toHaveProperty("model", "@cf/black-forest-labs/flux-1-schnell");
+		expect(meta).toHaveProperty("transport", "json");
+		expect(meta).toHaveProperty("steps", 4);
+		expect(meta).toHaveProperty("reference_image_sent", false);
 	});
 
 	/**

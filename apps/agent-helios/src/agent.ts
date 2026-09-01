@@ -7,6 +7,7 @@ import { runPipeline } from "./services/pipeline";
 import { resumeRun } from "./services/resume";
 import { getRunRows, listRuns } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
+import { json, error, readRequestBody } from "./http";
 
 /**
  * Helios — the Pattern Engine.
@@ -43,7 +44,10 @@ export class HeliosAgent extends Agent<Env> {
 			return error("POST required", 405);
 		}
 
-		const body = await request.json().catch(() => undefined);
+		// JSON or multipart, flattened to one shape. `/resume` reads it too: it has
+		// no image field, but a caller posting a form to it should get the schema's
+		// own 400 rather than an unreadable-body one.
+		const body = await readRequestBody(request);
 
 		if (url.pathname === "/resume") {
 			const parsed = HeliosResumeRequestSchema.safeParse(body);
@@ -68,15 +72,4 @@ export class HeliosAgent extends Agent<Env> {
 		const result = await runPipeline(db, parsed.data, this.env, url.origin);
 		return json(result);
 	}
-}
-
-function json(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "Content-Type": "application/json" },
-	});
-}
-
-function error(message: string, status: number) {
-	return json({ error: message }, status);
 }

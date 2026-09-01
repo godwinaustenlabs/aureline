@@ -6,13 +6,14 @@ import {
 	type HeliosParams,
 	type HeliosRequest,
 	type HeliosResult,
+	type ReferenceImage,
 } from "@aureline/shared-types";
 import { planConcept } from "./planner";
-import { generateImage, resolveSteps } from "./imageGenerator";
+import { generateImage, resolveSteps, type ImageCallRecord } from "./imageGenerator";
 import { savePatternImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { readGatewayCost } from "./gatewayCost";
-import { describeConfig, describePrompt, resolveConfig, resolvePrompt, type HeliosConfig } from "../config";
+import { describeConfig, describePrompt, resolveConfig, resolvePrompt, transportFor, type HeliosConfig } from "../config";
 import { buildPlannerSystemPrompt, PLANNER_PROMPT_ID } from "../prompts";
 import {
 	startTextRun,
@@ -39,19 +40,56 @@ type ImageStageOutcome =
 	| { ok: false; cause: unknown; costUsd: number | null };
 
 /**
- * The image row's metadata, built from the config the run will actually use
- * rather than from literals — a hardcoded model name here would record a model
- * that was never called once `image_model` is changed in KV.
+ * The image row's metadata **as best it can be known before the call**.
  *
- * Still a placeholder in one respect: ticket 06 replaces this with the usage the
- * real Flux Schnell call reports back.
+ * The row has to be opened before the model is called — that is what makes a
+ * failed image a recorded failure rather than a missing row (ADR-0001) — so this
+ * is necessarily a prediction. It is built from the config the run will use
+ * rather than from literals, because a hardcoded model name would record a model
+ * that was never called once `image_model` changes in KV.
+ *
+ * **It is overwritten with the truth once the call returns**, by
+ * `recordedCall` below. That matters more than it used to: which model runs now
+ * depends on whether the request carried a reference image, so this prediction
+ * is wrong for exactly the runs the new work is about, and a row left holding it
+ * would name flux-1-schnell for a call to klein.
+ *
+ * `hasReferenceImage` is passed rather than inferred so that even the row opened
+ * for a call that then failed names the model that was actually attempted.
  */
-function imageModelMetadata(config: HeliosConfig) {
+function imageModelMetadata(config: HeliosConfig, hasReferenceImage: boolean) {
+	// Never throws here: `imageModelFor` refuses when a reference arrives with no
+	// model configured, and that refusal has to reach the caller as a failed run
+	// rather than an unopened row.
+	const model = hasReferenceImage ? config.imageToImageModel : config.imageModel;
+
 	return {
-		model: config.imageModel.model,
-		// What the call will actually send, not what KV holds — the two differ
-		// whenever config carries a steps value above Flux's cap.
-		steps: resolveSteps(config),
+		model: model.model,
+		transport: transportFor(model),
+		// Only meaningful on the JSON path; the multipart call sends no steps and a
+		// row claiming one would describe a parameter the model never saw.
+		...(transportFor(model) === "json" && { steps: resolveSteps(config) }),
+		reference_image_sent: hasReferenceImage,
+	};
+}
+
+/**
+ * The image row's metadata as the call actually happened.
+ *
+ * Everything `imageModelMetadata` could only guess at, now known: which model
+ * answered, over which transport, with what sent to it. This is what the audit
+ * row keeps.
+ */
+function recordedCall(call: ImageCallRecord) {
+	return {
+		model: call.model,
+		transport: call.transport,
+		...(call.steps !== undefined && { steps: call.steps }),
+		reference_image_sent: call.referenceImageSent,
+		// Null whenever the bytes were not a readable JPEG — a PNG upload, most
+		// likely. The warning is in the log; the null is here so the row does not
+		// imply a size nobody measured.
+		reference_dimensions: call.referenceDimensions,
 	};
 }
 
@@ -121,18 +159,28 @@ export async function runImageStage(
 		designSessionId: string;
 		concept: string;
 		params: HeliosParams;
+		/**
+		 * The user's reference image, when this invocation carried one.
+		 *
+		 * Optional, and `/resume` simply omits it — the image is transient and was
+		 * never persisted, so a resumed run has none and behaves exactly as it
+		 * always did (ADR-SHARED-0003). Nothing about resume had to change for
+		 * this to be true, which is the reason it is shaped this way.
+		 */
+		referenceImage?: ReferenceImage;
 		metadataExtras?: Record<string, unknown>;
 	},
 ): Promise<ImageStageOutcome> {
-	const { pipelineId, designSessionId, concept, params, metadataExtras = {} } = stage;
+	const { pipelineId, designSessionId, concept, params, referenceImage, metadataExtras = {} } = stage;
 
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
 	let costUsd: number | null = null;
 
 	// Built once so the rescue insert below records the same model as the row
-	// that was meant to open.
-	const modelMetadata = { ...imageModelMetadata(config), ...metadataExtras };
+	// that was meant to open. A prediction until the call returns — see
+	// `imageModelMetadata`.
+	const modelMetadata = { ...imageModelMetadata(config, referenceImage !== undefined), ...metadataExtras };
 
 	// Whether the image row exists. If opening it is what failed, the caller's
 	// `failRunningRuns` has nothing to mark, and the invocation settles as a lone
@@ -150,12 +198,19 @@ export async function runImageStage(
 		});
 		rowOpened = true;
 
-		const image = await generateImage(params, config, env, pipelineId);
+		const image = await generateImage(params, config, env, pipelineId, referenceImage);
 		costUsd = image.cost_usd;
 
 		const imageR2Key = await savePatternImage(env.PATTERNS, pipelineId, image.image, image.contentType);
 
-		await completeImageRun(db, { pipelineId, imageR2Key, costUsd });
+		// The predicted metadata is replaced with what the call actually did.
+		// `metadataExtras` is re-applied on top so a resume's markers survive.
+		await completeImageRun(db, {
+			pipelineId,
+			imageR2Key,
+			costUsd,
+			modelMetadata: { ...recordedCall(image.call), ...metadataExtras },
+		});
 
 		return { ok: true, imageR2Key, costUsd };
 	} catch (cause) {
@@ -236,6 +291,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			concept: req.concept,
 			systemPrompt: plannerPrompt.text,
 			pipeline_id: pipelineId,
+			image: req.image,
 		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
@@ -258,6 +314,16 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			prompt_version: plannerPrompt.source === "code" ? PLANNER_PROMPT_ID : null,
 			prompt_source: plannerPrompt.source,
 			prompt_updated_at: plannerPrompt.updatedAt,
+			/**
+			 * Whether a reference image reached the planner on this run.
+			 *
+			 * The image itself is transient and is never stored, so this flag is
+			 * the only durable trace it existed. It is what keeps "why does this
+			 * run look different from that one" answerable from the audit table
+			 * alone — including after a `/resume`, which re-runs the image stage
+			 * from these stored params and never sees an image at all.
+			 */
+			had_reference_image: req.image !== undefined,
 		};
 
 		// Planner succeeded — settle the text row before the image row opens.
@@ -269,6 +335,10 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			designSessionId,
 			concept: req.concept,
 			params,
+			// The same image the planner saw. It now reaches the image model too,
+			// which is the point of ADR-SHARED-0003's successor: the picture used to
+			// influence the pixels only through the words the planner wrote about it.
+			referenceImage: req.image,
 		});
 
 		// Recorded before anything can throw, so the catch below reports what the

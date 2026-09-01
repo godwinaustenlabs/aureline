@@ -140,6 +140,28 @@ describe("HeliosParamsSchema", () => {
 		expect(HeliosParamsSchema.safeParse(withoutIt).success).toBe(false);
 	});
 
+	it("rejects params with no image_prompt", () => {
+		const { image_prompt: _absent, ...withoutIt } = sampleParamsFull;
+
+		// Required from the start, before RAG exists to make it useful. The
+		// mechanism has to work end to end now so that turning RAG on later is a
+		// content change and not a code change (phase-1-plan §3).
+		expect(HeliosParamsSchema.safeParse(withoutIt).success).toBe(false);
+	});
+
+	it("rejects an empty or whitespace-only image_prompt", () => {
+		expect(HeliosParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "" }).success).toBe(false);
+		expect(HeliosParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "   " }).success).toBe(false);
+	});
+
+	it("rejects an image_prompt over 500 characters", () => {
+		// The cap is what keeps `buildFluxPrompt`'s 2048-character guard a guard
+		// against bugs rather than a routine failure mode. One character either
+		// side of the boundary, so an off-by-one is visible.
+		expect(HeliosParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "x".repeat(500) }).success).toBe(true);
+		expect(HeliosParamsSchema.safeParse({ ...sampleParamsFull, image_prompt: "x".repeat(501) }).success).toBe(false);
+	});
+
 	it("rejects the half-built params object that used to sit behind a cast", () => {
 		// This shape is what AGENTS.md §5 uses as its example of a test that had
 		// stopped checking anything. It is here so it can never come back.

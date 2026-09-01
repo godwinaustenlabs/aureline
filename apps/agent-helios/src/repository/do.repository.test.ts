@@ -4,19 +4,12 @@ import { heliosRuns } from "../db/schema";
 import { completeImageRun, completeTextRun, getRunRows, getSettledRows, listRuns, pruneCompletedRuns } from "./do.repository";
 import type { HeliosDb } from "../db/client";
 import { createTestDb, insertRow } from "./test-db";
+import { sampleParamsFull } from "../fixtures/sample-params";
 
-/** A complete, valid `HeliosParams`. Whole rather than a partial plus a cast,
- * so a contract change breaks this file instead of slipping past it. */
-const PARAMS: HeliosParams = {
-	motif_type: "art deco fan",
-	repeat_type: "half-drop",
-	scale: "medium",
-	density: "balanced",
-	line_weight: "medium",
-	texture_technique: "hatching",
-	contrast_level: "high",
-	style: "traditional",
-};
+/** A complete, valid `HeliosParams`. The shared fixture rather than a fourth
+ * inline copy of it — this file's own copy had drifted back in, which is what
+ * `fixtures/sample-params.ts` exists to stop. */
+const PARAMS: HeliosParams = sampleParamsFull;
 
 describe("pruneCompletedRuns", () => {
 	let db: HeliosDb;
