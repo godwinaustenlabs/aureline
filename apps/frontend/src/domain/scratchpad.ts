@@ -65,7 +65,7 @@ export function buildScratchpad({ result, group, wallClockMs, rowsUnavailableRea
 				entry('Result status', result ? result.status : null, 'no result on screen'),
 				stageEntry(result),
 				entry('Client wall clock', wallClockMs === null ? null : duration(wallClockMs), 'not measured'),
-				entry('p_invoc_id', result?.p_invoc_id ?? group?.pInvocId ?? null, 'no run'),
+				entry('pipeline_id', result?.pipeline_id ?? group?.pipelineId ?? null, 'no run'),
 				entry('Concept sent', group?.userPrompt || null, NO_ROWS),
 			],
 		},

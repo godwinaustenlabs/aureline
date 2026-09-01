@@ -12,10 +12,22 @@ import type { HeliosStatus } from '@aureline/shared-types';
  * page rather than a wire contract, which is why it lives here and not in
  * `@aureline/shared-types`: nothing validates against it and nothing else needs
  * to agree with it.
+ *
+ * **Nothing enforces that mirror, and it has already drifted once.** This
+ * interface said `pInvocId` for months after the column and the select were
+ * renamed to `pipelineId`. The rows arrive as `unknown` and are asserted into
+ * this type at the boundary, so TypeScript could not see it, the fixtures below
+ * carried the same stale name, and every test stayed green while the run
+ * history read `undefined` for the id it groups by.
+ *
+ * So: a change to `heliosRuns` in that schema is a change here, in the same
+ * commit. The typed half of this page — `HeliosResult` from
+ * `@aureline/shared-types` — is checked by the compiler and needs no such note.
+ * This half is on the reader.
  */
 export interface RunRow {
 	id: string;
-	pInvocId: string;
+	pipelineId: string;
 	modality: 'text' | 'image';
 	status: HeliosStatus;
 	userPrompt: string;

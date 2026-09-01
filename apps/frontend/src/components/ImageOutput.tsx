@@ -14,6 +14,20 @@ interface Props {
 	/** What this brief has already produced, when it has produced anything. Shown
 	 *  beside the button so the spend is an informed one. */
 	resumeNote: string | null;
+	/**
+	 * A run selected out of the history rather than just run, and the URL its
+	 * stored R2 key rebuilds to.
+	 *
+	 * It exists because a stored row carries a **key** and no URL — the engine
+	 * builds the URL from the request's origin at response time and never stores
+	 * it. Without this, reselecting an earlier run filled the scratchpad with
+	 * every field the engine recorded and left the image blank, which reads as a
+	 * broken page rather than as a page showing you history.
+	 *
+	 * Takes precedence over `outcome` when set, because the person has explicitly
+	 * asked to look at a different run than the one that just ran.
+	 */
+	historyImage: { url: string; pipelineId: string } | null;
 }
 
 /**
@@ -23,7 +37,7 @@ interface Props {
  * addition to it, never instead of it — this is a debugging tool and the exact
  * bytes are the point.
  */
-export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason, resumeNote }: Props) {
+export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason, resumeNote, historyImage }: Props) {
 	return (
 		<section className="panel">
 			<header>
@@ -32,13 +46,28 @@ export function ImageOutput({ outcome, waitingMs, onResume, resumeBlockedReason,
 			<div className="panel-body">
 				{waitingMs !== null && <Waiting elapsedMs={waitingMs} what="Waiting on the worker" />}
 
-				{!outcome && waitingMs === null && (
+				{!outcome && !historyImage && waitingMs === null && (
 					<p className="empty" style={{ padding: 0 }}>
 						Nothing yet. A generate costs about $0.0029 of real money and confirms first.
 					</p>
 				)}
 
-				{outcome && (
+				{historyImage && (
+					<figure style={{ margin: 0 }}>
+						<figcaption className="hint" style={{ marginBottom: 6 }}>
+							From the run history — <code>{historyImage.pipelineId}</code>. Rebuilt from the stored R2 key,
+							because a row records the key and never the URL.
+						</figcaption>
+						<div className="pattern">
+							<img src={historyImage.url} alt="The pattern this run produced" />
+						</div>
+						<figcaption className="hint" style={{ marginTop: 6, wordBreak: 'break-all' }}>
+							{historyImage.url}
+						</figcaption>
+					</figure>
+				)}
+
+				{outcome && !historyImage && (
 					<>
 						<Banner outcome={outcome} onResume={onResume} resumeBlockedReason={resumeBlockedReason} resumeNote={resumeNote} />
 						{outcome.kind === 'run' && outcome.result.image_url && (
@@ -88,7 +117,7 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 		);
 	}
 
-	// Never became a run, so there is no p_invoc_id and nothing to resume.
+	// Never became a run, so there is no pipeline_id and nothing to resume.
 	if (outcome?.kind === 'transport') {
 		return (
 			<div className="banner-row transport">
@@ -96,7 +125,7 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 					<div className="title">{outcome.status === null ? 'The request never reached the worker' : `HTTP ${outcome.status}`}</div>
 					<div className="verbatim">{outcome.message}</div>
 					<div className="body" style={{ marginTop: 6 }}>
-						This never became a run, so it carries no <code>p_invoc_id</code> and cost nothing.
+						This never became a run, so it carries no <code>pipeline_id</code> and cost nothing.
 					</div>
 				</div>
 			</div>
@@ -119,7 +148,7 @@ function Banner({ outcome, onResume, resumeBlockedReason, resumeNote }: Pick<Pro
 					{failed ? 'Run failed' : 'Run completed'} <span className={`chip ${result.status}`}>{result.status}</span>
 				</div>
 				<div className="body">
-					<code>{result.p_invoc_id}</code>
+					<code>{result.pipeline_id}</code>
 				</div>
 				{failed && (
 					<div className="verbatim" style={{ marginTop: 6 }}>

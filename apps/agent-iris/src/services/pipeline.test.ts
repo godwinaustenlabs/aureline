@@ -10,7 +10,9 @@ import { readGatewayCost } from "./gatewayCost";
 import { startTextRun, failRunningRuns, startImageRun, getRunRows } from "../repository/do.repository";
 import { irisRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
+import { upsertPrompt } from "../repository/prompts.repository";
 import { sampleParamsFull, sampleParamsMinimal } from "../fixtures/sample-params";
+import { buildPlannerSystemPrompt } from "../prompts";
 import { json } from "../http";
 import { fakeEnv } from "./test-env";
 
@@ -124,6 +126,53 @@ describe("runPipeline", () => {
 		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
 		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
 		expect(textMeta).toHaveProperty("usage");
+	});
+
+	/**
+	 * The whole point of the table: an edit lands on the very next request with no
+	 * deploy.
+	 *
+	 * It asserts on what the **model was actually sent**, not on what the resolver
+	 * returned. A prompt that resolves correctly and is then never passed along is
+	 * precisely the bug this wiring could have, and a test of the resolver alone
+	 * would pass straight through it.
+	 */
+	it("sends the stored planner prompt to the model and records that it came from the database", async () => {
+		const { env, run, d1 } = fakeEnv();
+		const edited =
+			"You are a textile colour designer. Rewritten in the playground, and this is the wording that ran.";
+		await upsertPrompt(getD1Db(d1), { slot: "iris_planner", promptText: edited });
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+
+		// The planner is the first call on the binding; the image call follows it.
+		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(edited);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		const textMeta = rows.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
+		expect(textMeta).toHaveProperty("prompt_source", "db");
+		expect(textMeta.prompt_updated_at).toBeTruthy();
+		// No id can describe a prompt that is editable at will, so none is claimed.
+		expect(textMeta).toHaveProperty("prompt_version", null);
+	});
+
+	/** The rollout case, and what the fake env produces by default: an empty table. */
+	it("falls back to the committed prompt, and says so, when the slot has no row", async () => {
+		const { env, run } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(buildPlannerSystemPrompt());
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		const textMeta = rows.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
+		expect(textMeta).toHaveProperty("prompt_source", "code");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v1");
+		expect(textMeta).toHaveProperty("prompt_updated_at", null);
 	});
 
 	it("leaves both rows in D1 on the way out, design_session_id and all", async () => {

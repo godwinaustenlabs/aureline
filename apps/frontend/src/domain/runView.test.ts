@@ -11,25 +11,25 @@ function originalWithTwoSuccessfulResumes() {
 	const marker = { root: 'original', resumed_from: 'original', attempt: 2 };
 
 	return groupRows([
-		textRow({ pInvocId: 'resume-b', createdAt: '2026-08-14T10:58:23.000Z', modelMetadata: { ...marker, planner_skipped: true }, costUsd: null }),
-		imageRow({ pInvocId: 'resume-b', createdAt: '2026-08-14T10:58:23.000Z', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
-		textRow({ pInvocId: 'resume-a', createdAt: '2026-08-14T10:55:05.000Z', modelMetadata: { ...marker, planner_skipped: true }, costUsd: null }),
-		imageRow({ pInvocId: 'resume-a', createdAt: '2026-08-14T10:55:05.000Z', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
-		textRow({ pInvocId: 'original', createdAt: '2026-08-14T10:39:17.000Z' }),
-		imageRow({ pInvocId: 'original', createdAt: '2026-08-14T10:39:17.000Z', status: 'failed', costUsd: null, imageR2Key: null }),
+		textRow({ pipelineId: 'resume-b', createdAt: '2026-08-14T10:58:23.000Z', modelMetadata: { ...marker, planner_skipped: true }, costUsd: null }),
+		imageRow({ pipelineId: 'resume-b', createdAt: '2026-08-14T10:58:23.000Z', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
+		textRow({ pipelineId: 'resume-a', createdAt: '2026-08-14T10:55:05.000Z', modelMetadata: { ...marker, planner_skipped: true }, costUsd: null }),
+		imageRow({ pipelineId: 'resume-a', createdAt: '2026-08-14T10:55:05.000Z', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
+		textRow({ pipelineId: 'original', createdAt: '2026-08-14T10:39:17.000Z' }),
+		imageRow({ pipelineId: 'original', createdAt: '2026-08-14T10:39:17.000Z', status: 'failed', costUsd: null, imageR2Key: null }),
 	]);
 }
 
 describe('groupRows', () => {
 	it('pairs the two rows of one invocation and keeps newest first', () => {
 		const groups = groupRows([
-			textRow({ pInvocId: 'newer', createdAt: '2026-08-14T12:00:00.000Z' }),
-			imageRow({ pInvocId: 'newer', createdAt: '2026-08-14T12:00:01.000Z' }),
-			textRow({ pInvocId: 'older', createdAt: '2026-08-14T09:00:00.000Z' }),
-			imageRow({ pInvocId: 'older', createdAt: '2026-08-14T09:00:01.000Z' }),
+			textRow({ pipelineId: 'newer', createdAt: '2026-08-14T12:00:00.000Z' }),
+			imageRow({ pipelineId: 'newer', createdAt: '2026-08-14T12:00:01.000Z' }),
+			textRow({ pipelineId: 'older', createdAt: '2026-08-14T09:00:00.000Z' }),
+			imageRow({ pipelineId: 'older', createdAt: '2026-08-14T09:00:01.000Z' }),
 		]);
 
-		expect(groups.map((group) => group.pInvocId)).toEqual(['newer', 'older']);
+		expect(groups.map((group) => group.pipelineId)).toEqual(['newer', 'older']);
 		expect(groups[0]!.text).not.toBeNull();
 		expect(groups[0]!.image).not.toBeNull();
 	});
@@ -103,10 +103,10 @@ describe('briefHistory', () => {
 	it('counts a resume that failed, but does not call it an image', () => {
 		const marker = { root: 'original', resumed_from: 'original', attempt: 2 };
 		const groups = groupRows([
-			textRow({ pInvocId: 'resume-a', modelMetadata: marker, costUsd: null }),
-			imageRow({ pInvocId: 'resume-a', status: 'failed', costUsd: null, imageR2Key: null, modelMetadata: marker }),
-			textRow({ pInvocId: 'original' }),
-			imageRow({ pInvocId: 'original', status: 'failed', costUsd: null, imageR2Key: null }),
+			textRow({ pipelineId: 'resume-a', modelMetadata: marker, costUsd: null }),
+			imageRow({ pipelineId: 'resume-a', status: 'failed', costUsd: null, imageR2Key: null, modelMetadata: marker }),
+			textRow({ pipelineId: 'original' }),
+			imageRow({ pipelineId: 'original', status: 'failed', costUsd: null, imageR2Key: null }),
 		]);
 
 		expect(briefHistory(groups, 'original')).toEqual({ resumesMade: 1, alreadyHasImage: false });
@@ -116,7 +116,7 @@ describe('briefHistory', () => {
 		// The "already has an image" guard reads a run's OWN image row, and the
 		// original's is still failed. Hiding the button here would remove a real
 		// feature: `skipCache` means another resume is a different picture.
-		const original = groups.find((group) => group.pInvocId === 'original');
+		const original = groups.find((group) => group.pipelineId === 'original');
 		expect(original?.resumable).toBe(true);
 	});
 });

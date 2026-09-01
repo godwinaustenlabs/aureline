@@ -15,7 +15,17 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
 	plugins: [react()],
 
-	server: { port: 5173, strictPort: true },
+	server: {
+		port: 5173,
+		strictPort: true,
+		/**
+		 * Vite serves the page but not the worker, so `/api/prompts` does not exist
+		 * under `npm run dev` — it would fall through to index.html and fail to
+		 * parse as JSON. This forwards it to `wrangler dev`, which holds the D1
+		 * bindings. Run both: `npm run dev` here and `npm run dev:api` alongside.
+		 */
+		proxy: { '/api': 'http://localhost:8788' },
+	},
 	preview: { port: 4173, strictPort: true },
 
 	optimizeDeps: {

@@ -27,5 +27,10 @@
 		   part of the bundle. */
 		"types": ["vite/client", "node"]
 	},
-	"include": ["src", "vite.config.ts"]
+	"include": ["src", "vite.config.ts"],
+	/* `src/server` runs in the Workers runtime, not the browser. Its `Request`,
+	   `Response` and `fetch` are Cloudflare's, not the DOM's, and typechecking it
+	   against `lib: DOM` would compare two different definitions of the same
+	   names. It has its own tsconfig.worker.json; `npm run typecheck` runs both. */
+	"exclude": ["src/server"]
 }

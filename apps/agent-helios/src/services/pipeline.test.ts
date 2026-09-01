@@ -6,6 +6,9 @@ import { planConcept } from "./planner";
 import { startTextRun, failRunningRuns, startImageRun, pruneCompletedRuns } from "../repository/do.repository";
 import { heliosRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
+import { upsertPrompt } from "../repository/prompts.repository";
+import { getD1Db } from "../db/client";
+import { buildPlannerSystemPrompt } from "../prompts";
 import { fakeEnv as sharedEnv } from "./test-env";
 // The same fixture the shared fake planner returns, so an assertion on
 // `result.params` is comparing against what the model actually said.
@@ -119,6 +122,68 @@ describe("runPipeline failure behaviour", () => {
 		const rows = await rowsFor(db, result.pipeline_id);
 		expect(rows).toHaveLength(2);
 		expect(rows.every((row) => row.designSessionId === SAMPLE_DESIGN_SESSION_ID)).toBe(true);
+	});
+
+	/**
+	 * The whole point of the table: an edit lands on the very next request with no
+	 * deploy.
+	 *
+	 * It asserts on what the **model was actually sent**, not on what the resolver
+	 * returned. A prompt that resolves correctly and is then never passed along is
+	 * precisely the bug this wiring could have, and a test of the resolver alone
+	 * would pass straight through it.
+	 */
+	it("sends the stored planner prompt to the model and records that it came from the database", async () => {
+		// A database that really writes: `throwingD1` defaults to true in this file.
+		const { env, run, d1 } = fakeEnv({ throwingD1: false });
+		const edited = "You are a textile pattern designer. Rewritten in the playground, and this wording ran.";
+		await upsertPrompt(getD1Db(d1), { slot: "helios_planner", promptText: edited });
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+
+		// The planner is the first call on the binding; the image call follows it.
+		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(edited);
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		const meta = textRow?.modelMetadata as Record<string, unknown>;
+		expect(meta).toHaveProperty("prompt_source", "db");
+		expect(meta.prompt_updated_at).toBeTruthy();
+		// No id can describe a prompt that is editable at will, so none is claimed.
+		expect(meta).toHaveProperty("prompt_version", null);
+	});
+
+	/** The rollout case: a real database, with nothing seeded into it yet. */
+	it("falls back to the committed prompt, and says so, when the slot has no row", async () => {
+		const { env, run } = fakeEnv({ throwingD1: false });
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(buildPlannerSystemPrompt());
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		const meta = textRow?.modelMetadata as Record<string, unknown>;
+		expect(meta).toHaveProperty("prompt_source", "code");
+		expect(meta).toHaveProperty("prompt_version", "helios-planner-v1");
+		expect(meta).toHaveProperty("prompt_updated_at", null);
+	});
+
+	/**
+	 * A prompt is policy, not a dependency the engine cannot run without. Every
+	 * other test in this file runs against `throwingD1`, so this is the default
+	 * path here — worth asserting rather than leaving implied.
+	 */
+	it("still completes when the database the prompt lives in is unavailable", async () => {
+		const { env, run } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("completed");
+		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(buildPlannerSystemPrompt());
 	});
 
 	it("gives two runs of one design different pipeline ids and the same design id", async () => {

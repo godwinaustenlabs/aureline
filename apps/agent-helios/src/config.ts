@@ -1,4 +1,7 @@
 import { z } from "zod";
+import type { HeliosD1Db } from "./db/client";
+import type { PromptSlot } from "./db/schema.d1";
+import { getPrompt } from "./repository/prompts.repository";
 
 /**
  * Runtime config resolved from the `CONFIG` KV namespace, with the
@@ -265,4 +268,88 @@ export function describeConfig(config: HeliosConfig): string {
 		return `${entry.key}=${entry.describe(value)} (${config.source[entry.field]})`;
 	});
 	return `config: ${parts.join(" ")}`;
+}
+
+/* ── Prompts ───────────────────────────────────────────────────────────
+ *
+ * The same shape as the config above, for the same reason: a live store that
+ * can be edited without a deploy, a committed fallback for when it has nothing
+ * to say, and a record of which of the two actually answered.
+ *
+ * Deliberately identical to Iris's, down to the wording, so the two engines
+ * resolve prompts by the same code read the same way.
+ */
+
+/** A prompt as this invocation will really send it, and where it came from. */
+export interface ResolvedPrompt {
+	text: string;
+	/** `db` when the stored row supplied it, `code` when the committed builder did. */
+	source: "db" | "code";
+	/** The row's `updated_at`, and null whenever `source` is `code`. */
+	updatedAt: string | null;
+}
+
+/**
+ * Shorter than this and the row is not a prompt anyone meant to save.
+ *
+ * The guard earns its place because the failure it prevents is invisible: an
+ * empty system prompt is not an error the model reports, it is a billed call
+ * that returns something unusable. `upsertPrompt` already refuses to store blank
+ * text, so this catches a row written around the repository — by hand in the
+ * dashboard, say, or by a future writer that forgets.
+ */
+const MIN_PROMPT_LENGTH = 20;
+
+/**
+ * Reads one slot's prompt, falling back to the committed builder.
+ *
+ * **Read per invocation and never cached** — a Durable Object survives across
+ * many requests, so a cached prompt would freeze and an edit in the playground
+ * would appear to do nothing. This is ADR-0008 applied to a second store: the
+ * same reason `resolveConfig` re-reads KV every time instead of memoising.
+ *
+ * **Never throws.** A missing row, an unusable row, and D1 being unavailable all
+ * fall back to `fallback`. A prompt is policy, not a dependency the pipeline
+ * cannot run without, and a database blip must not take the engine down.
+ *
+ * The three cases are handled separately on purpose (AGENTS.md §7). A missing
+ * row is the expected state before a slot has been seeded and says nothing; a
+ * row that exists but is unusable is a real problem and says so; a failed read
+ * is a different problem again. One `?.` would have made all three look like the
+ * first.
+ */
+export async function resolvePrompt(
+	d1: HeliosD1Db,
+	slot: PromptSlot,
+	fallback: string,
+): Promise<ResolvedPrompt> {
+	const fromCode: ResolvedPrompt = { text: fallback, source: "code", updatedAt: null };
+
+	let row: Awaited<ReturnType<typeof getPrompt>>;
+	try {
+		row = await getPrompt(d1, slot);
+	} catch (cause) {
+		console.warn(`prompts: reading "${slot}" failed, using the committed prompt:`, cause);
+		return fromCode;
+	}
+
+	// Silent, because it is expected: a slot that has not been seeded yet is
+	// exactly what lets this roll out one prompt at a time.
+	if (row === null) return fromCode;
+
+	const stored = row.promptText.trim();
+	if (stored.length < MIN_PROMPT_LENGTH) {
+		console.warn(
+			`prompts: stored "${slot}" is ${stored.length} characters, which is not a usable prompt — using the committed one instead.`,
+		);
+		return fromCode;
+	}
+
+	return { text: row.promptText, source: "db", updatedAt: row.updatedAt };
+}
+
+/** One-line summary of a resolved prompt, for the log beside `describeConfig`. */
+export function describePrompt(slot: PromptSlot, prompt: ResolvedPrompt): string {
+	const when = prompt.updatedAt ? `, updated ${prompt.updatedAt}` : "";
+	return `prompt: ${slot}=${prompt.text.length}chars (${prompt.source}${when})`;
 }

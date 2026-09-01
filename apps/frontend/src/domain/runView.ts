@@ -3,7 +3,7 @@ import type { RunRow } from '../api/runs';
 /**
  * Turning `helios_runs` rows into the runs a person thinks in.
  *
- * One invocation is always two rows sharing a `p_invoc_id`, one `text` and one
+ * One invocation is always two rows sharing a `pipeline_id`, one `text` and one
  * `image` (ADR-0001) — with the single exception of a run that failed before the
  * planner produced anything, which has a lone `text` row and no image work to
  * record. Everything here is pure so the arithmetic that decides what a run cost
@@ -23,7 +23,7 @@ export interface Lineage {
 }
 
 export interface RunGroup {
-	pInvocId: string;
+	pipelineId: string;
 	text: RunRow | null;
 	image: RunRow | null;
 	/** When the invocation started: the text row's timestamp, or the image row's
@@ -56,25 +56,25 @@ export function groupRows(rows: RunRow[]): RunGroup[] {
 	const byInvocation = new Map<string, RunRow[]>();
 
 	for (const row of rows) {
-		const existing = byInvocation.get(row.pInvocId);
+		const existing = byInvocation.get(row.pipelineId);
 		if (existing) {
 			existing.push(row);
 		} else {
-			byInvocation.set(row.pInvocId, [row]);
+			byInvocation.set(row.pipelineId, [row]);
 		}
 	}
 
-	return [...byInvocation.entries()].map(([pInvocId, group]) => toRunGroup(pInvocId, group));
+	return [...byInvocation.entries()].map(([pipelineId, group]) => toRunGroup(pipelineId, group));
 }
 
-function toRunGroup(pInvocId: string, rows: RunRow[]): RunGroup {
+function toRunGroup(pipelineId: string, rows: RunRow[]): RunGroup {
 	const text = rows.find((row) => row.modality === 'text') ?? null;
 	const image = rows.find((row) => row.modality === 'image') ?? null;
 
 	const costs = rows.map((row) => row.costUsd).filter((cost): cost is number => cost !== null);
 
 	return {
-		pInvocId,
+		pipelineId,
 		text,
 		image,
 		createdAt: text?.createdAt ?? image?.createdAt ?? null,
@@ -136,8 +136,8 @@ export interface BriefHistory {
 	alreadyHasImage: boolean;
 }
 
-export function briefHistory(groups: readonly RunGroup[], pInvocId: string): BriefHistory {
-	const descendants = groups.filter((group) => group.image !== null && group.lineage.root === pInvocId);
+export function briefHistory(groups: readonly RunGroup[], pipelineId: string): BriefHistory {
+	const descendants = groups.filter((group) => group.image !== null && group.lineage.root === pipelineId);
 
 	return {
 		resumesMade: descendants.length,

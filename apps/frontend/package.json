@@ -5,10 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "//dev:api": "The worker half, holding the D1 bindings. Vite proxies /api here. Add --remote to read and write the real iris-d1 and helios-d1 instead of empty local copies.",
+    "dev:api": "wrangler dev --port 8788",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
+    "cf-typegen": "wrangler types",
     "test": "vitest run"
   },
   "dependencies": {

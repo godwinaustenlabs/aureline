@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { planConcept } from "./planner";
 import { fakeEnv } from "./test-env";
 import { resolveConfig } from "../config";
+import { buildPlannerSystemPrompt } from "../prompts";
 import { sampleParamsFull } from "../fixtures/sample-params";
 
 /**
@@ -24,7 +25,11 @@ describe("planConcept", () => {
 	});
 
 	it("returns a TextualModelOutput carrying data, usage, and model from the text call", async () => {
-		const result = await planConcept("deep navy and gold paisley", env, config, "pipeline-test-1");
+		const result = await planConcept(env, config, {
+			concept: "deep navy and gold paisley",
+			systemPrompt: buildPlannerSystemPrompt(),
+			pipeline_id: "pipeline-test-1",
+		});
 
 		// `data` is typed `IrisParams`, so this reads it directly. The envelope is
 		// the contract: the pipeline needs `model` and `usage` for the text row and
@@ -49,8 +54,12 @@ describe("planConcept", () => {
 			usage: { prompt_tokens: 100, completion_tokens: 50 },
 		});
 
-		await expect(planConcept("some concept", failingEnv, config, "pipeline-test-2")).rejects.toThrow(
-			"schema validation failed",
-		);
+		await expect(
+			planConcept(failingEnv, config, {
+				concept: "some concept",
+				systemPrompt: buildPlannerSystemPrompt(),
+				pipeline_id: "pipeline-test-2",
+			}),
+		).rejects.toThrow("schema validation failed");
 	});
 });

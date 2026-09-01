@@ -14,7 +14,7 @@ import type { HeliosResult } from '@aureline/shared-types';
  *   a run: nothing was written and nothing was billed, and `reason` is a sentence
  *   written to be shown to a person verbatim.
  * - **`transport`** — everything else, including a 400 and a dead network. It
- *   never became a run, so it never has a `p_invoc_id`.
+ *   never became a run, so it never has a `pipeline_id`.
  */
 export type CallOutcome =
 	| { kind: 'run'; result: HeliosResult; raw: string }
@@ -105,7 +105,7 @@ function isHeliosResult(body: unknown): body is HeliosResult {
 	if (typeof body !== 'object' || body === null) return false;
 	const candidate = body as Record<string, unknown>;
 	return (
-		typeof candidate.p_invoc_id === 'string' &&
+		typeof candidate.pipeline_id === 'string' &&
 		(candidate.status === 'running' || candidate.status === 'completed' || candidate.status === 'failed')
 	);
 }

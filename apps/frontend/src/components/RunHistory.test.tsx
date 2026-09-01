@@ -70,10 +70,10 @@ describe('the resume warning', () => {
 		// reads as "fix this" when it means "buy another variation".
 		const markup = render(
 			groupRows([
-				textRow({ pInvocId: 'resume-a', modelMetadata: marker, costUsd: null }),
-				imageRow({ pInvocId: 'resume-a', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
-				textRow({ pInvocId: 'original' }),
-				imageRow({ pInvocId: 'original', status: 'failed', costUsd: null, imageR2Key: null }),
+				textRow({ pipelineId: 'resume-a', modelMetadata: marker, costUsd: null }),
+				imageRow({ pipelineId: 'resume-a', modelMetadata: { model: '@cf/flux', steps: 4, ...marker } }),
+				textRow({ pipelineId: 'original' }),
+				imageRow({ pipelineId: 'original', status: 'failed', costUsd: null, imageR2Key: null }),
 			]),
 		);
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { GENERATE_COST_USD } from '../api/client';
 import { usd } from '../domain/format';
+import { newDesignSessionId } from '../domain/designSession';
 import { DEFAULT_SESSION, effectiveSession, normaliseSessionId, randomSessionId, type RememberedSession } from '../state/sessions';
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
 	onConcept: (value: string) => void;
 	sessionField: string;
 	onSessionField: (value: string) => void;
+	designSessionField: string;
+	onDesignSessionField: (value: string) => void;
 	sessions: readonly RememberedSession[];
 	onForgetSession: (id: string) => void;
 	baseUrl: string;
@@ -24,6 +27,8 @@ export function InputPanel({
 	onConcept,
 	sessionField,
 	onSessionField,
+	designSessionField,
+	onDesignSessionField,
 	sessions,
 	onForgetSession,
 	baseUrl,
@@ -57,6 +62,30 @@ export function InputPanel({
 						sent, so a 400 never costs a round trip.
 					</span>
 					{validationError && <span className="hint error">{validationError}</span>}
+				</div>
+
+				<div className="field">
+					<label htmlFor="design-session">Design session id</label>
+					<div className="row">
+						<input
+							id="design-session"
+							type="text"
+							value={designSessionField}
+							onChange={(event) => onDesignSessionField(event.target.value)}
+						/>
+						<button
+							className="small"
+							onClick={() => onDesignSessionField(newDesignSessionId())}
+							title="Start a different design"
+						>
+							New
+						</button>
+					</div>
+					<span className="hint">
+						The design, not the run and not the Durable Object. Required, and carried unchanged into Iris and
+						Atlas — it is what ties one design&apos;s pattern, colouring and placement together. Keep it to run
+						the same design again; press New to start a different one.
+					</span>
 				</div>
 
 				<div className="field">

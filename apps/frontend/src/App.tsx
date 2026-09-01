@@ -6,14 +6,21 @@ import { usd } from './domain/format';
 import { briefHistory, describeBriefHistory, groupRows } from './domain/runView';
 import { buildScratchpad } from './domain/scratchpad';
 import { validateGenerate } from './domain/validate';
+import { newDesignSessionId } from './domain/designSession';
+import { imageUrlFor, r2KeyFromUrl } from './domain/imageUrl';
+import { validateIrisGenerate } from './domain/validate';
+import { generateIris, pingIris, IRIS_GENERATE_COST_USD } from './api/iris';
+import type { IrisCallOutcome } from './domain/irisOutcome';
+import { IrisPanel } from './components/IrisPanel';
 import { effectiveSession, forget, loadSessions, normaliseSessionId, remember, saveSessions, type RememberedSession } from './state/sessions';
-import { DEFAULT_BASE_URL, loadBaseUrl, saveBaseUrl } from './state/settings';
+import { DEFAULT_BASE_URL, loadBaseUrl, saveBaseUrl, loadIrisBaseUrl, saveIrisBaseUrl } from './state/settings';
 import { NO_SPEND, recordCall } from './state/spend';
 import { ConfirmSpend, type SpendRequest } from './components/ConfirmSpend';
 import { ImageOutput } from './components/ImageOutput';
 import { InputPanel } from './components/InputPanel';
 import { RunHistory } from './components/RunHistory';
 import { Scratchpad } from './components/Scratchpad';
+import { PromptsPanel } from './components/PromptsPanel';
 
 /**
  * The playground.
@@ -30,9 +37,47 @@ import { Scratchpad } from './components/Scratchpad';
  *    makes and the only one that fires on a session switch.
  */
 export function App() {
+	/**
+	 * Which screen is showing.
+	 *
+	 * Not a router: this page has no URLs of its own and one piece of state is
+	 * the whole of it. The prompt editor is a separate screen rather than another
+	 * panel because it edits what the engine *will* do, while everything else on
+	 * the run screen reports what it *did* — mixing the two invites editing a
+	 * prompt while reading a run that the old one produced.
+	 */
+	const [view, setView] = useState<'run' | 'iris' | 'prompts'>('run');
 	const [baseUrl, setBaseUrl] = useState(loadBaseUrl);
 	const [concept, setConcept] = useState('');
 	const [sessionField, setSessionField] = useState('');
+	/**
+	 * The design this run belongs to, seeded once per page load.
+	 *
+	 * Held rather than minted per click, deliberately: two generates with the same
+	 * value are two attempts at one design, which is what makes them comparable in
+	 * Iris and Atlas later. Pressing New starts a different design.
+	 */
+	const [designSessionField, setDesignSessionField] = useState(newDesignSessionId);
+
+	/**
+	 * Iris's whole screen state, held here rather than inside `IrisPanel`.
+	 *
+	 * The panels unmount when you switch tabs, so state owned by a panel would be
+	 * discarded the moment you looked at anything else — which is exactly what
+	 * must not happen after a run that cost money. Lifting it means switching
+	 * Helios → Iris → Helios shows both results still sitting there.
+	 */
+	const [irisBaseUrl, setIrisBaseUrl] = useState(loadIrisBaseUrl);
+	const [irisConcept, setIrisConcept] = useState('');
+	const [irisMotifRef, setIrisMotifRef] = useState('');
+	const [irisSessionField, setIrisSessionField] = useState('');
+	const [irisDesignSessionId, setIrisDesignSessionId] = useState('');
+	const [irisOutcome, setIrisOutcome] = useState<IrisCallOutcome | null>(null);
+	const [irisError, setIrisError] = useState<string | null>(null);
+	const [irisConnection, setIrisConnection] = useState<{ ok: boolean; message: string } | null>(null);
+	const [irisInFlight, setIrisInFlight] = useState<{ startedAt: number } | null>(null);
+	const [irisElapsedMs, setIrisElapsedMs] = useState(0);
+	const [handoffNote, setHandoffNote] = useState<string | null>(null);
 	const [sessions, setSessions] = useState<RememberedSession[]>(loadSessions);
 
 	const [validationError, setValidationError] = useState<string | null>(null);
@@ -64,6 +109,7 @@ export function App() {
 	baseUrlRef.current = baseUrl;
 
 	useEffect(() => saveBaseUrl(baseUrl), [baseUrl]);
+	useEffect(() => saveIrisBaseUrl(irisBaseUrl), [irisBaseUrl]);
 	useEffect(() => saveSessions(sessions), [sessions]);
 
 	/**
@@ -76,6 +122,15 @@ export function App() {
 		const timer = setInterval(() => setElapsedMs(Date.now() - inFlight.startedAt), 100);
 		return () => clearInterval(timer);
 	}, [inFlight]);
+
+	/** The same clock for Iris. Its own, because the two can never be in flight
+	 *  together and sharing one would make a stale reading look like a live one. */
+	useEffect(() => {
+		if (!irisInFlight) return;
+		setIrisElapsedMs(0);
+		const timer = setInterval(() => setIrisElapsedMs(Date.now() - irisInFlight.startedAt), 100);
+		return () => clearInterval(timer);
+	}, [irisInFlight]);
 
 	const refreshRuns = useCallback(async (session: string): Promise<RunRow[] | null> => {
 		setRowsLoading(true);
@@ -101,12 +156,30 @@ export function App() {
 	}, [target, refreshRuns]);
 
 	const groups = useMemo(() => groupRows(rows), [rows]);
-	const selected = groups.find((group) => group.pInvocId === selectedId) ?? null;
+	const selected = groups.find((group) => group.pipelineId === selectedId) ?? null;
 
 	/** The result belongs in the scratchpad only when it is the run being shown —
 	 *  clicking a history row swaps the rows out from under it. Selecting a run
 	 *  costs nothing: its rows are already in `groups` from the last `GET /runs`. */
-	const scratchResult = outcome?.kind === 'run' && outcome.result.p_invoc_id === selectedId ? outcome.result : null;
+	const scratchResult = outcome?.kind === 'run' && outcome.result.pipeline_id === selectedId ? outcome.result : null;
+
+	/**
+	 * The image for a run picked out of the history.
+	 *
+	 * Null when the live outcome is already showing that same run, so a fresh
+	 * generate keeps its own panel — the raw response body and the resume button
+	 * belong to it, and a history view has neither.
+	 */
+	const historyImage = useMemo(() => {
+		if (!selected || selected.pipelineId === scratchResult?.pipeline_id) return null;
+
+		const key = selected.image?.imageR2Key;
+		// An explicit check, not `?.` falling through: a selected run with no image
+		// row, or one that failed before saving, genuinely has nothing to show.
+		if (!key) return null;
+
+		return { url: imageUrlFor(baseUrl, key), pipelineId: selected.pipelineId };
+	}, [selected, scratchResult, baseUrl]);
 
 	const sections = useMemo(() => {
 		if (!selectedId) return null;
@@ -136,22 +209,92 @@ export function App() {
 		if (result.kind === 'run') {
 			// Only a run wrote anything. A 409 refusal and a transport error both
 			// left the store exactly as it was and billed nothing.
-			setSelectedId(result.result.p_invoc_id);
+			setSelectedId(result.result.pipeline_id);
 
 			const refreshed = await refreshRuns(session);
-			const group = refreshed ? (groupRows(refreshed).find((it) => it.pInvocId === result.result.p_invoc_id) ?? null) : null;
+			const group = refreshed ? (groupRows(refreshed).find((it) => it.pipelineId === result.result.pipeline_id) ?? null) : null;
 
 			// The real total from the rows, not the image-only figure the response
 			// carries. Null when the rows could not be read, which marks the tally
 			// approximate rather than under-reporting it.
 			setSpend((current) => recordCall(current, group?.totalCostUsd ?? null));
+
+			// The handoff to Iris. A completed pattern is the only input Iris has,
+			// so the moment one exists this fills its two carried fields and moves
+			// there — the alternative is copying a UUID and an R2 key by hand.
+			//
+			// The key comes from the **row** when the rows could be read, and from
+			// the response URL only as a fallback. The row stores what was actually
+			// written; the URL has to be taken apart to get back to it.
+			if (result.result.status === 'completed') {
+				const key = group?.image?.imageR2Key ?? (result.result.image_url ? r2KeyFromUrl(result.result.image_url) : null);
+
+				// Explicit, not `?.` falling through: a completed run with no
+				// recoverable key must not silently land on the Iris tab with an
+				// empty motif ref, where the next click is a validation error the
+				// person did not cause.
+				if (key) {
+					setIrisMotifRef(key);
+					setIrisDesignSessionId(result.result.design_session_id);
+					setIrisOutcome(null);
+					setIrisError(null);
+					setHandoffNote(
+						`Carried from Helios run ${result.result.pipeline_id}. The motif ref is that run's stored R2 key and the design id is its own — leave both alone and this colouring stays part of the same design.`,
+					);
+					setView('iris');
+				}
+			}
 		}
 
 		setInFlight(null);
 	}
 
+	/**
+	 * Iris's generate. A separate path from `runBilledCall` on purpose: it talks
+	 * to a different worker, returns a different body, and has no run history or
+	 * resume behind it — folding the two together would mean branching on engine
+	 * inside every step of one function.
+	 */
+	function requestIrisGenerate() {
+		const validated = validateIrisGenerate({
+			concept: irisConcept,
+			motifRef: irisMotifRef.trim(),
+			designSessionId: irisDesignSessionId.trim(),
+			sessionId: normaliseSessionId(irisSessionField),
+		});
+		if (!validated.ok) {
+			setIrisError(validated.message);
+			return;
+		}
+		setIrisError(null);
+
+		askToSpend({
+			title: 'Colour this motif',
+			costUsd: IRIS_GENERATE_COST_USD,
+			detail: `One planner call plus one image-to-image call against Iris, colouring "${irisMotifRef.trim()}". The pattern itself is not regenerated.`,
+			confirmLabel: 'Spend it',
+			run: async () => {
+				setIrisInFlight({ startedAt: Date.now() });
+				setIrisOutcome(null);
+
+				const outcome = await generateIris(irisBaseUrl, validated.request);
+
+				setIrisOutcome(outcome);
+				setIrisInFlight(null);
+				// Iris reports the image cost alone and there is no rows read to
+				// correct it with, so the tally is marked approximate rather than
+				// claiming a total it does not have.
+				if (outcome.kind === 'run') setSpend((current) => recordCall(current, null));
+			},
+		});
+	}
+
 	function requestGenerate() {
-		const validated = validateGenerate(concept, normaliseSessionId(sessionField));
+		const validated = validateGenerate({
+			concept,
+			designSessionId: designSessionField.trim(),
+			sessionId: normaliseSessionId(sessionField),
+		});
 		if (!validated.ok) {
 			setValidationError(validated.message);
 			return;
@@ -167,22 +310,22 @@ export function App() {
 		});
 	}
 
-	function requestResume(pInvocId: string) {
+	function requestResume(pipelineId: string) {
 		const sessionId = normaliseSessionId(sessionField);
 
 		// What this brief has already bought. A run whose own image failed stays
 		// resumable even after a resume of it succeeded, so without this the dialog
 		// would read identically whether it is the first attempt or the third.
-		const spentSoFar = describeBriefHistory(briefHistory(groups, pInvocId));
+		const spentSoFar = describeBriefHistory(briefHistory(groups, pipelineId));
 
 		askToSpend({
 			title: 'Resume this run',
 			costUsd: RESUME_COST_USD,
-			detail: `Runs the image half again from the stored params, against "${target}". The planner is never called, so the params come back identical. This is additional spend on a run that was already paid for, and it produces a new p_invoc_id — the original is left exactly as it was.${spentSoFar ? ` Note: ${spentSoFar}.` : ''}`,
+			detail: `Runs the image half again from the stored params, against "${target}". The planner is never called, so the params come back identical. This is additional spend on a run that was already paid for, and it produces a new pipeline_id — the original is left exactly as it was.${spentSoFar ? ` Note: ${spentSoFar}.` : ''}`,
 			confirmLabel: 'Spend it again',
 			run: () =>
 				runBilledCall(target, () =>
-					resume(baseUrlRef.current, { p_invoc_id: pInvocId, ...(sessionId ? { session_id: sessionId } : {}) }),
+					resume(baseUrlRef.current, { pipeline_id: pipelineId, ...(sessionId ? { session_id: sessionId } : {}) }),
 				),
 		});
 	}
@@ -202,11 +345,11 @@ export function App() {
 		void refreshRuns(target);
 	}
 
-	// Resume is session-bound: a p_invoc_id from one session 409s in another. If
+	// Resume is session-bound: a pipeline_id from one session 409s in another. If
 	// the field has moved since this result arrived, its button no longer applies.
 	const sessionMoved = outcome?.kind === 'run' && outcomeSession !== null && outcomeSession !== target;
 
-	const resultGroup = outcome?.kind === 'run' ? (groups.find((group) => group.pInvocId === outcome.result.p_invoc_id) ?? null) : null;
+	const resultGroup = outcome?.kind === 'run' ? (groups.find((group) => group.pipelineId === outcome.result.pipeline_id) ?? null) : null;
 	const resultResumable =
 		outcome?.kind === 'run' &&
 		(resultGroup ? resultGroup.resumable : outcome.result.status === 'failed' && outcome.result.params !== null);
@@ -222,12 +365,83 @@ export function App() {
 				</span>
 			</div>
 
+			{/* `role="tablist"` and not a set of disabled buttons: a disabled control
+			    reads as unavailable, and the current tab is the opposite of that. */}
+			<nav className="viewnav" role="tablist" aria-label="Screen">
+				<button
+					type="button"
+					role="tab"
+					className={view === 'run' ? 'tab current' : 'tab'}
+					aria-selected={view === 'run'}
+					onClick={() => setView('run')}
+				>
+					Run
+				</button>
+				<button
+					type="button"
+					role="tab"
+					className={view === 'iris' ? 'tab current' : 'tab'}
+					aria-selected={view === 'iris'}
+					onClick={() => setView('iris')}
+				>
+					Iris
+				</button>
+				<button
+					type="button"
+					role="tab"
+					className={view === 'prompts' ? 'tab current' : 'tab'}
+					aria-selected={view === 'prompts'}
+					onClick={() => setView('prompts')}
+				>
+					Prompts
+				</button>
+				<span className="spacer" />
+				<span className="hint">
+					{view === 'prompts'
+						? 'editing what the engines send — free, and live on their next request'
+						: view === 'iris'
+							? 'colouring a pattern Helios already made — every run spends real money'
+							: 'generating a black-and-white pattern — every run spends real money'}
+				</span>
+			</nav>
+
+			{view === 'prompts' ? (
+				// Full width, not a column: these are 6,000-character prompts and the
+				// left grid track is 410px.
+				<div className="column wide">
+					<PromptsPanel />
+				</div>
+			) : view === 'iris' ? (
+				<IrisPanel
+					concept={irisConcept}
+					onConcept={setIrisConcept}
+					motifRef={irisMotifRef}
+					onMotifRef={setIrisMotifRef}
+					designSessionId={irisDesignSessionId}
+					onDesignSessionId={setIrisDesignSessionId}
+					sessionField={irisSessionField}
+					onSessionField={setIrisSessionField}
+					baseUrl={irisBaseUrl}
+					onBaseUrl={setIrisBaseUrl}
+					inFlight={irisInFlight !== null}
+					elapsedMs={irisElapsedMs}
+					validationError={irisError}
+					onGenerate={requestIrisGenerate}
+					onPing={() => void pingIris(irisBaseUrl).then(setIrisConnection)}
+					connection={irisConnection}
+					outcome={irisOutcome}
+					handoffNote={handoffNote}
+				/>
+			) : (
+			<>
 			<div className="column">
 				<InputPanel
 					concept={concept}
 					onConcept={setConcept}
 					sessionField={sessionField}
 					onSessionField={setSessionField}
+					designSessionField={designSessionField}
+					onDesignSessionField={setDesignSessionField}
 					sessions={sessions}
 					onForgetSession={(id) => setSessions((current) => forget(current, id))}
 					baseUrl={baseUrl}
@@ -250,13 +464,14 @@ export function App() {
 					waitingMs={inFlight ? elapsedMs : null}
 					onResume={
 						resultResumable && !sessionMoved && !inFlight && outcome?.kind === 'run'
-							? () => requestResume(outcome.result.p_invoc_id)
+							? () => requestResume(outcome.result.pipeline_id)
 							: null
 					}
-					resumeNote={outcome?.kind === 'run' ? describeBriefHistory(briefHistory(groups, outcome.result.p_invoc_id)) : null}
+					resumeNote={outcome?.kind === 'run' ? describeBriefHistory(briefHistory(groups, outcome.result.pipeline_id)) : null}
+					historyImage={historyImage}
 					resumeBlockedReason={
 						sessionMoved
-							? `This run was made in session "${outcomeSession}" and the field now reads "${target}". Resume is session-bound — a p_invoc_id from one session is refused in another with "no run with that id in this session". Switch back to resume it.`
+							? `This run was made in session "${outcomeSession}" and the field now reads "${target}". Resume is session-bound — a pipeline_id from one session is refused in another with "no run with that id in this session". Switch back to resume it.`
 							: null
 					}
 				/>
@@ -275,6 +490,8 @@ export function App() {
 					busy={inFlight !== null}
 				/>
 			</div>
+			</>
+			)}
 
 			{spendRequest && <ConfirmSpend request={spendRequest} onCancel={() => setSpendRequest(null)} />}
 		</div>

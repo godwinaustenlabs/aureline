@@ -12,7 +12,8 @@ import { generateImage, resolveSteps } from "./imageGenerator";
 import { savePatternImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { readGatewayCost } from "./gatewayCost";
-import { describeConfig, resolveConfig, type HeliosConfig } from "../config";
+import { describeConfig, describePrompt, resolveConfig, resolvePrompt, type HeliosConfig } from "../config";
+import { buildPlannerSystemPrompt, PLANNER_PROMPT_ID } from "../prompts";
 import {
 	startTextRun,
 	completeTextRun,
@@ -196,6 +197,14 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 	const config = await resolveConfig(env);
 	console.log(describeConfig(config));
 
+	// The live planner prompt, read once for the same reason the config is: two
+	// reads straddling an edit would produce one invocation running on half of
+	// each. Outside the try because, like `resolveConfig`, it never throws — a
+	// missing row, an unusable row and D1 being down all fall back to the
+	// committed prompt rather than failing the request.
+	const plannerPrompt = await resolvePrompt(getD1Db(env.DB), "helios_planner", buildPlannerSystemPrompt());
+	console.log(describePrompt("helios_planner", plannerPrompt));
+
 	// Identity of this run of Helios. Generated per invocation, NOT derived from
 	// the Durable Object — one DO accumulates many invocations (ADR-0005).
 	const pipelineId = crypto.randomUUID();
@@ -223,7 +232,11 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		});
 
 		stage = "planner";
-		const planned = await planConcept(req.concept, env, config, pipelineId);
+		const planned = await planConcept(env, config, {
+			concept: req.concept,
+			systemPrompt: plannerPrompt.text,
+			pipeline_id: pipelineId,
+		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
 		// on this binding, so the image stage would overwrite it. Real dollars, so
@@ -234,7 +247,18 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
 
-		const textModelMetadata = { model: planned.model, usage: planned.usage };
+		const textModelMetadata = {
+			model: planned.model,
+			usage: planned.usage,
+			// Which prompt actually ran. `prompt_version` identifies the *committed*
+			// prompt, so it is only the truth when the committed prompt is what ran —
+			// a stored prompt can be rewritten in the playground at any time and no
+			// id describes it. Naming one anyway would be the lying audit row
+			// ADR-0001 exists to prevent.
+			prompt_version: plannerPrompt.source === "code" ? PLANNER_PROMPT_ID : null,
+			prompt_source: plannerPrompt.source,
+			prompt_updated_at: plannerPrompt.updatedAt,
+		};
 
 		// Planner succeeded — settle the text row before the image row opens.
 		await completeTextRun(db, pipelineId, params, textModelMetadata, textCostUsd);

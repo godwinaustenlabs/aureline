@@ -12,7 +12,7 @@ let counter = 0;
 export function textRow(overrides: Partial<RunRow> = {}): RunRow {
 	return {
 		id: `row-${++counter}`,
-		pInvocId: 'invoc-1',
+		pipelineId: 'invoc-1',
 		modality: 'text',
 		status: 'completed',
 		userPrompt: 'art deco paisley',
@@ -29,7 +29,7 @@ export function textRow(overrides: Partial<RunRow> = {}): RunRow {
 export function imageRow(overrides: Partial<RunRow> = {}): RunRow {
 	return {
 		id: `row-${++counter}`,
-		pInvocId: 'invoc-1',
+		pipelineId: 'invoc-1',
 		modality: 'image',
 		status: 'completed',
 		userPrompt: 'art deco paisley',

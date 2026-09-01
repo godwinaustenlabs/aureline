@@ -8,8 +8,8 @@ interface Props {
 	error: string | null;
 	/** The run whose rows the scratchpad is currently showing. */
 	selectedId: string | null;
-	onSelect: (pInvocId: string) => void;
-	onResume: (pInvocId: string) => void;
+	onSelect: (pipelineId: string) => void;
+	onResume: (pipelineId: string) => void;
 	onRefresh: () => void;
 	/** Resume is a billed call, so it is locked out while one is in flight. */
 	busy: boolean;
@@ -50,7 +50,7 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 						<table>
 							<thead>
 								<tr>
-									<th>p_invoc_id</th>
+									<th>pipeline_id</th>
 									<th>when</th>
 									<th>text</th>
 									<th>image</th>
@@ -64,17 +64,17 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 									// What resuming this one would actually buy. Computed from rows
 									// already on screen — no extra call, and `GET /runs` stays the
 									// only read this page makes.
-									const spentSoFar = describeBriefHistory(briefHistory(groups, group.pInvocId));
+									const spentSoFar = describeBriefHistory(briefHistory(groups, group.pipelineId));
 
 									return (
-									<tr key={group.pInvocId} className={group.pInvocId === selectedId ? 'current' : undefined}>
+									<tr key={group.pipelineId} className={group.pipelineId === selectedId ? 'current' : undefined}>
 										<td>
 											<button
 												className="small"
-												onClick={() => onSelect(group.pInvocId)}
-												title={`${group.pInvocId} — show this run in the scratchpad`}
+												onClick={() => onSelect(group.pipelineId)}
+												title={`${group.pipelineId} — show this run in the scratchpad`}
 											>
-												{shortId(group.pInvocId)}
+												{shortId(group.pipelineId)}
 											</button>
 										</td>
 										<td>{localTime(group.createdAt)}</td>
@@ -89,7 +89,7 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 										<td>
 											{group.resumable && (
 												<div className="resume-cell">
-													<button className="small" disabled={busy} onClick={() => onResume(group.pInvocId)}>
+													<button className="small" disabled={busy} onClick={() => onResume(group.pipelineId)}>
 														Resume
 													</button>
 													{spentSoFar && <span className="hint warn">{spentSoFar}</span>}

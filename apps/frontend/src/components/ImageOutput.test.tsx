@@ -17,12 +17,13 @@ import { classify, type CallOutcome } from '../domain/outcome';
 
 function render(outcome: CallOutcome | null) {
 	return renderToStaticMarkup(
-		<ImageOutput outcome={outcome} waitingMs={null} onResume={null} resumeBlockedReason={null} resumeNote={null} />,
+		<ImageOutput outcome={outcome} waitingMs={null} onResume={null} resumeBlockedReason={null} resumeNote={null} historyImage={null} />,
 	);
 }
 
 const completed: HeliosResult = {
-	p_invoc_id: '849778fa-4917-4d68-b28c-06f86b1c4c3d',
+	pipeline_id: '849778fa-4917-4d68-b28c-06f86b1c4c3d',
+	design_session_id: 'design-1',
 	status: 'completed',
 	params: { motif_type: 'paisley' } as HeliosResult['params'],
 	image_url: 'https://agent-helios.aureline.workers.dev/images/patterns/849778fa.jpg',
@@ -116,7 +117,7 @@ describe('the raw body', () => {
 	it('is rendered on every outcome, byte for byte', () => {
 		// Not re-stringified from the parsed object: key order, spacing and any
 		// field this build does not know about would all change.
-		const odd = '{"status":"completed","p_invoc_id":"abc","unknown_future_field":1}';
+		const odd = '{"status":"completed","pipeline_id":"abc","unknown_future_field":1}';
 
 		for (const outcome of [classify(200, odd), classify(409, '{"error":"no"}'), classify(500, 'boom')]) {
 			expect(render(outcome)).toContain(outcome.raw.replace(/"/g, '&quot;'));

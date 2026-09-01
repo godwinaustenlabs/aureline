@@ -8,6 +8,13 @@
       "when": 1787841286712,
       "tag": "0000_mighty_rhino",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788265470655,
+      "tag": "0001_blue_polaris",
+      "breakpoints": true
     }
   ]
 }

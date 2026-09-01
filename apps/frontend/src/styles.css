@@ -172,6 +172,57 @@ body {
 	min-width: 0;
 }
 
+/* A column that takes the whole grid rather than one of its two tracks. */
+.column.wide {
+	grid-column: 1 / -1;
+}
+
+/* ------------------------------------------------------------- view tabs */
+
+/*
+ * `grid-column: 1 / -1` is the whole point of this rule.
+ *
+ * `.app` is a two-column grid, and a child without it lands in the 410px left
+ * column — which is what put the tabs in a cramped box beside the input panel.
+ * `.masthead` above spans the same way and for the same reason.
+ */
+.viewnav {
+	grid-column: 1 / -1;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 2px 12px;
+	border-bottom: 1px solid var(--rule);
+	margin-top: -8px;
+}
+
+.viewnav .hint {
+	font-style: italic;
+}
+
+button.tab {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.09em;
+	text-transform: uppercase;
+	padding: 7px 16px;
+	color: var(--ink-3);
+	background: transparent;
+	border: 1px solid transparent;
+}
+
+button.tab:hover:not(.current) {
+	color: var(--ink);
+	background: var(--free-wash);
+}
+
+/* The current tab is stated, not implied by a disabled control. */
+button.tab.current {
+	color: var(--free);
+	background: var(--free-wash);
+	border-color: rgba(102, 168, 224, 0.45);
+}
+
 /* ---------------------------------------------------------- masthead */
 
 .masthead {

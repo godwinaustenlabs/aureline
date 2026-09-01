@@ -12,7 +12,8 @@ function entries(sections: ReturnType<typeof buildScratchpad>, title: string) {
 }
 
 const failedResult: HeliosResult = {
-	p_invoc_id: 'invoc-1',
+	pipeline_id: 'invoc-1',
+	design_session_id: 'design-1',
 	status: 'failed',
 	params: { motif_type: 'paisley' } as HeliosResult['params'],
 	image_url: null,

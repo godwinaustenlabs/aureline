@@ -1,4 +1,4 @@
-import { buildPlannerSystemPrompt, buildPlannerUserPrompt } from "../prompts";
+import { buildPlannerUserPrompt } from "../prompts";
 import { callPlannerModel } from "../tools";
 import type { HeliosConfig } from "../config";
 
@@ -15,14 +15,24 @@ import type { HeliosConfig } from "../config";
  * The model and retry count come from `config`, which is resolved from KV once
  * per invocation; `env` is still needed for the `AI` binding and the gateway id,
  * neither of which is runtime-tunable.
+ *
+ * `systemPrompt` arrives already resolved rather than being built here. The
+ * caller reads it from the `prompts` table once per invocation, falling back to
+ * `buildPlannerSystemPrompt()` when the row is missing — so this function stays
+ * testable without a database and unaware of where the words came from.
  */
 export async function planConcept(
-	concept: string,
 	env: Env,
 	config: HeliosConfig,
-	pipeline_id: string
+	/**
+	 * One object rather than three positional strings (AGENTS.md §6). `concept`
+	 * and `systemPrompt` are both strings and adjacent, and swapping them sends
+	 * the brief as the system prompt and the prompt as the brief — a full-price
+	 * call that returns nonsense and nothing in the types would object.
+	 */
+	run: { concept: string; systemPrompt: string; pipeline_id: string }
 ) {
-	const systemPrompt = buildPlannerSystemPrompt();
+	const { concept, systemPrompt, pipeline_id } = run;
 	const userPrompt = buildPlannerUserPrompt(concept);
 
 	const result = await callPlannerModel(

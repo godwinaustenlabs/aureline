@@ -50,7 +50,7 @@ export type RunsOutcome = { ok: true; rows: RunRow[] } | { ok: false; message: s
  * — it means the shared instance literally named `default`, which is a real
  * store with a real history.
  *
- * The route also takes a `p_invoc_id` to narrow to a single invocation, and this
+ * The route also takes a `pipeline_id` to narrow to a single invocation, and this
  * deliberately does not expose it. The list form already contains those rows, so
  * the page filters in memory instead: selecting a run in the history costs no
  * request at all, and one round trip after a run feeds the scratchpad and the
@@ -106,8 +106,12 @@ async function post(url: string, body: unknown): Promise<CallOutcome> {
  * A thrown fetch — DNS, a refused connection, a blocked preflight — comes back
  * as `status: null` rather than an exception, so every caller has one shape to
  * handle.
+ *
+ * Exported for `api/iris.ts`, which talks to a different worker but needs the
+ * same two things: the raw bytes kept as text, and a refused preflight reported
+ * as something a person can act on rather than a bare "Failed to fetch".
  */
-async function send(url: string, init: RequestInit): Promise<{ status: number | null; raw: string }> {
+export async function send(url: string, init: RequestInit): Promise<{ status: number | null; raw: string }> {
 	try {
 		const response = await fetch(url, init);
 		return { status: response.status, raw: await response.text() };

@@ -8,7 +8,7 @@ import { classify, failedStage, failureDetail } from './outcome';
 describe('classify', () => {
 	it('reads a 200 carrying status: "failed" as a run, not a success', () => {
 		const raw = JSON.stringify({
-			p_invoc_id: 'abc',
+			pipeline_id: 'abc',
 			status: 'failed',
 			params: { motif_type: 'paisley' },
 			image_url: null,
@@ -28,7 +28,7 @@ describe('classify', () => {
 	});
 
 	it('reads a 200 carrying status: "completed" as the same kind of outcome', () => {
-		const outcome = classify(200, JSON.stringify({ p_invoc_id: 'abc', status: 'completed', cost_usd: 0.0019 }));
+		const outcome = classify(200, JSON.stringify({ pipeline_id: 'abc', status: 'completed', cost_usd: 0.0019 }));
 
 		expect(outcome.kind).toBe('run');
 		expect(outcome.kind === 'run' && outcome.result.status).toBe('completed');
@@ -48,7 +48,7 @@ describe('classify', () => {
 
 		expect(outcome.kind).toBe('transport');
 		expect(outcome.kind === 'transport' && outcome.message).toContain('concept:');
-		// A 400 never carries a p_invoc_id, and this union has nowhere to put one.
+		// A 400 never carries a pipeline_id, and this union has nowhere to put one.
 		expect(outcome).not.toHaveProperty('result');
 	});
 
@@ -68,7 +68,7 @@ describe('classify', () => {
 	});
 
 	it('keeps the raw body untouched on every branch', () => {
-		const raw = '{"p_invoc_id":"abc","status":"completed"}';
+		const raw = '{"pipeline_id":"abc","status":"completed"}';
 		expect(classify(200, raw).raw).toBe(raw);
 		expect(classify(409, '{"error":"no"}').raw).toBe('{"error":"no"}');
 		expect(classify(500, 'boom').raw).toBe('boom');

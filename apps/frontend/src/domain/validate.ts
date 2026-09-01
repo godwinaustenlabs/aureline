@@ -1,4 +1,4 @@
-import { HeliosRequestSchema, type HeliosRequest } from '@aureline/shared-types';
+import { HeliosRequestSchema, IrisRequestSchema, type HeliosRequest, type IrisRequest } from '@aureline/shared-types';
 import type { ZodError } from 'zod';
 
 /**
@@ -13,16 +13,34 @@ import type { ZodError } from 'zod';
 
 export type Validated = { ok: true; request: HeliosRequest } | { ok: false; message: string };
 
+export type ValidatedIris = { ok: true; request: IrisRequest } | { ok: false; message: string };
+
 /**
  * Builds the request body, or explains what is wrong with it.
  *
  * `sessionId` is **omitted** rather than sent empty when blank. The schema
  * requires at least one character, so an empty string is a 400 — while an absent
  * field is the documented "use the shared `default` instance".
+ *
+ * `designSessionId` is **required and never omitted**, which is the difference
+ * between the two and the reason they are not handled alike. It is the design's
+ * own identity, carried unchanged into Iris and Atlas, and there is no default
+ * for it to fall back to.
+ *
+ * One object rather than three positional strings (AGENTS.md §6). All three are
+ * strings, and sending the concept as the design id — or either id as the other
+ * — would compile, run, and bill.
  */
-export function validateGenerate(concept: string, sessionId: string): Validated {
+export function validateGenerate(input: {
+	concept: string;
+	designSessionId: string;
+	sessionId: string;
+}): Validated {
+	const { concept, designSessionId, sessionId } = input;
+
 	const parsed = HeliosRequestSchema.safeParse({
 		concept,
+		design_session_id: designSessionId,
 		...(sessionId ? { session_id: sessionId } : {}),
 	});
 
@@ -41,4 +59,35 @@ export function firstIssueMessage(zodError: ZodError): string {
 	if (!issue) return 'invalid input';
 	const field = issue.path.join('.');
 	return field ? `${field}: ${issue.message}` : issue.message;
+}
+
+/**
+ * The same, for Iris.
+ *
+ * `motifRef` is the one field with no Helios counterpart, and it is an **R2 key**
+ * — `patterns/{pipeline_id}.jpg` — not a URL. Iris reads the object straight out
+ * of the shared bucket; handing it `https://…/images/patterns/x.jpg` fails at the
+ * bucket read, after the request has been accepted. `domain/imageUrl.ts` converts
+ * between the two.
+ *
+ * `designSessionId` carries across from the Helios run that made the motif, and
+ * that is the entire point of it: same design id in both engines is what makes
+ * the pattern and its colouring one design rather than two unrelated runs.
+ */
+export function validateIrisGenerate(input: {
+	concept: string;
+	motifRef: string;
+	designSessionId: string;
+	sessionId: string;
+}): ValidatedIris {
+	const { concept, motifRef, designSessionId, sessionId } = input;
+
+	const parsed = IrisRequestSchema.safeParse({
+		concept,
+		motif_ref: motifRef,
+		design_session_id: designSessionId,
+		...(sessionId ? { session_id: sessionId } : {}),
+	});
+
+	return parsed.success ? { ok: true, request: parsed.data } : { ok: false, message: firstIssueMessage(parsed.error) };
 }

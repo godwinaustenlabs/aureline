@@ -46,7 +46,7 @@ export function localTime(iso: string | null | undefined): string {
 	return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString();
 }
 
-/** A `p_invoc_id` short enough for a table cell. The full value is always in the
+/** A `pipeline_id` short enough for a table cell. The full value is always in the
  *  title attribute and in the raw JSON, so nothing is hidden. */
 export function shortId(id: string): string {
 	return id.length <= 12 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`;

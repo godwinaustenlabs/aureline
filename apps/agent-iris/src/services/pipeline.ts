@@ -5,8 +5,8 @@ import { colorizeMotif } from "./colorizer";
 import { readGatewayCost } from "./gatewayCost";
 import { saveColoredImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
-import { describeConfig, resolveConfig, type IrisConfig } from "../config";
-import { IRIS_COLOR_PROMPT_VERSION, IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
+import { describeConfig, describePrompt, resolveConfig, resolvePrompt, type IrisConfig } from "../config";
+import { buildPlannerSystemPrompt, IRIS_COLOR_PROMPT_VERSION, IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
 import {
 	startTextRun,
 	completeTextRun,
@@ -237,6 +237,14 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 	const config = await resolveConfig(env);
 	console.log(describeConfig(config));
 
+	// The live planner prompt, read once for the same reason the config is: two
+	// reads straddling an edit would produce one invocation running on half of
+	// each. Outside the try because, like `resolveConfig`, it never throws — a
+	// missing row, an unusable row and D1 being down all fall back to the
+	// committed prompt rather than failing the request.
+	const plannerPrompt = await resolvePrompt(getD1Db(env.DB), "iris_planner", buildPlannerSystemPrompt());
+	console.log(describePrompt("iris_planner", plannerPrompt));
+
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
 	const pipelineId = crypto.randomUUID();
@@ -260,7 +268,11 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		});
 
 		stage = "planner";
-		const planned = await planConcept(req.concept, env, config, pipelineId);
+		const planned = await planConcept(env, config, {
+			concept: req.concept,
+			systemPrompt: plannerPrompt.text,
+			pipeline_id: pipelineId,
+		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
 		// on this binding, so the image stage would overwrite it.
@@ -275,7 +287,16 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		const textModelMetadata = {
 			model: planned.model,
 			usage: planned.usage,
-			prompt_version: IRIS_PLANNER_PROMPT_VERSION,
+			// `prompt_version` identifies the *committed* prompt, so it is only the
+			// truth when the committed prompt is what ran. A stored prompt can be
+			// rewritten in the playground at any time and no id describes it, so
+			// naming one here would be the lying audit row ADR-0001 exists to
+			// prevent. `prompt_source` and `prompt_updated_at` are what stay
+			// answerable: which store the words came from, and when they last
+			// changed.
+			prompt_version: plannerPrompt.source === "code" ? IRIS_PLANNER_PROMPT_VERSION : null,
+			prompt_source: plannerPrompt.source,
+			prompt_updated_at: plannerPrompt.updatedAt,
 		};
 
 		// Planner succeeded — settle the text row before the image row opens.

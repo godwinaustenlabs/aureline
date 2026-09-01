@@ -18,12 +18,74 @@
 	"name": "frontend",
 	"compatibility_date": "2026-07-27",
 
+	/**
+	 * The playground is no longer purely static. It has a server side for one
+	 * reason: the prompt editor writes to each engine's `prompts` table through a
+	 * D1 binding, and a browser can never hold one. The decision was that the
+	 * playground owns the CRUD path to that table directly rather than the
+	 * engines growing a GET/PUT route — so the binding has to live somewhere, and
+	 * this is the only place left.
+	 *
+	 * Everything else the page does still goes straight to the engine workers
+	 * cross-origin, exactly as before. This worker serves assets and answers
+	 * `/api/prompts`. Nothing else.
+	 */
+	"main": "src/server/worker.ts",
+
 	"assets": {
 		"directory": "./dist",
 		// One HTML entry point and client-side state only, so anything that is not
 		// a built file should still land on index.html rather than a 404.
-		"not_found_handling": "single-page-application"
+		"not_found_handling": "single-page-application",
+		// Named so `worker.ts` can hand a request back to the asset server itself.
+		"binding": "ASSETS",
+
+		/**
+		 * **Load-bearing, and it belongs inside `assets` — not at the top level,
+		 * where wrangler warns "unexpected field" and then ignores it.**
+		 *
+		 * `not_found_handling: "single-page-application"` returns index.html for
+		 * anything that is not a built file, `/api/prompts` included, which would
+		 * reach the browser as an HTML page and fail to parse as JSON with no hint
+		 * as to why. This routes the API prefix to the worker first and leaves
+		 * every other path on the asset server.
+		 */
+		"run_worker_first": ["/api/*"]
 	},
+
+	/**
+	 * Both engines' databases, read and written directly. These are the same ids
+	 * committed in each engine's own wrangler.jsonc and they must not drift — a
+	 * wrong id here edits prompts in a database no engine reads, which looks
+	 * exactly like an edit that silently did nothing.
+	 */
+	"d1_databases": [
+		{
+			"binding": "IRIS_DB",
+			"database_name": "iris-d1",
+			"database_id": "73146202-15d3-4969-a440-3975797a923c",
+			/**
+			 * **`wrangler dev` reads and writes the real database through this.**
+			 *
+			 * It is on because the prompts this screen edits only exist in the
+			 * deployed database — a local copy starts empty, so the editor would show
+			 * blank boxes and a save would be a save into nothing. Every other
+			 * binding stays local; this one alone goes remote.
+			 *
+			 * The consequence is worth stating plainly: an edit made in local dev is
+			 * live for the deployed engines on their next request. There is no
+			 * staging copy of a prompt.
+			 */
+			"remote": true
+		},
+		{
+			"binding": "HELIOS_DB",
+			"database_name": "helios-d1",
+			"database_id": "fa6c2552-c844-4c9b-8730-8e3108aa4cc8",
+			// Remote for the same reason as IRIS_DB above.
+			"remote": true
+		}
+	],
 
 	"observability": {
 		"enabled": true
