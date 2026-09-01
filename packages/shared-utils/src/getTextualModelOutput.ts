@@ -4,6 +4,11 @@ import {
   type AiRunOptions,
   type GatewayConfig,
 } from "./aiGateway";
+import { toDataUrl } from "./base64";
+// Reused rather than redeclared: an image handed to a planner and an image
+// handed to an image model are the same thing, and two interfaces with the same
+// fields would drift.
+import type { InputImage } from "./getImageToImageOutput";
 
 /** Default attempts, matching `MAX_RETRIES` in agent-helios' wrangler.jsonc. */
 const DEFAULT_MAX_RETRIES = 2;
@@ -57,6 +62,26 @@ export interface GetTextualModelOutputOptions {
    * cached invalid response.
    */
   gateway?: GatewayConfig;
+  /**
+   * Reference images sent alongside the prompt, making this a multimodal call.
+   *
+   * **Absent or empty, the request body is byte-for-byte what it has always
+   * been** — `content` a bare string. That is not an optimisation, it is the
+   * regression promise: every existing text-only call must keep producing the
+   * identical request, so nothing about today's planner behaviour changes on
+   * the day this option is added.
+   *
+   * The model must be vision-capable. A text-only model given image parts will
+   * either ignore them or reject the call, and neither failure names the cause
+   * — which is why the engines resolve a separate `vision_planner_model` rather
+   * than hoping the configured planner happens to handle images.
+   *
+   * This hop was never affected by the AI Gateway's multipart restriction
+   * (ADR-SHARED-0001). That restriction is about `ai.run` bodies containing a
+   * `ReadableStream`; this is an ordinary JSON body with a base64 string in it,
+   * and it routes through the gateway like any other.
+   */
+  images?: InputImage[];
 }
 
 /**
@@ -83,7 +108,7 @@ export interface AiRunner {
  */
 function extractStructuredOutput(response: unknown): unknown {
   if (typeof response === "string") {
-    return JSON.parse(response);
+    return parseModelJson(response);
   }
 
   if (!response || typeof response !== "object") {
@@ -95,7 +120,7 @@ function extractStructuredOutput(response: unknown): unknown {
   if (Array.isArray(choices)) {
     const first = choices[0] as { message?: { content?: unknown } } | undefined;
     const text = first?.message?.content;
-    return typeof text === "string" ? JSON.parse(text) : response;
+    return typeof text === "string" ? parseModelJson(text) : response;
   }
 
   // Responses API (legacy path): find the `message` item rather than taking
@@ -103,16 +128,64 @@ function extractStructuredOutput(response: unknown): unknown {
   const { output } = response as { output?: unknown };
   if (Array.isArray(output)) {
     const text = findMessageText(output);
-    return typeof text === "string" ? JSON.parse(text) : response;
+    return typeof text === "string" ? parseModelJson(text) : response;
   }
 
   // Classic Workers AI text models: { response: string | object }.
   if ("response" in response) {
     const inner = (response as { response: unknown }).response;
-    return typeof inner === "string" ? JSON.parse(inner) : inner;
+    return typeof inner === "string" ? parseModelJson(inner) : inner;
   }
 
   return response;
+}
+
+/**
+ * Parses the model's answer, recovering JSON that arrived wrapped in prose.
+ *
+ * A strict `JSON.parse` first, and that is the path every well-behaved reply
+ * takes — the recovery below never runs for a model that honours
+ * `response_format: json_schema`.
+ *
+ * The recovery exists because not all of them do. `llama-3.2-11b-vision-instruct`
+ * accepts the `json_schema` block, produces output matching the schema, and
+ * intermittently prefixes it with markdown — a ```json fence, or a heading like
+ * `**Solution**`. The JSON is right there and correct; a bare `JSON.parse` throws
+ * on the first `*` and the whole billed call is discarded.
+ *
+ * **Deliberately narrow.** It takes the outermost `{...}` span and parses that,
+ * with no repair of the JSON itself: no quote-fixing, no trailing-comma
+ * stripping, no brace-balancing. Those turn a model that is wrong into a model
+ * that looks right, which is far worse than a failed run. If the span between
+ * the first `{` and the last `}` is not valid JSON on its own, this throws like
+ * before.
+ *
+ * **Never silent.** Recovery means the model disobeyed the schema contract and
+ * we compensated, which is a fact about the model worth seeing in the logs —
+ * especially before choosing to keep it.
+ */
+function parseModelJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (strictError) {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+
+    // Rethrow the *original* error, not one about the span. The strict failure
+    // is what actually describes the reply.
+    if (start === -1 || end <= start) throw strictError;
+
+    const span = text.slice(start, end + 1);
+    const recovered: unknown = JSON.parse(span);
+
+    console.warn(
+      `getTextualModelOutput: the model wrapped its JSON in ${start} characters of ` +
+        `prose — recovered it, but this model is not honouring response_format. ` +
+        `Prefix: ${JSON.stringify(text.slice(0, Math.min(start, 80)))}`
+    );
+
+    return recovered;
+  }
 }
 
 /** First text payload of the first `message` item in a Responses API output. */
@@ -131,6 +204,110 @@ function findMessageText(output: unknown[]): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * The user message's `content`: a bare string, or the parts array a multimodal
+ * call needs.
+ *
+ * The two branches are kept apart rather than always building an array with one
+ * text part in it. A parts array is the *equivalent* shape for a text-only call,
+ * not the *same* one, and some providers treat them differently — so a call with
+ * no images must send exactly what it sent before this function existed. An
+ * empty array counts as no images for the same reason: a caller that passes
+ * `images: []` because it had nothing to attach gets today's request, not a
+ * needlessly different one.
+ *
+ * The text part leads. The prompt is the instruction and the images are what it
+ * refers to, and a model reading the instruction first is the ordering every
+ * multimodal example uses.
+ */
+function buildUserContent(
+  prompt: string,
+  images: InputImage[] | undefined
+): unknown {
+  if (!images || images.length === 0) {
+    return prompt;
+  }
+
+  return [
+    { type: "text", text: prompt },
+    ...images.map((image) => ({
+      type: "image_url",
+      image_url: { url: toDataUrl(image.bytes, image.contentType) },
+    })),
+  ];
+}
+
+/**
+ * The model's own words out of whatever envelope carried them.
+ *
+ * Used only to echo a failed answer back to the model. It deliberately does not
+ * parse: this is the text as the model wrote it, prose and all, because the
+ * point of echoing it is to show the model the thing it is being asked to fix.
+ * Falls back to the serialized envelope when no text field is recognisable,
+ * which is still more use to the model than nothing.
+ */
+function responseText(response: unknown): string {
+  if (typeof response === "string") return response;
+  if (!response || typeof response !== "object") return String(response);
+
+  const { choices } = response as { choices?: unknown };
+  if (Array.isArray(choices)) {
+    const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
+    if (typeof content === "string") return content;
+  }
+
+  const { output } = response as { output?: unknown };
+  if (Array.isArray(output)) {
+    const text = findMessageText(output);
+    if (typeof text === "string") return text;
+  }
+
+  if ("response" in response) {
+    const inner = (response as { response: unknown }).response;
+    if (typeof inner === "string") return inner;
+  }
+
+  return JSON.stringify(response);
+}
+
+/**
+ * Adds the failed answer and a note about what was wrong with it, so the next
+ * attempt is a different call from the one that just failed.
+ *
+ * **The defect this fixes was expensive and invisible.** The body used to be
+ * built once outside the loop, so every retry was byte-identical to the attempt
+ * before it and the model was never told anything had gone wrong. Three attempts
+ * meant three full-price calls, three identical wrong answers, and one error
+ * message at the end. `max_retries` was a multiplier on cost with no effect on
+ * the outcome.
+ *
+ * Mutates `messages`, which `body` holds by reference — so the next `ai.run`
+ * sends the extended conversation without the body needing to be rebuilt.
+ *
+ * The model's own words go back as an `assistant` turn rather than being quoted
+ * inside the correction. That is the shape every chat model is trained on, and
+ * it is what makes "your previous reply" refer to something concrete.
+ */
+function appendCorrection(
+  messages: Record<string, unknown>[],
+  response: unknown,
+  cause: unknown,
+  kind: "json" | "schema"
+): void {
+  messages.push({ role: "assistant", content: excerpt(responseText(response)) });
+  messages.push({
+    role: "user",
+    content:
+      kind === "json"
+        ? "Your previous reply was not valid JSON. Reply with the JSON object " +
+          "alone — no markdown fences, no headings, no commentary before or " +
+          "after it. Start your reply with { and end it with }."
+        : "Your previous reply was valid JSON but did not match the required " +
+          `schema. Fix exactly these problems and reply with the corrected ` +
+          `JSON object alone: ${JSON.stringify(cause)}`,
+  });
 }
 
 /** Truncated, quotable form of a response, for error messages. */
@@ -188,6 +365,7 @@ export async function getTextualModelOutput<T extends ZodType>(
     maxOutputTokens = DEFAULT_MAX_OUTPUT_TOKENS,
     temperature,
     gateway,
+    images,
   } = options;
 
   // `$schema` is metadata about the dialect, not part of the shape, and
@@ -198,10 +376,10 @@ export async function getTextualModelOutput<T extends ZodType>(
   if (instructions) {
     messages.push({ role: "system", content: instructions });
   }
-  messages.push({ role: "user", content: prompt });
+  messages.push({ role: "user", content: buildUserContent(prompt, images) });
 
-  // Built once, outside the loop: every attempt is the same call routed the
-  // same way, so the gateway sees one consistent request shape.
+  // The first attempt's body, and the only one that is exactly this. Retries
+  // append a corrective turn to `messages` — see `correctionFor`.
   const body: Record<string, unknown> = {
     messages,
     response_format: {
@@ -238,7 +416,22 @@ export async function getTextualModelOutput<T extends ZodType>(
       const response = await ai.run(model, body, runOptions);
       lastResponse = response;
 
-      const parsed = extractStructuredOutput(response);
+      // Separated from the schema check below because the two failures need
+      // different corrections. "That was not JSON at all" and "that was JSON
+      // with the wrong fields in it" are not the same note to send back.
+      let parsed: unknown;
+      try {
+        parsed = extractStructuredOutput(response);
+      } catch (parseError) {
+        lastError = parseError;
+        // **Not `"call"`.** The call itself succeeded and the model answered;
+        // what failed was the content. Reporting this as a call failure is how
+        // a model returning prose gets read as a transport problem, and sends
+        // whoever is debugging it to the wrong half of the system entirely.
+        lastFailure = "schema";
+        appendCorrection(messages, response, parseError, "json");
+        continue;
+      }
 
       const result = schema.safeParse(parsed);
       if (result.success) {
@@ -248,6 +441,7 @@ export async function getTextualModelOutput<T extends ZodType>(
 
       lastError = result.error.issues;
       lastFailure = "schema";
+      appendCorrection(messages, response, result.error.issues, "schema");
     } catch (err) {
       lastError = err;
       lastFailure = "call";

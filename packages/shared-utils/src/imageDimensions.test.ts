@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { readJpegDimensions } from "./imageDimensions";
-import { SAMPLE_COLORED_JPG_BASE64 } from "../fixtures/sample-colored";
-
-/** The same `atob` decode the colorizer and the shared helpers use. */
-function decodeBase64(base64: string): Uint8Array {
-	const binary = atob(base64);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-	return bytes;
-}
 
 /**
  * A minimal but structurally real JPEG header: SOI, then any number of
@@ -39,14 +30,16 @@ function jpegHeader(width: number, height: number, before: number[] = []): Uint8
 /** A DHT segment, which sits inside 0xC0-0xCF but is not a frame header. */
 const DHT_SEGMENT = [0xff, 0xc4, 0x00, 0x04, 0x00, 0x00];
 
+/**
+ * Every case here builds its own header, so this file needs no fixture.
+ *
+ * The one test that reads a *real* encoder's output — the 128x128
+ * `sample-colored.jpg` — stays in `agent-iris`, beside the fixture it needs.
+ * Copying a 9KB base64 blob into this package to keep the two together would
+ * mean two copies that can drift, and exporting test data from a shared
+ * package's public API to avoid that is worse than the split.
+ */
 describe("readJpegDimensions", () => {
-	it("reads the real fixture's dimensions", () => {
-		// sample-colored.jpg is 128x128, confirmed against the file itself. This is
-		// the test that proves the parser works on an actual encoder's output and
-		// not only on the headers this file builds.
-		expect(readJpegDimensions(decodeBase64(SAMPLE_COLORED_JPG_BASE64))).toEqual({ width: 128, height: 128 });
-	});
-
 	it("does not confuse width with height on a landscape image", () => {
 		// The fixture is square, so this pair is what actually pins the byte order.
 		// Swapping the two reads passes every square test and silently reports
