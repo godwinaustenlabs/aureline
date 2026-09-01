@@ -1,5 +1,25 @@
 # A JSON-bodied inpainting model is how Iris's image call reaches AI Gateway
 
+> **Status: accepted, NOT implemented.** The probe below is real and its result
+> is reproducible — a JSON body does route through the gateway. The code it
+> describes was never written. As of 2026-09-01 none of the following exists:
+> `getInpaintingOutput` and `whiteMaskPng` in `packages/shared-utils`, the
+> `transport` field on `ImageModelConfig`, the two-branch structure in
+> `colorizer.ts`, `readPngDimensions`/`readImageDimensions`, or the
+> content-type-derived R2 extension in `saveColoredImage`.
+>
+> Everything below is therefore written in a present tense it has not earned.
+> Read it as the decision and the request-shape reference it is — the request
+> body details in particular were paid for in probe calls and are worth keeping
+> — and not as a description of what Iris does today. **Iris today still calls
+> `getImageToImageOutput` over multipart with no gateway id, and its image row
+> still carries `cost_usd: null`**, exactly as ADR-SHARED-0001 describes.
+>
+> The phase-1 reference-image work does not adopt this either: the user's
+> reference image never reaches Iris's image model, so Iris's image call is
+> untouched by it. Whoever implements this ADR should re-verify the probe first
+> — it is over a model catalog that changes.
+
 ADR-SHARED-0001 established that `getImageToImageOutput` cannot route through AI Gateway and never will: `@cf/black-forest-labs/flux-2-klein-9b` requires `multipart.body` to be a `ReadableStream`, and AI Gateway refuses a `ReadableStream` by name. The only body type the model accepts is the only body type the gateway refuses. That ADR is still correct, and nothing here retracts it.
 
 What it left standing was a consequence nobody was happy with: Iris's image row carried `cost_usd: null` on every run and left no gateway log row, so the expensive half of every invocation was unaudited. ADR-SHARED-0001 recorded that null as a decision rather than an accident, which was honest, but it was still the wrong answer to be stuck with.
