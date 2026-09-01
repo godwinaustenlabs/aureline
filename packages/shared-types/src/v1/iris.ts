@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImagePromptSchema, ReferenceImageSchema } from "./common";
 
 /**
  * The controlled color vocabulary (v1).
@@ -37,6 +38,12 @@ export const IrisParamsSchema = z.object({
   saturation: z.enum(["muted", "balanced", "vibrant"]),
   background_treatment: z.enum(["solid", "gradient", "textured", "transparent"]),
   mood: z.string().trim().min(1),
+  /**
+   * Last in the schema because it is last in the composed prompt. A reader
+   * checking `buildImageModelPrompt` against this list should be able to do it
+   * by looking rather than by counting (AGENTS.md §6).
+   */
+  image_prompt: ImagePromptSchema,
 });
 
 export type IrisParams = z.infer<typeof IrisParamsSchema>;
@@ -84,6 +91,17 @@ export const IrisRequestSchema = z.object({
   motif_ref: z.string().trim().min(1).max(512),
   design_session_id: z.string().trim().min(1).max(128),
   session_id: z.string().trim().min(1).max(128).optional(),
+  /**
+   * An optional reference image, present only on a `multipart/form-data`
+   * request. A JSON request omits it and behaves exactly as it always has.
+   *
+   * **It reaches the planner and stops there.** Iris's image call still receives
+   * `motif_ref` and nothing else — the motif is Helios's output, which is the
+   * thing Iris exists to colour, and the only JSON-bodied image model on the
+   * account takes one image. The reference still shapes the output, through the
+   * params the planner chooses and through `image_prompt`. See ADR-SHARED-0003.
+   */
+  image: ReferenceImageSchema.optional(),
 });
 
 export type IrisRequest = z.infer<typeof IrisRequestSchema>;

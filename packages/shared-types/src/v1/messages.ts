@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ImagePromptSchema, ReferenceImageSchema } from "./common";
 
 /**
  * Helios pattern parameters (v1).
@@ -29,6 +30,12 @@ export const HeliosParamsSchema = z.object({
   ]),
   contrast_level: z.enum(["high", "medium", "low"]),
   style: z.string().trim().min(1),
+  /**
+   * Last in the schema because it is last in the composed prompt. A reader
+   * checking `buildImagePrompt` against this list should be able to do it by
+   * looking rather than by counting (AGENTS.md §6).
+   */
+  image_prompt: ImagePromptSchema,
 });
 
 export type HeliosParams = z.infer<typeof HeliosParamsSchema>;
@@ -67,6 +74,17 @@ export const HeliosRequestSchema = z.object({
   concept: z.string().trim().min(1).max(1000),
   design_session_id: z.string().trim().min(1).max(128),
   session_id: z.string().trim().min(1).max(128).optional(),
+  /**
+   * An optional reference image, present only on a `multipart/form-data`
+   * request. A JSON request omits it and behaves exactly as it always has.
+   *
+   * There is deliberately no size limit here. The consequence is recorded in
+   * the phase-1 plan's accepted risks rather than left to be rediscovered: a
+   * JSON-bodied image call serializes bytes as an int array, roughly six times
+   * their size, so a large upload fails at or after the model call with an
+   * error that says nothing about size.
+   */
+  image: ReferenceImageSchema.optional(),
 });
 
 export type HeliosRequest = z.infer<typeof HeliosRequestSchema>;
