@@ -158,9 +158,7 @@
 		// it spends real money per call, so this list is the only thing stopping
 		// any webpage from billing our account. It belongs where it gets reviewed.
 		//
-		// Local dev servers only for now. iris-12 adds the deployed playground's
-		// origin when the frontend lands in dev.
-		"ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173"
+		"ALLOWED_ORIGINS": "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,https://frontend.aureline.workers.dev"
 	},
 
 	"observability": {
