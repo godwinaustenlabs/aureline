@@ -9,7 +9,7 @@ import { validateGenerate } from './domain/validate';
 import { newDesignSessionId } from './domain/designSession';
 import { imageUrlFor, r2KeyFromUrl } from './domain/imageUrl';
 import { validateIrisGenerate } from './domain/validate';
-import { generateIris, pingIris, IRIS_GENERATE_COST_USD } from './api/iris';
+import { generateIris, resumeIris, pingIris, IRIS_GENERATE_COST_USD, IRIS_RESUME_COST_USD } from './api/iris';
 import type { IrisCallOutcome } from './domain/irisOutcome';
 import { IrisPanel } from './components/IrisPanel';
 import { effectiveSession, forget, loadSessions, normaliseSessionId, remember, saveSessions, type RememberedSession } from './state/sessions';
@@ -73,6 +73,18 @@ export function App() {
 	const [irisSessionField, setIrisSessionField] = useState('');
 	const [irisDesignSessionId, setIrisDesignSessionId] = useState('');
 	const [irisOutcome, setIrisOutcome] = useState<IrisCallOutcome | null>(null);
+	/**
+	 * Iris's own run history, from Iris's own `GET /runs`.
+	 *
+	 * A separate list from `rows`, not a filtered view of it: the two engines are
+	 * two Workers with two Durable Object namespaces and two `*_runs` tables. The
+	 * same session name in both is not the same object, so merging them would
+	 * group runs that have nothing to do with each other.
+	 */
+	const [irisRows, setIrisRows] = useState<RunRow[]>([]);
+	const [irisRowsError, setIrisRowsError] = useState<string | null>(null);
+	const [irisRowsLoading, setIrisRowsLoading] = useState(false);
+	const [irisSelectedId, setIrisSelectedId] = useState<string | null>(null);
 	const [irisError, setIrisError] = useState<string | null>(null);
 	const [irisConnection, setIrisConnection] = useState<{ ok: boolean; message: string } | null>(null);
 	const [irisInFlight, setIrisInFlight] = useState<{ startedAt: number } | null>(null);
@@ -165,6 +177,54 @@ export function App() {
 
 	const groups = useMemo(() => groupRows(rows), [rows]);
 	const selected = groups.find((group) => group.pipelineId === selectedId) ?? null;
+
+	/**
+	 * The same read against Iris. `listRuns` already takes a base URL, so it is
+	 * engine-agnostic as it stands — Iris serves the identical `{ runs: [...] }`
+	 * envelope from the identical route, and `iris_runs` is `helios_runs` plus
+	 * `motif_ref`. Nothing here needed generalising beyond pointing it elsewhere.
+	 */
+	const refreshIrisRuns = useCallback(async (session: string, baseUrl: string): Promise<RunRow[] | null> => {
+		setIrisRowsLoading(true);
+		const outcome = await listRuns(baseUrl, session);
+		setIrisRowsLoading(false);
+
+		if (!outcome.ok) {
+			setIrisRows([]);
+			setIrisRowsError(outcome.message);
+			return null;
+		}
+
+		setIrisRows(outcome.rows);
+		setIrisRowsError(null);
+		return outcome.rows;
+	}, []);
+
+	const irisTarget = effectiveSession(irisSessionField);
+	const irisGroups = useMemo(() => groupRows(irisRows), [irisRows]);
+	const irisSelected = irisGroups.find((group) => group.pipelineId === irisSelectedId) ?? null;
+
+	/**
+	 * Only loads while the Iris tab is showing. `GET /runs` is free and read-only,
+	 * so this is allowed to be an effect at all — but there is no reason to keep
+	 * polling a second engine on every session change while nobody is looking at
+	 * it.
+	 */
+	useEffect(() => {
+		if (view !== 'iris') return;
+		void refreshIrisRuns(irisTarget, irisBaseUrl);
+	}, [view, irisTarget, irisBaseUrl, refreshIrisRuns]);
+
+	/** The coloured image for an Iris run picked out of its history. */
+	const irisHistoryImage = useMemo(() => {
+		if (!irisSelected) return null;
+		if (irisOutcome?.kind === 'run' && irisOutcome.result.pipeline_id === irisSelected.pipelineId) return null;
+
+		const key = irisSelected.image?.imageR2Key;
+		if (!key) return null;
+
+		return { url: imageUrlFor(irisBaseUrl, key), pipelineId: irisSelected.pipelineId };
+	}, [irisSelected, irisOutcome, irisBaseUrl]);
 
 	/** The result belongs in the scratchpad only when it is the run being shown —
 	 *  clicking a history row swaps the rows out from under it. Selecting a run
@@ -263,6 +323,41 @@ export function App() {
 	 * resume behind it — folding the two together would mean branching on engine
 	 * inside every step of one function.
 	 */
+	/**
+	 * Re-runs the image half of an existing Iris invocation from the params
+	 * already on disk. The planner is never called, so the colours come back
+	 * identical — this buys another attempt at the image, not a different plan.
+	 */
+	function requestIrisResume(pipelineId: string) {
+		const sessionId = normaliseSessionId(irisSessionField);
+		const spentSoFar = describeBriefHistory(briefHistory(irisGroups, pipelineId));
+
+		askToSpend({
+			title: 'Resume this Iris run',
+			costUsd: IRIS_RESUME_COST_USD,
+			detail: `Runs the image half again from the stored params, against "${irisTarget}". The planner is never called, so the colours come back identical. This is additional spend on a run that was already paid for, and it produces a new pipeline_id.${spentSoFar ? ` Note: ${spentSoFar}.` : ''}`,
+			confirmLabel: 'Spend it again',
+			run: async () => {
+				setIrisInFlight({ startedAt: Date.now() });
+				setIrisOutcome(null);
+
+				const outcome = await resumeIris(irisBaseUrl, {
+					pipeline_id: pipelineId,
+					...(sessionId ? { session_id: sessionId } : {}),
+				});
+
+				setIrisOutcome(outcome);
+				setIrisInFlight(null);
+
+				if (outcome.kind === 'run') {
+					setIrisSelectedId(outcome.result.pipeline_id);
+					void refreshIrisRuns(irisTarget, irisBaseUrl);
+					setSpend((current) => recordCall(current, null));
+				}
+			},
+		});
+	}
+
 	function requestIrisGenerate() {
 		const validated = validateIrisGenerate({
 			concept: irisConcept,
@@ -289,6 +384,13 @@ export function App() {
 
 				setIrisOutcome(outcome);
 				setIrisInFlight(null);
+
+				// Only a run wrote anything. A 409 and a transport failure both left
+				// the store exactly as it was.
+				if (outcome.kind === 'run') {
+					setIrisSelectedId(outcome.result.pipeline_id);
+					void refreshIrisRuns(irisTarget, irisBaseUrl);
+				}
 				// Iris reports the image cost alone and there is no rows read to
 				// correct it with, so the tally is marked approximate rather than
 				// claiming a total it does not have.
@@ -444,6 +546,15 @@ export function App() {
 					referenceImage={irisReferenceImage}
 					onReferenceImage={setIrisReferenceImage}
 					outcome={irisOutcome}
+					historyImage={irisHistoryImage}
+					groups={irisGroups}
+					session={irisTarget}
+					rowsLoading={irisRowsLoading}
+					rowsError={irisRowsError}
+					selectedId={irisSelectedId}
+					onSelect={setIrisSelectedId}
+					onResume={requestIrisResume}
+					onRefreshRuns={() => void refreshIrisRuns(irisTarget, irisBaseUrl)}
 					handoffNote={handoffNote}
 				/>
 			) : (

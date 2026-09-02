@@ -24,6 +24,9 @@ export interface Lineage {
 
 export interface RunGroup {
 	pipelineId: string;
+	/** The design, shared with every other run of it in any engine. Empty only
+	 *  for a row written before the column existed. */
+	designSessionId: string;
 	text: RunRow | null;
 	image: RunRow | null;
 	/** When the invocation started: the text row's timestamp, or the image row's
@@ -75,6 +78,8 @@ function toRunGroup(pipelineId: string, rows: RunRow[]): RunGroup {
 
 	return {
 		pipelineId,
+		// Both rows of an invocation carry it, so either will do.
+		designSessionId: text?.designSessionId ?? image?.designSessionId ?? '',
 		text,
 		image,
 		createdAt: text?.createdAt ?? image?.createdAt ?? null,

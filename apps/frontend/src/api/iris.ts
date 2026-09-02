@@ -1,4 +1,4 @@
-import type { IrisRequest } from '@aureline/shared-types';
+import type { IrisRequest, IrisResumeRequest } from '@aureline/shared-types';
 import { classifyIris, type IrisCallOutcome } from '../domain/irisOutcome';
 import { normaliseBaseUrl, send, toFormData } from './client';
 
@@ -46,4 +46,25 @@ export async function generateIris(
 export async function pingIris(baseUrl: string): Promise<{ ok: boolean; message: string }> {
 	const { status, raw } = await send(`${normaliseBaseUrl(baseUrl)}/`, { method: 'GET' });
 	return status === 200 ? { ok: true, message: raw } : { ok: false, message: status === null ? raw : `HTTP ${status}: ${raw}` };
+}
+
+/** What a resume costs. The image half only — the planner is never called. */
+export const IRIS_RESUME_COST_USD = 0.0019;
+
+/**
+ * `POST /resume`. Billed, and refuses with a 409 more often than it runs.
+ *
+ * Iris's resume takes the same two fields as Helios's and for the same reasons:
+ * `pipeline_id` names the run to redo, `session_id` picks the Durable Object.
+ * `design_session_id` is deliberately not sent — it is copied from the run being
+ * resumed, so a retry stays part of the same design.
+ */
+export async function resumeIris(baseUrl: string, request: IrisResumeRequest): Promise<IrisCallOutcome> {
+	const { status, raw } = await send(`${normaliseBaseUrl(baseUrl)}/resume`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(request),
+	});
+
+	return classifyIris(status, raw);
 }

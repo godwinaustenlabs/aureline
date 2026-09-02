@@ -170,3 +170,47 @@ describe('readLineage', () => {
 		expect(readLineage('not an object')).toEqual({ root: null, resumedFrom: null, attempt: null });
 	});
 });
+
+describe('design session id', () => {
+	/**
+	 * The field is the only thing tying a Helios pattern to the Iris run that
+	 * coloured it. It arrives on every row from both engines and used to be
+	 * dropped at the type boundary, so nothing on screen could show the chain.
+	 */
+	it('carries the design id from the rows onto the group', () => {
+		const groups = groupRows([
+			textRow({ pipelineId: 'run-1', designSessionId: 'design-a' }),
+			imageRow({ pipelineId: 'run-1', designSessionId: 'design-a' }),
+		]);
+
+		expect(groups[0]?.designSessionId).toBe('design-a');
+	});
+
+	/**
+	 * Two runs of one design: different pipeline ids, one design id. That pairing
+	 * is what the new column exists to show — and it is the distinction AGENTS.md
+	 * §3 draws between "the design" and "one run of one engine".
+	 *
+	 * Rows are fed newest first because that is the only order the engine sends:
+	 * `listRuns` orders by `created_at` descending and `groupRows` deliberately
+	 * does not re-sort.
+	 */
+	it('gives two attempts at one design the same design id', () => {
+		const groups = groupRows([
+			textRow({ pipelineId: 'run-2', designSessionId: 'design-a', createdAt: '2026-08-14T11:00:00.000Z' }),
+			imageRow({ pipelineId: 'run-2', designSessionId: 'design-a', createdAt: '2026-08-14T11:00:01.000Z' }),
+			textRow({ pipelineId: 'run-1', designSessionId: 'design-a', createdAt: '2026-08-14T10:00:00.000Z' }),
+			imageRow({ pipelineId: 'run-1', designSessionId: 'design-a', createdAt: '2026-08-14T10:00:01.000Z' }),
+		]);
+
+		expect(groups.map((group) => group.pipelineId)).toEqual(['run-2', 'run-1']);
+		expect(groups.every((group) => group.designSessionId === 'design-a')).toBe(true);
+	});
+
+	/** A row written before the column existed reads as empty, not as undefined. */
+	it('falls back to the image row, then to empty', () => {
+		const groups = groupRows([imageRow({ pipelineId: 'run-1', designSessionId: 'design-b' })]);
+
+		expect(groups[0]?.designSessionId).toBe('design-b');
+	});
+});

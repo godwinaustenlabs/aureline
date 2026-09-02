@@ -51,6 +51,7 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 							<thead>
 								<tr>
 									<th>pipeline_id</th>
+									<th>design</th>
 									<th>when</th>
 									<th>text</th>
 									<th>image</th>
@@ -76,6 +77,17 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 											>
 												{shortId(group.pipelineId)}
 											</button>
+										</td>
+										{/*
+										 * The design id, shortened the same way the pipeline id above is.
+										 * Not a button: it selects nothing. It is here to be *compared* —
+										 * the same value in the Helios table and the Iris table is what
+										 * says one engine coloured the other's pattern.
+										 */}
+										<td>
+											<code title={group.designSessionId || 'not recorded on this row'}>
+												{group.designSessionId ? shortId(group.designSessionId) : '—'}
+											</code>
 										</td>
 										<td>{localTime(group.createdAt)}</td>
 										<td>
