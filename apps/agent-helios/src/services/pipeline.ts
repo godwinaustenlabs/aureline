@@ -6,17 +6,29 @@ import {
 	type HeliosParams,
 	type HeliosRequest,
 	type HeliosResult,
+	type Classification,
 	type ReferenceImage,
 } from "@aureline/shared-types";
 import { planConcept } from "./planner";
+import { classifyConcept } from "./classifier";
+import { runResearch } from "./research";
 import { generateImage, resolveSteps, type ImageCallRecord } from "./imageGenerator";
 import { savePatternImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { readGatewayCost } from "./gatewayCost";
 import { describeConfig, describePrompt, resolveConfig, resolvePrompt, transportFor, type HeliosConfig } from "../config";
-import { buildPlannerSystemPrompt, PLANNER_PROMPT_ID } from "../prompts";
+import {
+	buildClassifierSystemPrompt,
+	buildPlannerConstraints,
+	buildPlannerSystemPrompt,
+	buildResearchSystemPrompt,
+	HELIOS_CLASSIFIER_PROMPT_VERSION,
+	HELIOS_RESEARCH_PROMPT_VERSION,
+	PLANNER_PROMPT_ID,
+} from "../prompts";
 import {
 	startTextRun,
+	recordClassification,
 	completeTextRun,
 	startImageRun,
 	insertFailedImageRun,
@@ -26,7 +38,15 @@ import {
 	pruneCompletedRuns,
 } from "../repository/do.repository";
 
-type Stage = "persist" | "planner" | "validate" | "image";
+/**
+ * `classify` and `research` sit between `persist` and `planner`, in that order,
+ * and the order is load-bearing for cost rather than for correctness: classify
+ * is gated and research is not, so research runs *between* two gated calls and
+ * never sets `aiGatewayLogId` (ADR-SHARED-0005).
+ *
+ * Each name becomes a user-visible error prefix via the catch below.
+ */
+type Stage = "persist" | "classify" | "research" | "planner" | "validate" | "image";
 
 /**
  * What the image stage reports back to whoever called it.
@@ -160,6 +180,16 @@ export async function runImageStage(
 		concept: string;
 		params: HeliosParams;
 		/**
+		 * The classifier's answer, duplicated onto the image row.
+		 *
+		 * Both rows of an invocation carry it for the same reason both carry
+		 * `planner_params` (ADR-0001): anything reading one row should not need a
+		 * join to the other. Optional because `/resume` re-runs the image stage
+		 * without re-classifying, and the column's `{}` default is the honest
+		 * value there.
+		 */
+		classification?: Classification | Record<string, never>;
+		/**
 		 * The user's reference image, when this invocation carried one.
 		 *
 		 * Optional, and `/resume` simply omits it — the image is transient and was
@@ -171,7 +201,7 @@ export async function runImageStage(
 		metadataExtras?: Record<string, unknown>;
 	},
 ): Promise<ImageStageOutcome> {
-	const { pipelineId, designSessionId, concept, params, referenceImage, metadataExtras = {} } = stage;
+	const { pipelineId, designSessionId, concept, params, classification, referenceImage, metadataExtras = {} } = stage;
 
 	// Assigned the moment the model returns, so it is already set if the R2 save
 	// or the row update throws after the call has billed.
@@ -195,6 +225,7 @@ export async function runImageStage(
 			userPrompt: concept,
 			plannerParams: params,
 			modelMetadata,
+			...(classification !== undefined && { classification }),
 		});
 		rowOpened = true;
 
@@ -257,8 +288,15 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 	// each. Outside the try because, like `resolveConfig`, it never throws — a
 	// missing row, an unusable row and D1 being down all fall back to the
 	// committed prompt rather than failing the request.
-	const plannerPrompt = await resolvePrompt(getD1Db(env.DB), "helios_planner", buildPlannerSystemPrompt());
+	const d1 = getD1Db(env.DB);
+	const plannerPrompt = await resolvePrompt(d1, "helios_planner", buildPlannerSystemPrompt());
 	console.log(describePrompt("helios_planner", plannerPrompt));
+
+	// The other two, read the same way and for the same reason. `resolvePrompt`
+	// never throws, so a missing row or a D1 outage falls back to the committed
+	// text rather than failing a request that could have run.
+	const classifierPrompt = await resolvePrompt(d1, "helios_classifier", buildClassifierSystemPrompt());
+	console.log(describePrompt("helios_classifier", classifierPrompt));
 
 	// Identity of this run of Helios. Generated per invocation, NOT derived from
 	// the Durable Object — one DO accumulates many invocations (ADR-0005).
@@ -286,19 +324,73 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			modelMetadata: { model: config.textModel.model },
 		});
 
+		stage = "classify";
+		const classified = await classifyConcept(env, config, {
+			concept: req.concept,
+			systemPrompt: classifierPrompt.text,
+			pipeline_id: pipelineId,
+			image: req.image,
+		});
+
+		// Read immediately, before the ungated research call. An ungated call does
+		// not clear `aiGatewayLogId`, so this is the only moment the classifier's
+		// cost is unambiguously its own (ADR-SHARED-0005).
+		const classifyCostUsd = await readGatewayCost(env, "classify");
+
+		// Written now rather than at `completeTextRun`, so a run that fails at
+		// research or planner still records what kind of design it thought it was
+		// making.
+		await recordClassification(db, pipelineId, classified.data);
+
+		stage = "research";
+		// The research prompt is resolved here, not with the others above, because
+		// its code fallback takes the classification — which does not exist until
+		// the line above. A stored row ignores the argument, which is exactly why
+		// `buildResearchUserPrompt` carries the classification in the user turn.
+		const researchPrompt = await resolvePrompt(
+			d1,
+			"helios_research",
+			buildResearchSystemPrompt(classified.data),
+		);
+		console.log(describePrompt("helios_research", researchPrompt));
+
+		const research = await runResearch(env, config, {
+			concept: req.concept,
+			classification: classified.data,
+			systemPrompt: researchPrompt.text,
+			pipeline_id: pipelineId,
+			image: req.image,
+		});
+		// No cost read here. The research call is ungated by decision, and reading
+		// one would return the classifier's cost and file it under research
+		// (ADR-SHARED-0005). `readGatewayCost`'s `stage` parameter is typed
+		// `"planner" | "image"` precisely so this is a compile error, not a habit.
+
 		stage = "planner";
 		const planned = await planConcept(env, config, {
 			concept: req.concept,
 			systemPrompt: plannerPrompt.text,
 			pipeline_id: pipelineId,
 			image: req.image,
+			// The classifier's answer and whatever research retrieved, composed into
+			// the slot the planner prompt has held open since Sprint 1.
+			constraints: buildPlannerConstraints(classified.data, research.context),
 		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
 		// on this binding, so the image stage would overwrite it. Real dollars, so
 		// `cost_usd` means the same thing on both rows. The provider's neuron
 		// figure is not lost, it rides in `usage` on the metadata below.
-		const textCostUsd = await readGatewayCost(env, "planner");
+		const plannerCostUsd = await readGatewayCost(env, "planner");
+
+		// Two gated calls, so the text row's single cost column holds their sum.
+		// `null` is not zero (ADR-0007), so a missing figure must not silently
+		// contribute 0 to a total that then reads as complete: the sum is null
+		// unless at least one side reported, and it adds only what did.
+		const textCostUsd =
+			classifyCostUsd === null && plannerCostUsd === null
+				? null
+				: (classifyCostUsd ?? 0) + (plannerCostUsd ?? 0);
 
 		stage = "validate";
 		params = HeliosParamsSchema.parse(planned.data);
@@ -314,6 +406,34 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			prompt_version: plannerPrompt.source === "code" ? PLANNER_PROMPT_ID : null,
 			prompt_source: plannerPrompt.source,
 			prompt_updated_at: plannerPrompt.updatedAt,
+			/**
+			 * The classify call, recorded beside the planner's rather than replacing
+			 * it. Both are real model calls on this row and `cost_usd` is their sum,
+			 * so a reader who cannot see the split cannot check the total.
+			 */
+			classifier: {
+				model: classified.model,
+				usage: classified.usage,
+				prompt_version:
+					classifierPrompt.source === "code" ? HELIOS_CLASSIFIER_PROMPT_VERSION : null,
+				prompt_source: classifierPrompt.source,
+				prompt_updated_at: classifierPrompt.updatedAt,
+				cost_usd: classifyCostUsd,
+			},
+			/**
+			 * What retrieval did, including when it did nothing.
+			 *
+			 * `enabled: false` (switched off), `quality: "none"` (the model chose
+			 * not to search) and `quality: "thin"` (it searched and found little)
+			 * are three different runs that would otherwise be indistinguishable
+			 * from a completed row. `cost_usd` is always null here and never 0 —
+			 * the call is ungated by decision, so several billed calls went
+			 * unmeasured, which is not the same as free.
+			 */
+			retrieval: research.metadata,
+			research_prompt_version:
+				researchPrompt.source === "code" ? HELIOS_RESEARCH_PROMPT_VERSION : null,
+			research_prompt_source: researchPrompt.source,
 			/**
 			 * Whether a reference image reached the planner on this run.
 			 *
@@ -335,6 +455,7 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			designSessionId,
 			concept: req.concept,
 			params,
+			classification: classified.data,
 			// The same image the planner saw. It now reaches the image model too,
 			// which is the point of ADR-SHARED-0003's successor: the picture used to
 			// influence the pixels only through the words the planner wrote about it.

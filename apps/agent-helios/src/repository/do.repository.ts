@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
-import type { HeliosParams } from "@aureline/shared-types";
+import type { Classification, HeliosParams } from "@aureline/shared-types";
 import type { HeliosDb } from "../db/client";
 import { heliosRuns, type HeliosRun, type NewHeliosRun } from "../db/schema";
 
@@ -41,6 +41,14 @@ type RowSeed = {
 	 */
 	plannerParams: HeliosParams | Record<string, never>;
 	modelMetadata: ModelMetadata;
+	/**
+	 * The classifier's answer, or `{}` on a row written before it ran.
+	 *
+	 * Optional here because the column has a database default of `{}` — a row
+	 * that omits it is opened unclassified, which is the honest state for a text
+	 * row created before the classifier is called.
+	 */
+	classification?: Classification | Record<string, never>;
 };
 
 /**
@@ -54,6 +62,37 @@ export async function startTextRun(db: HeliosDb, seed: Omit<RowSeed, "plannerPar
 		status: "running",
 		plannerParams: {},
 	});
+}
+
+/**
+ * Records what the classifier decided, as soon as it decides it.
+ *
+ * **Written at the classify stage rather than folded into `completeTextRun`**,
+ * so a run that fails at research or planner still says what kind of design it
+ * thought it was making. That is the difference between a failed row you can
+ * diagnose and one that only says it failed.
+ *
+ * Throws when there is no text row, for the reason `completeTextRun` does: a
+ * bare `UPDATE … WHERE` matching nothing resolves exactly as if it had worked.
+ */
+export async function recordClassification(
+	db: HeliosDb,
+	pipelineId: string,
+	classification: Classification,
+): Promise<void> {
+	const [existing] = await db
+		.select({ id: heliosRuns.id })
+		.from(heliosRuns)
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "text")));
+
+	if (!existing) {
+		throw new Error(`no text row to classify for pipeline_id ${pipelineId}`);
+	}
+
+	await db
+		.update(heliosRuns)
+		.set({ classification })
+		.where(and(eq(heliosRuns.pipelineId, pipelineId), eq(heliosRuns.modality, "text")));
 }
 
 /**

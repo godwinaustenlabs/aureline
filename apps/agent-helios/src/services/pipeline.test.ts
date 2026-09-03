@@ -8,8 +8,8 @@ import { heliosRuns } from "../db/schema";
 import { createTestDb, insertRow } from "../repository/test-db";
 import { upsertPrompt } from "../repository/prompts.repository";
 import { getD1Db } from "../db/client";
-import { buildPlannerSystemPrompt } from "../prompts";
-import { fakeEnv as sharedEnv } from "./test-env";
+import { appendPlannerConstraints, buildPlannerSystemPrompt } from "../prompts";
+import { fakeEnv as sharedEnv, GATEWAY_COST_USD } from "./test-env";
 // The same fixture the shared fake planner returns, so an assertion on
 // `result.params` is comparing against what the model actually said.
 import { sampleParamsFull as VALID_PARAMS, SAMPLE_DESIGN_SESSION_ID } from "../fixtures/sample-params";
@@ -57,14 +57,11 @@ const REQ: HeliosRequest = { concept: "art deco paisley", design_session_id: SAM
  * assertions pass `throwingD1: false` to get a database that really writes.
  */
 function fakeEnv(
-	overrides: {
-		planner?: unknown | Error;
-		image?: unknown | Error;
-		maxRetries?: number;
-		patternsPut?: "ok" | "fail";
-		aiGatewayLogId?: string | null;
-		throwingD1?: boolean;
-	} = {},
+	// Derived from the shared fake rather than restated. This was a hand-written
+	// copy of its overrides and it had already fallen behind — `classifier` was
+	// missing, so a test could pass one and be silently ignored. vitest does not
+	// typecheck, so only `npx tsc --noEmit` caught it.
+	overrides: Parameters<typeof sharedEnv>[0] = {},
 ) {
 	return sharedEnv({ throwingD1: overrides.throwingD1 ?? true, ...overrides });
 }
@@ -72,6 +69,21 @@ function fakeEnv(
 async function rowsFor(db: ReturnType<typeof createTestDb>, pipelineId: string) {
 	return db.select().from(heliosRuns).where(eq(heliosRuns.pipelineId, pipelineId));
 }
+
+/**
+ * The body of the planner's model call.
+ *
+ * Found by model id rather than by taking `calls[0]`, because since Phase 2 the
+ * classifier calls the model first. A positional read here would silently assert
+ * against the classifier's prompt and then pass or fail for the wrong reason.
+ */
+function plannerCall(run: { mock: { calls: unknown[][] } }) {
+	const call = run.mock.calls.find((args) => args[0] === "@cf/openai/gpt-oss-120b");
+	if (call === undefined) throw new Error("the planner was never called");
+
+	return call[1] as { messages: { role: string; content: string }[] };
+}
+
 
 describe("runPipeline failure behaviour", () => {
 	let db: ReturnType<typeof createTestDb>;
@@ -143,9 +155,13 @@ describe("runPipeline failure behaviour", () => {
 
 		expect(result.status).toBe("completed");
 
-		// The planner is the first call on the binding; the image call follows it.
-		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
-		expect(input.messages.find((message) => message.role === "system")?.content).toBe(edited);
+		const input = plannerCall(run);
+		// The stored prompt, with the constraints block appended. Since Phase 2 the
+		// planner always receives at least the design mode, so asserting the bare
+		// stored text would be asserting a prompt that is no longer sent.
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(
+			appendPlannerConstraints(edited, "Design mode: tile"),
+		);
 
 		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		const meta = textRow?.modelMetadata as Record<string, unknown>;
@@ -161,8 +177,10 @@ describe("runPipeline failure behaviour", () => {
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
-		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
-		expect(input.messages.find((message) => message.role === "system")?.content).toBe(buildPlannerSystemPrompt());
+		const input = plannerCall(run);
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(
+			appendPlannerConstraints(buildPlannerSystemPrompt(), "Design mode: tile"),
+		);
 
 		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		const meta = textRow?.modelMetadata as Record<string, unknown>;
@@ -245,8 +263,10 @@ describe("runPipeline failure behaviour", () => {
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(result.status).toBe("completed");
-		const input = run.mock.calls[0]?.[1] as { messages: { role: string; content: string }[] };
-		expect(input.messages.find((message) => message.role === "system")?.content).toBe(buildPlannerSystemPrompt());
+		const input = plannerCall(run);
+		expect(input.messages.find((message) => message.role === "system")?.content).toBe(
+			appendPlannerConstraints(buildPlannerSystemPrompt(), "Design mode: tile"),
+		);
 	});
 
 	it("gives two runs of one design different pipeline ids and the same design id", async () => {
@@ -261,16 +281,20 @@ describe("runPipeline failure behaviour", () => {
 		expect(first.design_session_id).toBe(second.design_session_id);
 	});
 
-	it("records the planner's cost in dollars, not in neurons", async () => {
+	it("records the text row's cost in dollars, not in neurons, and sums both gated calls", async () => {
 		// The text row used to hold the provider's neuron figure, 102 here, in a
 		// column called cost_usd, so any query summing the column across both
 		// modalities was out by four orders of magnitude.
+		//
+		// Two gated calls settle on this row since Phase 2 — classify and planner —
+		// so the column is their sum. The research call between them is ungated and
+		// contributes nothing, which is the decision working rather than a gap.
 		const { env } = fakeEnv();
 
 		const result = await runPipeline(db, REQ, env, ORIGIN);
 
 		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
-		expect(textRow?.costUsd).toBe(0.0019008);
+		expect(textRow?.costUsd).toBe(GATEWAY_COST_USD * 2);
 		expect(textRow?.costUsd).not.toBe(102);
 		// The neuron figure is not lost, it just belongs in usage rather than in a
 		// column that claims to be dollars.
@@ -449,5 +473,151 @@ describe("runPipeline failure behaviour", () => {
 		await runPipeline(db, REQ, env, ORIGIN);
 
 		expect(run.mock.calls.filter((call) => call[0] === VARS.IMAGE_MODEL)).toHaveLength(1);
+	});
+});
+describe("runPipeline stages", () => {
+	let db: ReturnType<typeof createTestDb>;
+
+	beforeEach(() => {
+		db = createTestDb();
+		vi.mocked(planConcept).mockReset();
+		vi.mocked(startTextRun).mockReset();
+	});
+
+	it("classifies before it plans, and plans before it renders", async () => {
+		// Order is load-bearing for cost, not only for correctness: classify is
+		// gated and research is not, so research runs between two gated calls and
+		// never sets aiGatewayLogId (ADR-SHARED-0005).
+		const { env, run } = fakeEnv();
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		const models = run.mock.calls.map(([model]) => model);
+		expect(models).toEqual([
+			"@cf/meta/llama-4-scout-17b-16e-instruct",
+			"@cf/openai/gpt-oss-120b",
+			"@cf/black-forest-labs/flux-1-schnell",
+		]);
+	});
+
+	it("makes no research call while research_model is empty", async () => {
+		// The committed default. Retrieval is off until HelioKB has documents, so
+		// a run costs one classify plus one planner call, exactly as before Phase 2
+		// plus the classifier.
+		const { env, run, search } = fakeEnv();
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(search).not.toHaveBeenCalled();
+		expect(run.mock.calls).toHaveLength(3);
+	});
+
+	it("writes the classification to its own column on both rows", async () => {
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		expect(rows).toHaveLength(2);
+		for (const row of rows) {
+			expect(row.classification).toEqual({ mode: "tile" });
+		}
+	});
+
+	it("keeps the classification out of planner_params", async () => {
+		// The column exists so HeliosParamsSchema never had to gain a mode field.
+		// A merge here would put a classifier decision into a planner output.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		expect(textRow?.plannerParams).toEqual(VALID_PARAMS);
+		expect(textRow?.plannerParams).not.toHaveProperty("mode");
+	});
+
+	it("passes the design mode to the planner as a constraint", async () => {
+		const { env, run } = fakeEnv();
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		const system = plannerCall(run).messages.find((message) => message.role === "system")?.content;
+		expect(system).toContain("# Brand and design constraints");
+		expect(system).toContain("Design mode: tile");
+	});
+
+	it("records what retrieval did, including that it was switched off", async () => {
+		// `enabled: false`, `quality: "none"` and `quality: "thin"` are three
+		// different runs that a completed row could not otherwise tell apart.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		const meta = textRow?.modelMetadata as { retrieval?: Record<string, unknown> };
+
+		expect(meta.retrieval).toEqual({
+			instance: "HelioKB",
+			enabled: false,
+			queries: [],
+			chunks: [],
+			iterations: 0,
+			quality: "none",
+			// Never 0. The call is ungated, so several billed calls went unmeasured
+			// — which is not the same statement as free (ADR-0007).
+			cost_usd: null,
+		});
+	});
+
+	it("records the classifier call beside the planner's, with its own cost", async () => {
+		// cost_usd on the row is their sum, so a reader who cannot see the split
+		// cannot check the total.
+		const { env } = fakeEnv();
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		const meta = textRow?.modelMetadata as { classifier?: Record<string, unknown> };
+
+		expect(meta.classifier).toMatchObject({
+			model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+			prompt_version: "helios-classifier-v1",
+			prompt_source: "code",
+			cost_usd: GATEWAY_COST_USD,
+		});
+	});
+
+	it("fails at classify, with both rows failed and no planner call", async () => {
+		// A classify failure stops the run. There is no default mode: a guessed
+		// classification completes looking entirely normal and writes an audit row
+		// claiming a decision nobody made.
+		const { env, run } = fakeEnv({ classifier: { response: '{"mode":"sticker"}' } });
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatch(/^classify:/);
+		expect(result.params).toBeNull();
+
+		const models = run.mock.calls.map(([model]) => model);
+		expect(models).not.toContain("@cf/openai/gpt-oss-120b");
+		expect(models).not.toContain("@cf/black-forest-labs/flux-1-schnell");
+
+		const rows = await rowsFor(db, result.pipeline_id);
+		expect(rows.every((row) => row.status === "failed")).toBe(true);
+	});
+
+	it("keeps the classification on a run that fails after classifying", async () => {
+		// Written at the classify stage rather than at completeTextRun, so a failed
+		// row still says what kind of design it thought it was making.
+		const { env } = fakeEnv({ planner: new Error("planner unavailable") });
+
+		const result = await runPipeline(db, REQ, env, ORIGIN);
+
+		expect(result.status).toBe("failed");
+		expect(result.error).toMatch(/^planner:/);
+
+		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
+		expect(textRow?.classification).toEqual({ mode: "tile" });
 	});
 });

@@ -53,9 +53,19 @@ const READ_BACKOFF_MS = [400, 1600];
  * the outside, and a silent null in a cost report reads as a free run.
  *
  * @param stage - Named in the log lines, so a null is attributable to the
- *   planner or the image call without guessing from timestamps.
+ *   classifier, the planner or the image call without guessing from timestamps.
+ *
+ *   **`"research"` is deliberately not a member of this union, and adding it
+ *   would be a bug rather than a feature.** The research call is ungated
+ *   (ADR-SHARED-0005), and an ungated call does not clear `aiGatewayLogId` — it
+ *   leaves whatever the last routed call put there. So a read after it returns
+ *   the *classifier's* cost and files it under research. This type is the only
+ *   thing stopping that, so widening it needs the ADR superseded first.
  */
-export async function readGatewayCost(env: Env, stage: "planner" | "image"): Promise<number | null> {
+export async function readGatewayCost(
+	env: Env,
+	stage: "classify" | "planner" | "image",
+): Promise<number | null> {
 	const logId = env.AI.aiGatewayLogId;
 	if (!logId) {
 		console.warn(`cost: ${stage} call left no gateway log id`);
