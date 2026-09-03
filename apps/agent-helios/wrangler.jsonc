@@ -128,20 +128,28 @@
 		"MAX_RESUME_ATTEMPTS": "3",
 		// fallback default — the live value is CONFIG:research_model in KV.
 		//
-		// The model that runs the agentic research loop. One of the few Workers AI
-		// models listing BOTH vision and function calling, which this stage needs:
-		// it is handed tools, and the user's reference image reaches it too.
+		// The model that runs the agentic research loop. Deliberately the same
+		// model the planner uses, so one model's behaviour has to be understood and
+		// tuned rather than two.
 		//
-		// Deliberately NOT the planner's model. The planner resolves to
-		// VISION_PLANNER_MODEL, which does not list function calling — reusing it
-		// would mean retrieval silently never fires on exactly the runs carrying an
-		// image, with no error anywhere.
+		// phase-2-plan §5.2 argues against this, on the grounds that
+		// llama-3.2-11b-vision-instruct "does not list function calling" and that
+		// retrieval would therefore silently never fire on runs carrying an image.
+		// That premise is wrong: its generated types accept `tools` and declare
+		// `tool_calls` on the output (worker-configuration.d.ts:6391-6408). It
+		// returns the flat, id-less tool-call shape, which runToolLoop reads.
+		//
+		// **Still unverified on a real call.** Vision-plus-tools in one request is
+		// the one combination nobody in this repo has actually sent (§18), and
+		// ADR-0007's notes record gpt-oss-120b answering `function_call: null`
+		// every time. If this model disappoints, the fix is this value, from KV,
+		// with no deploy — @cf/meta/llama-4-scout-17b-16e-instruct and
+		// @cf/zhipu/glm-5.3-flash both list vision and function calling too.
 		//
 		// Set it to "" to skip the research stage entirely. That is the off switch,
-		// it works from KV with no deploy, and it is how this engine runs before an
-		// AI Search instance exists. Empty is left empty here on purpose: retrieval
-		// stays off until a human confirms the knowledge base is indexed.
-		"RESEARCH_MODEL": "",
+		// and it is what a human sets until HelioKB is indexed and bound — a
+		// configured model with no AI_SEARCH binding fails the run at `research:`.
+		"RESEARCH_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
 		// fallback default — the live value is CONFIG:classifier_model in KV.
 		// Decides tile versus motif before anything else runs. Vision-capable
 		// because a photo of a repeating scarf print versus one of an embroidered
