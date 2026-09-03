@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
-import { createTestDb } from "../repository/test-db";
+import { createTestDb, insertRow } from "../repository/test-db";
 import type { HeliosDb } from "../db/client";
 import { fakeEnv as sharedEnv, GATEWAY_COST_USD } from "./test-env";
 import { SAMPLE_DESIGN_SESSION_ID, sampleParamsFull } from "../fixtures/sample-params";
@@ -418,7 +418,11 @@ describe("resumeRun refusals", () => {
 		await expectRefusal("never-happened", /no run/i);
 	});
 
-	it("refuses when the planner never succeeded, since there are no params to reuse", async () => {
+	it("re-runs the whole pipeline when the run never produced params", async () => {
+		// This used to refuse. Since Phase 2 a run can fail at classify or research
+		// — before the planner is even reached — and those are exactly the failures
+		// worth retrying, so it starts again from the top rather than sending the
+		// caller away.
 		await startTextRun(db, {
 			pipelineId: "planner-failed",
 			designSessionId: DESIGN_SESSION_ID,
@@ -427,7 +431,88 @@ describe("resumeRun refusals", () => {
 		});
 		await failRunningRuns(db, "planner-failed", null);
 
-		await expectRefusal("planner-failed", /planner never succeeded/i);
+		const { env } = fakeEnv();
+		const outcome = await resumeRun(db, "planner-failed", env, "http://localhost");
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+
+		expect(outcome.result.status).toBe("completed");
+		// A new run of Helios, so a new pipeline id — but the same design.
+		expect(outcome.result.pipeline_id).not.toBe("planner-failed");
+		expect(outcome.result.design_session_id).toBe(DESIGN_SESSION_ID);
+		// Params it did not have before, because the planner actually ran.
+		expect(outcome.result.params).not.toBeNull();
+	});
+
+	it("re-runs from the classifier, not from the planner", async () => {
+		// The distinction that makes this path different from the image-only
+		// resume: there are no params to reuse, so every stage runs again.
+		await startTextRun(db, {
+			pipelineId: "classify-failed",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL },
+		});
+		await failRunningRuns(db, "classify-failed", null);
+
+		const { env, run } = fakeEnv();
+		await resumeRun(db, "classify-failed", env, "http://localhost");
+
+		const models = run.mock.calls.map(([model]) => model);
+		expect(models).toContain("@cf/meta/llama-4-scout-17b-16e-instruct");
+		expect(models).toContain("@cf/openai/gpt-oss-120b");
+	});
+
+	it("counts a full re-run against the resume cap, like any other resume", async () => {
+		// It spends a classify, a planner and an image call — more than the
+		// image-only path, not less — so a cap that could not see it would be no
+		// cap at all.
+		await startTextRun(db, {
+			pipelineId: "capped",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL, root: "capped" },
+		});
+		await failRunningRuns(db, "capped", null);
+		// Three image rows already charged to this root, at the default cap of 3.
+		for (const id of ["a", "b", "c"]) {
+			await insertRow(db, { pipelineId: id, modality: "image", modelMetadata: { root: "capped" } });
+		}
+
+		await expectRefusal("capped", /already been resumed 3 times/i);
+	});
+
+	it("carries the lineage onto the re-run's rows, so the next resume can count it", async () => {
+		await startTextRun(db, {
+			pipelineId: "lineage",
+			designSessionId: DESIGN_SESSION_ID,
+			userPrompt: "a concept",
+			modelMetadata: { model: TEXT_MODEL },
+		});
+		await failRunningRuns(db, "lineage", null);
+
+		const { env } = fakeEnv();
+		const outcome = await resumeRun(db, "lineage", env, "http://localhost");
+		if (!outcome.ok) throw new Error("expected the re-run to be attempted");
+
+		const rows = await db
+			.select()
+			.from(heliosRuns)
+			.where(eq(heliosRuns.pipelineId, outcome.result.pipeline_id));
+
+		for (const row of rows) {
+			expect(row.modelMetadata).toMatchObject({ root: "lineage", resumed_from: "lineage", attempt: 2 });
+		}
+	});
+
+	it("refuses a run with no text row at all, which is a different thing", async () => {
+		// Separated from the failure above (AGENTS.md §7): one is an incomplete
+		// record and resuming would build on state that was never written; the
+		// other is a run worth retrying. They now get opposite answers.
+		await insertRow(db, { pipelineId: "image-only", modality: "image", status: "failed" });
+
+		await expectRefusal("image-only", /has no text row/i);
 	});
 
 	it("refuses a run that already has an image, because that would be a second charge", async () => {
