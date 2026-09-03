@@ -19,4 +19,5 @@ export {
 export {
 	HELIOS_RESEARCH_PROMPT_VERSION,
 	buildResearchSystemPrompt,
+	buildResearchUserPrompt,
 } from "./research.prompt";

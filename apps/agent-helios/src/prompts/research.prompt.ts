@@ -90,3 +90,26 @@ It can also mean the knowledge base genuinely has nothing on the subject. If a s
 
 When you are done searching, briefly state what you found and what it means for this design. If you searched nothing, say that instead.`;
 }
+
+/**
+ * The user turn: the brief, and what has already been decided about it.
+ *
+ * **The classification is repeated here even though `buildResearchSystemPrompt`
+ * already states it, and that is not redundancy — it is the only copy that
+ * survives.** The system prompt is database-backed: `resolvePrompt` returns the
+ * stored row whenever there is one, and a stored row is a static string with no
+ * classification baked into it. So on every run where somebody has edited the
+ * prompt in the playground — which is most runs, eventually — the system
+ * prompt's mode guidance is gone and this is what tells the model whether it is
+ * researching a tile or a motif.
+ *
+ * Losing it would not fail anything. The model would search plausibly and
+ * generically, the run would complete, and the only symptom would be retrieval
+ * that stopped being about the right kind of design.
+ */
+export function buildResearchUserPrompt(concept: string, classification: Classification): string {
+	const part =
+		classification.garment_part === undefined ? "" : `\nGarment part: ${classification.garment_part}`;
+
+	return `Brief: ${concept}\nDesign mode: ${classification.mode}${part}`;
+}
