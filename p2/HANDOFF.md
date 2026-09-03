@@ -116,6 +116,12 @@ Build to the code.
 ### Human only — nothing works without these
 
 1. **Upload documents to HelioKB and index them.** Everything built retrieves from it. Until it has content, the best possible outcome is `quality: "thin"` on every run.
+
+   **A starter knowledge base is in [knowledge-base/](knowledge-base/)** — three Markdown documents covering tile repeats and edge continuity, motifs and garment placement, and linework/texture/contrast. Upload all three as they are; they are enough to exercise the whole retrieval path end to end.
+
+   They are written so that **every value the planner can emit appears in them** — all five `repeat_type` values, all five `texture_technique` values, every garment part, every scale/density/contrast level. That is the point: retrieved prose the planner cannot act on is worse than no retrieval, because it looks like evidence. Sections are 400–900 characters, comfortably over `min_chunk_chars: 200`, so a single-section hit returns `quality: "ok"` rather than `"thin"`.
+
+   No filenames are referenced anywhere, including between the documents — the tool description is deliberately general because the KB layout is expected to change, and anything assuming a filename breaks silently when someone reorganises. **Tune the grounding by editing these documents, not the code.** They are general textile reference, not Aureline house style; replace them with studio opinion where you have it.
 2. **Apply the D1 migration:** `wrangler d1 migrations apply helios-d1 --remote`. **Stop the dev server first** — it holds the files open and the command silently does nothing. The DO-local migration applies itself on next wake.
 3. **Turn retrieval on,** once 1 and 2 are done: set the KV key `research_model` to `@cf/meta/llama-3.2-11b-vision-instruct`. No deploy. It ships empty on purpose, so an unindexed KB cannot bill a research call on every request.
 4. **Confirm `HelioKB` is the exact dashboard string.** Nothing validates `instance_name` at build time; a wrong name surfaces only on a live call.

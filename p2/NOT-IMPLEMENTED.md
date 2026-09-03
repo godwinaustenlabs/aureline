@@ -126,4 +126,4 @@ Whichever is chosen, `apps/agent-iris/src/services/research.ts` should take `cla
 
 **The migrations are generated but not applied.** `wrangler d1 migrations apply helios-d1 --remote`, with the dev server stopped. The `classification` column exists in code, in both migration directories, and in no live database.
 
-**HelioKB has no documents.** Retrieval is switched off (`research_model: ""`) for exactly that reason: with an empty index every run would make a billed research call, retrieve nothing, warn, and proceed.
+**HelioKB has no documents indexed yet.** Retrieval is switched off (`research_model: ""`) for exactly that reason: with an empty index every run would make a billed research call, retrieve nothing, warn, and proceed. A starter set of three documents is in [knowledge-base/](knowledge-base/), ready to upload — see step 1 of the human-only list in [HANDOFF.md](HANDOFF.md).
