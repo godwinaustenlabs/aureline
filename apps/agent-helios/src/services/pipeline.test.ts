@@ -167,7 +167,7 @@ describe("runPipeline failure behaviour", () => {
 		const textRow = (await rowsFor(db, result.pipeline_id)).find((row) => row.modality === "text");
 		const meta = textRow?.modelMetadata as Record<string, unknown>;
 		expect(meta).toHaveProperty("prompt_source", "code");
-		expect(meta).toHaveProperty("prompt_version", "helios-planner-v2");
+		expect(meta).toHaveProperty("prompt_version", "helios-planner-v3");
 		expect(meta).toHaveProperty("prompt_updated_at", null);
 		expect(meta).toHaveProperty("had_reference_image", false);
 	});

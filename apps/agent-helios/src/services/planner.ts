@@ -1,5 +1,5 @@
 import type { ReferenceImage } from "@aureline/shared-types";
-import { buildPlannerUserPrompt } from "../prompts";
+import { appendPlannerConstraints, buildPlannerUserPrompt } from "../prompts";
 import { callPlannerModel } from "../tools";
 import { plannerModelFor, type HeliosConfig } from "../config";
 
@@ -43,9 +43,24 @@ export async function planConcept(
 		 * as an option rather than the call being restructured around it.
 		 */
 		image?: ReferenceImage;
+		/**
+		 * The classifier's answer and whatever the research stage retrieved,
+		 * already composed by `buildPlannerConstraints`.
+		 *
+		 * **Appended to the resolved system prompt rather than passed to
+		 * `buildPlannerSystemPrompt`.** The system prompt arrives here already
+		 * resolved — from the `prompts` table when a row exists, from the code
+		 * fallback otherwise — and calling the builder here would throw away a
+		 * playground-edited prompt on every run that had retrieval. So the
+		 * constraints block is composed onto whichever text won.
+		 *
+		 * Optional and absent by default, so a run without it sends exactly the
+		 * body it sent before this parameter existed.
+		 */
+		constraints?: string;
 	}
 ) {
-	const { concept, systemPrompt, pipeline_id, image } = run;
+	const { concept, systemPrompt, pipeline_id, image, constraints } = run;
 	const userPrompt = buildPlannerUserPrompt(concept);
 
 	// The vision model when one is configured, `textModel` otherwise. Resolved
@@ -59,11 +74,11 @@ export async function planConcept(
 	// arrived" — and the vision model is used for every request, so a failure
 	// here breaks text-only runs too.
 	console.log(
-		`planner: model=${model.model} images=${image === undefined ? 0 : 1} pipeline=${pipeline_id}`,
+		`planner: model=${model.model} images=${image === undefined ? 0 : 1} constraints=${constraints === undefined ? 0 : constraints.length} pipeline=${pipeline_id}`,
 	);
 
 	const result = await callPlannerModel(
-		systemPrompt,
+		appendPlannerConstraints(systemPrompt, constraints),
 		userPrompt,
 		model.model,
 		env.AI,
