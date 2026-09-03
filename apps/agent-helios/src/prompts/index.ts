@@ -15,3 +15,8 @@ export {
 	HELIOS_CLASSIFIER_PROMPT_VERSION,
 	buildClassifierSystemPrompt,
 } from "./classifier.prompt";
+
+export {
+	HELIOS_RESEARCH_PROMPT_VERSION,
+	buildResearchSystemPrompt,
+} from "./research.prompt";
