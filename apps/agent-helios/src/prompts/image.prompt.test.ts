@@ -95,7 +95,7 @@ describe("buildImagePrompt and the image_prompt layer", () => {
 	it("exports a bumped version id", () => {
 		// Prompts are never edited in place; the id is how a stored run says which
 		// wording produced it.
-		expect(IMAGE_PROMPT_ID).toBe("helios-image-v3");
+		expect(IMAGE_PROMPT_ID).toBe("helios-image-v4");
 	});
 });
 
@@ -147,5 +147,109 @@ describe("buildImagePrompt and the reference image clause", () => {
 
 		const exclusions = (text: string) => text.slice(text.indexOf("Do not include:"));
 		expect(exclusions(withReference)).toBe(exclusions(without));
+	});
+});
+
+describe("buildImagePrompt and the design mode", () => {
+	const TILE = { mode: "tile" } as const;
+	const MOTIF = { mode: "motif" } as const;
+	const MOTIF_AT_NECKLINE = { mode: "motif", garment_part: "neckline" } as const;
+
+	it("treats an absent classification as a tile", () => {
+		// Not a guess: every run before Phase 2 was a tile, and /resume passes no
+		// classification at all. What it is NOT is byte-identical to v3 — v4 adds
+		// the edge clause to every tile, which is the point of the bump. The
+		// promise is that an unclassified run still renders a valid tile.
+		expect(buildImagePrompt(sampleParamsFull).prompt).toBe(
+			buildImagePrompt(sampleParamsFull, { classification: TILE }).prompt,
+		);
+		expect(buildImagePrompt(sampleParamsFull).prompt).toContain("seamless repeating textile pattern swatch");
+	});
+
+	it("leads a tile with the allover-repeat declaration and promises continuous edges", () => {
+		const { prompt } = buildImagePrompt(sampleParamsFull, { classification: TILE });
+
+		expect(prompt.startsWith("A flat seamless repeating textile pattern swatch")).toBe(true);
+		expect(prompt).toContain("no seam shows where copies meet");
+	});
+
+	it("leads a motif with a self-contained declaration instead", () => {
+		// A replacement, not an addition: "an allover repeat" and "one
+		// self-contained element" cannot both describe the same image, and Flux
+		// weights the leading clause most heavily.
+		const { prompt } = buildImagePrompt(sampleParamsFull, { classification: MOTIF });
+
+		expect(prompt.startsWith("A single flat textile motif")).toBe(true);
+		expect(prompt).toContain("not a repeating pattern");
+		expect(prompt).not.toContain("seamless repeating textile pattern swatch");
+	});
+
+	it("keeps the two modes mutually exclusive", () => {
+		const tile = buildImagePrompt(sampleParamsFull, { classification: TILE }).prompt;
+		const motif = buildImagePrompt(sampleParamsFull, { classification: MOTIF }).prompt;
+
+		expect(tile).not.toContain("A single flat textile motif");
+		expect(motif).not.toContain("no seam shows where copies meet");
+	});
+
+	it("names the garment part when the motif has one", () => {
+		const { prompt } = buildImagePrompt(sampleParamsFull, { classification: MOTIF_AT_NECKLINE });
+
+		expect(prompt).toContain("for the neckline of a garment");
+	});
+
+	it("says nothing about placement when the motif has no part", () => {
+		// An invented part would tailor the design to somewhere nobody asked for.
+		expect(buildImagePrompt(sampleParamsFull, { classification: MOTIF }).prompt).not.toContain("of a garment");
+	});
+
+	it("drops the repeat phrase for a motif, which does not repeat", () => {
+		const { prompt } = buildImagePrompt(sampleParamsFull, { classification: MOTIF });
+
+		expect(prompt).toContain("motif,");
+		expect(prompt).not.toMatch(/half-drop|brick|straight repeat|mirrored/);
+	});
+
+	it("stops forbidding a single centred illustration on a motif, which is what a motif is", () => {
+		// The one exclusion that is mode-dependent. Leaving it in place would
+		// forbid the output on every motif run.
+		const motif = buildImagePrompt(sampleParamsFull, {
+			supportsNegativePrompt: false,
+			classification: MOTIF,
+		}).prompt;
+		const tile = buildImagePrompt(sampleParamsFull, {
+			supportsNegativePrompt: false,
+			classification: TILE,
+		}).prompt;
+
+		expect(tile).toContain("a single centred illustration");
+		expect(motif).not.toContain("a single centred illustration");
+	});
+
+	it("keeps every other exclusion on a motif, colour above all", () => {
+		// ADR-0002 is a promise about colour and is never mode-dependent.
+		const { negative_prompt } = buildImagePrompt(sampleParamsFull, { classification: MOTIF });
+
+		expect(negative_prompt).toContain("colour");
+		expect(negative_prompt).toContain("text, letters, numbers, signature or watermark");
+		expect(negative_prompt).toContain("photograph, fabric drape, folds or product mockup");
+	});
+
+	it("keeps the monochrome lock on a motif", () => {
+		expect(buildImagePrompt(sampleParamsFull, { classification: MOTIF }).prompt).toContain(
+			"no colour of any kind",
+		);
+	});
+
+	it("puts the mode clause before the exclusions on both modes", () => {
+		for (const classification of [TILE, MOTIF]) {
+			const { prompt } = buildImagePrompt(sampleParamsFull, {
+				supportsNegativePrompt: false,
+				classification,
+			});
+			const lead = classification.mode === "tile" ? "A flat seamless" : "A single flat textile motif";
+
+			expect(prompt.indexOf(lead)).toBeLessThan(prompt.indexOf("Do not include:"));
+		}
 	});
 });

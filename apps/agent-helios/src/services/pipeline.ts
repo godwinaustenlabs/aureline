@@ -229,7 +229,16 @@ export async function runImageStage(
 		});
 		rowOpened = true;
 
-		const image = await generateImage(params, config, env, pipelineId, referenceImage);
+		// A tile-only classification, or none on a resume, is exactly what the
+		// image prompt treats as "tile" — its default.
+		const image = await generateImage(
+			params,
+			config,
+			env,
+			pipelineId,
+			referenceImage,
+			isClassification(classification) ? classification : undefined,
+		);
 		costUsd = image.cost_usd;
 
 		const imageR2Key = await savePatternImage(env.PATTERNS, pipelineId, image.image, image.contentType);
@@ -506,4 +515,17 @@ export async function runPipeline(db: HeliosDb, req: HeliosRequest, env: Env, or
 			error: `${stage}: ${describeError(cause)}`,
 		};
 	}
+}
+
+/**
+ * Whether a stored classification is a real one rather than the `{}` a row
+ * carries before the classifier has run, or on a resume.
+ *
+ * A narrowing rather than a parse: this value came from our own column a few
+ * lines ago, and re-validating it here would mean deciding what to do when our
+ * own write fails to parse. `mode` being present is the whole question — the
+ * image prompt reads nothing else except `garment_part`.
+ */
+function isClassification(value: Classification | Record<string, never> | undefined): value is Classification {
+	return value !== undefined && "mode" in value;
 }

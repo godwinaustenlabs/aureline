@@ -621,3 +621,44 @@ describe("runPipeline stages", () => {
 		expect(textRow?.classification).toEqual({ mode: "tile" });
 	});
 });
+
+describe("runPipeline and the image prompt", () => {
+	let db: ReturnType<typeof createTestDb>;
+
+	beforeEach(() => {
+		db = createTestDb();
+		vi.mocked(planConcept).mockReset();
+	});
+
+	it("renders a motif run with the motif declaration and its garment part", async () => {
+		// End to end: the classifier's answer reaches the image model's prompt.
+		// Everything between is wiring, and wiring is what silently drops things.
+		const { env, run } = fakeEnv({
+			classifier: { response: JSON.stringify({ mode: "motif", garment_part: "neckline" }) },
+		});
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		const imageCall = run.mock.calls.find(([model]) => model === "@cf/black-forest-labs/flux-1-schnell");
+		const prompt = (imageCall?.[1] as { prompt: string }).prompt;
+
+		expect(prompt).toContain("A single flat textile motif for the neckline of a garment");
+		expect(prompt).not.toContain("seamless repeating textile pattern swatch");
+		// A motif is a single centred illustration, so that exclusion is dropped —
+		// but never the colour one.
+		expect(prompt).not.toContain("a single centred illustration");
+		expect(prompt).toContain("Do not include: colour");
+	});
+
+	it("renders a tile run as an allover repeat", async () => {
+		const { env, run } = fakeEnv();
+
+		await runPipeline(db, REQ, env, ORIGIN);
+
+		const imageCall = run.mock.calls.find(([model]) => model === "@cf/black-forest-labs/flux-1-schnell");
+		const prompt = (imageCall?.[1] as { prompt: string }).prompt;
+
+		expect(prompt).toContain("A flat seamless repeating textile pattern swatch");
+		expect(prompt).toContain("no seam shows where copies meet");
+	});
+});
