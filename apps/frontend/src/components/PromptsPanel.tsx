@@ -32,14 +32,18 @@ const SLOT_LABELS: Record<string, string> = {
 /**
  * The slots the engine reads today. The rest are stored but not yet wired up.
  *
- * `helios_classifier` and `helios_research` are deliberately NOT here yet. The
- * two stages exist and are tested, but nothing calls them until the pipeline is
- * wired (phase-2-plan §10.1) — so listing them would put an editable prompt on
- * screen with no "not read yet" chip, which is exactly the silently-does-nothing
- * failure `ENGINE_SLOTS`' own comment says this screen must not have. Add them
- * in the same change that wires the stages.
+ * `helios_classifier` and `helios_research` joined once the pipeline actually
+ * resolved them. Note what `helios_research` being live does NOT mean: the
+ * research stage is skipped entirely while `research_model` is empty, which is
+ * its committed default. The prompt is read on every run either way, so the
+ * chip would be lying if it stayed.
  */
-const LIVE_SLOTS = new Set(['iris_planner', 'helios_planner']);
+const LIVE_SLOTS = new Set([
+	'iris_planner',
+	'helios_planner',
+	'helios_classifier',
+	'helios_research',
+]);
 
 export function PromptsPanel() {
 	const [engine, setEngine] = useState<EngineName>('iris');

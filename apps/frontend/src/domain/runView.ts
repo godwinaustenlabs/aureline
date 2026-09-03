@@ -47,6 +47,22 @@ export interface RunGroup {
 	 *  reason is a perfectly good outcome. */
 	resumable: boolean;
 	lineage: Lineage;
+	/**
+	 * What the classifier decided, when this is a Helios run that has one.
+	 *
+	 * Null on an Iris run, on a Helios run from before Phase 2, and on one that
+	 * failed before the classifier settled. All three genuinely have no
+	 * classification, and null says so where a default `"tile"` would invent one.
+	 */
+	classification: RunClassification | null;
+}
+
+/** The classifier's answer as the screen needs it. */
+export interface RunClassification {
+	mode: 'tile' | 'motif';
+	/** Present on a motif that named a place. Null otherwise, including on every
+	 *  tile — a tile covers cloth and has no one part. */
+	garmentPart: string | null;
 }
 
 /**
@@ -90,6 +106,9 @@ function toRunGroup(pipelineId: string, rows: RunRow[]): RunGroup {
 		// the one a resume marks without fail. The text row carries the same
 		// markers, so it is a safe fallback for a group missing its image row.
 		lineage: readLineage(image?.modelMetadata ?? text?.modelMetadata),
+		// The text row first: it is the one the classifier writes directly, and the
+		// image row only carries a copy. A group missing its text row falls back.
+		classification: readClassification(text?.classification ?? image?.classification),
 	};
 }
 
@@ -183,6 +202,27 @@ export function readLineage(metadata: unknown): Lineage {
 	};
 }
 
+/**
+ * Reads the classification out of its column, which arrives untrusted.
+ *
+ * Returns null for anything that is not a recognised mode — `{}` on a row from
+ * before the column existed, a row that failed before classifying, an Iris row
+ * that has no column at all, or a value written under some later schema. All of
+ * those mean "no classification", and inventing a default here would put a mode
+ * on screen that nothing decided.
+ */
+export function readClassification(value: unknown): RunClassification | null {
+	const fields = asRecord(value);
+
+	if (fields.mode !== 'tile' && fields.mode !== 'motif') return null;
+
+	return {
+		mode: fields.mode,
+		// snake_case on the way in: the worker writes it as a literal JSON key.
+		garmentPart: typeof fields.garment_part === 'string' ? fields.garment_part : null,
+	};
+}
+
 /** The model named on a row, from `model_metadata.model`. */
 export function readModel(metadata: unknown): string | null {
 	const model = asRecord(metadata).model;
@@ -210,4 +250,68 @@ export function plannerWasSkipped(metadata: unknown): boolean {
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+/**
+ * One design, and every run that went into it.
+ *
+ * This is what `design_session_id` is for (AGENTS.md §3): "the id that answers
+ * 'show me everything that went into this design'". Until now the screen showed
+ * it as a value to compare by eye between two tables; this makes it a grouping.
+ */
+export interface DesignGroup {
+	designSessionId: string;
+	/** Newest first, in the order `groupRows` produced them. */
+	runs: RunGroup[];
+	/**
+	 * Every garment part this design has runs for, in first-seen order.
+	 *
+	 * The reason the grouping is worth having: a motif design is built one part
+	 * at a time, one run each, and this is what shows the neckline, sleeve and
+	 * body runs as one set rather than three unrelated rows.
+	 */
+	garmentParts: string[];
+	/** Null when no run in the design recorded a cost — never 0, for the reason
+	 *  `RunGroup.totalCostUsd` is never 0. */
+	totalCostUsd: number | null;
+}
+
+/**
+ * Groups invocations by the design they belong to, newest design first.
+ *
+ * Runs with no `design_session_id` — rows written before the column existed —
+ * are deliberately NOT collapsed into one "" bucket, which would present
+ * unrelated old runs as a single design. They each become their own group,
+ * keyed by pipeline id, which is the truthful reading of "we do not know what
+ * design this belonged to".
+ */
+export function groupByDesign(groups: RunGroup[]): DesignGroup[] {
+	const byDesign = new Map<string, RunGroup[]>();
+
+	for (const group of groups) {
+		const key = group.designSessionId === '' ? ` unknown:${group.pipelineId}` : group.designSessionId;
+		const existing = byDesign.get(key);
+		if (existing) {
+			existing.push(group);
+		} else {
+			byDesign.set(key, [group]);
+		}
+	}
+
+	return [...byDesign.values()].map((runs) => {
+		const costs = runs.map((run) => run.totalCostUsd).filter((cost): cost is number => cost !== null);
+		const parts: string[] = [];
+
+		for (const run of runs) {
+			const part = run.classification?.garmentPart;
+			if (part != null && !parts.includes(part)) parts.push(part);
+		}
+
+		return {
+			designSessionId: runs[0]?.designSessionId ?? '',
+			runs,
+			garmentParts: parts,
+			totalCostUsd: costs.length === 0 ? null : costs.reduce((total, cost) => total + cost, 0),
+		};
+	});
 }
