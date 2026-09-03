@@ -30,11 +30,11 @@ describe("prompts repository", () => {
 
 	it("lists every stored prompt", async () => {
 		await upsertPrompt(d1, { slot: "helios_planner", promptText: PROMPT });
-		await upsertPrompt(d1, { slot: "helios_image", promptText: `${PROMPT} Second slot.` });
+		await upsertPrompt(d1, { slot: "helios_classifier", promptText: `${PROMPT} Second slot.` });
 
 		const slots = (await listPrompts(d1)).map((row) => row.slot).sort();
 
-		expect(slots).toEqual(["helios_image", "helios_planner"].sort());
+		expect(slots).toEqual(["helios_classifier", "helios_planner"].sort());
 	});
 
 	/**

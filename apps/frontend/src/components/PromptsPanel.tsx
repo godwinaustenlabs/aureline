@@ -25,10 +25,20 @@ const SLOT_LABELS: Record<string, string> = {
 	iris_planner: 'Planner system prompt — turns a brief into colour parameters',
 	iris_color: 'Colour prompt — turns those parameters into a sentence for the image model',
 	helios_planner: 'Planner system prompt — turns a brief into pattern parameters',
-	helios_image: 'Image prompt — turns those parameters into a sentence for Flux',
+	helios_classifier: 'Classifier prompt — decides whether a brief is a repeating tile or a single motif',
+	helios_research: 'Research prompt — tells the model when to search the knowledge base, and when not to',
 };
 
-/** The slots the engine reads today. The rest are stored but not yet wired up. */
+/**
+ * The slots the engine reads today. The rest are stored but not yet wired up.
+ *
+ * `helios_classifier` and `helios_research` are deliberately NOT here yet. The
+ * two stages exist and are tested, but nothing calls them until the pipeline is
+ * wired (phase-2-plan §10.1) — so listing them would put an editable prompt on
+ * screen with no "not read yet" chip, which is exactly the silently-does-nothing
+ * failure `ENGINE_SLOTS`' own comment says this screen must not have. Add them
+ * in the same change that wires the stages.
+ */
 const LIVE_SLOTS = new Set(['iris_planner', 'helios_planner']);
 
 export function PromptsPanel() {

@@ -33,6 +33,18 @@ describe("listPrompts", () => {
 		expect(view.find((p) => p.slot === "iris_color")?.promptText).toBeNull();
 	});
 
+	it("returns Helios's three slots, including the two Phase 2 added", async () => {
+		// The whitelist mirrors `db/schema.d1.ts` across a workspace boundary and
+		// nothing enforces the match, so it is asserted here rather than assumed.
+		const view = await listPrompts(db, "helios");
+
+		expect(view.map((p) => p.slot)).toEqual([
+			"helios_planner",
+			"helios_classifier",
+			"helios_research",
+		]);
+	});
+
 	/** Each engine has its own database, so a slot of the other one never shows. */
 	it("ignores rows belonging to another engine's slots", async () => {
 		await seed(db, "helios_planner", PROMPT);
@@ -102,5 +114,14 @@ describe("slot whitelist", () => {
 		expect(isSlotOf("helios", "iris_color")).toBe(false);
 		expect(isSlotOf("iris", "made_up")).toBe(false);
 		expect(isSlotOf("iris", 42)).toBe(false);
+	});
+
+	it("accepts Helios's Phase 2 slots and refuses the one that was removed", () => {
+		expect(isSlotOf("helios", "helios_classifier")).toBe(true);
+		expect(isSlotOf("helios", "helios_research")).toBe(true);
+		// `helios_image` was a slot nothing ever read. Removing it from the union
+		// leaves any stored row inert; what must not happen is the playground
+		// continuing to offer it as an editable box.
+		expect(isSlotOf("helios", "helios_image")).toBe(false);
 	});
 });
