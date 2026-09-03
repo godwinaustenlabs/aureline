@@ -51,7 +51,10 @@
 	 * (namespace "HELIOS_CONFIG") and they take effect within about a minute,
 	 * with no redeploy.
 	 *
-	 * Keys: text_model, image_model, max_retries, retention_limit.
+	 * Keys: text_model, vision_planner_model, image_model, image_to_image_model,
+	 * max_retries, retention_limit, max_resume_attempts, research_model,
+	 * classifier_model, max_tool_iterations, max_search_results, min_chunk_chars,
+	 * search_match_threshold, ai_search_query_rewrite.
 	 * The matching entries in `vars` below are the committed fallbacks used when
 	 * a key is absent or its value is invalid.
 	 *
@@ -123,6 +126,55 @@
 		// How many times one brief may be resumed, so 3 is an original plus three
 		// retries. Every retry spends the image model.
 		"MAX_RESUME_ATTEMPTS": "3",
+		// fallback default — the live value is CONFIG:research_model in KV.
+		//
+		// The model that runs the agentic research loop. One of the few Workers AI
+		// models listing BOTH vision and function calling, which this stage needs:
+		// it is handed tools, and the user's reference image reaches it too.
+		//
+		// Deliberately NOT the planner's model. The planner resolves to
+		// VISION_PLANNER_MODEL, which does not list function calling — reusing it
+		// would mean retrieval silently never fires on exactly the runs carrying an
+		// image, with no error anywhere.
+		//
+		// Set it to "" to skip the research stage entirely. That is the off switch,
+		// it works from KV with no deploy, and it is how this engine runs before an
+		// AI Search instance exists. Empty is left empty here on purpose: retrieval
+		// stays off until a human confirms the knowledge base is indexed.
+		"RESEARCH_MODEL": "",
+		// fallback default — the live value is CONFIG:classifier_model in KV.
+		// Decides tile versus motif before anything else runs. Vision-capable
+		// because a photo of a repeating scarf print versus one of an embroidered
+		// neckline is precisely the signal that separates the two.
+		//
+		// Unlike RESEARCH_MODEL there is no off switch: a classify failure stops
+		// the run, so "" here is a typo rather than an intent.
+		"CLASSIFIER_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+		// fallback default — the live value is CONFIG:max_tool_iterations in KV.
+		// Ceiling on billed model calls inside the research loop (AGENTS.md §7).
+		"MAX_TOOL_ITERATIONS": "3",
+		// fallback default — the live value is CONFIG:max_search_results in KV.
+		// Passed to AI Search as max_num_results.
+		"MAX_SEARCH_RESULTS": "5",
+		// fallback default — the live value is CONFIG:min_chunk_chars in KV.
+		// Under this many characters of retrieved text, a result is "thin": the
+		// model is told so and given a chance to rephrase.
+		"MIN_CHUNK_CHARS": "200",
+		// fallback default — the live value is CONFIG:search_match_threshold in KV.
+		//
+		// A similarity floor between 0 and 1, and a STARTING GUESS rather than a
+		// tuned value. On a new knowledge base a threshold set too high returns
+		// zero chunks on every query and looks exactly like a broken binding —
+		// check the scores in the first runs' logs before trusting this number.
+		"SEARCH_MATCH_THRESHOLD": "0.5",
+		// fallback default — the live value is CONFIG:ai_search_query_rewrite in KV.
+		//
+		// Whether AI Search rewrites the query with its own LLM before searching.
+		// Off, because the research model is already writing the query itself —
+		// that is the whole point of the agentic design — so rewriting adds a
+		// second billed model call we do not control, per search. The key exists
+		// so it can be A/B'd from KV later.
+		"AI_SEARCH_QUERY_REWRITE": "false",
 		// Browser origins allowed to call this worker from JavaScript (ticket 09).
 		// Comma separated, exact origins, no trailing slash. Anything not listed
 		// is refused at preflight.

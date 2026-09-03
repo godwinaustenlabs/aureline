@@ -28,6 +28,17 @@ const VARS = {
 	MAX_RETRIES: "2",
 	RETENTION_LIMIT: "5",
 	MAX_RESUME_ATTEMPTS: "3",
+	// Empty by default, exactly like VISION_PLANNER_MODEL above and for the same
+	// reason: `researchModelFor` reads it as "retrieval off", so every existing
+	// suite keeps making the calls it always did. A suite that wants the research
+	// stage opts in rather than every other suite opting out.
+	RESEARCH_MODEL: "",
+	CLASSIFIER_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
+	MAX_TOOL_ITERATIONS: "3",
+	MAX_SEARCH_RESULTS: "5",
+	MIN_CHUNK_CHARS: "200",
+	SEARCH_MATCH_THRESHOLD: "0.5",
+	AI_SEARCH_QUERY_REWRITE: "false",
 };
 
 /**
@@ -133,6 +144,13 @@ export function fakeEnv(
 		MAX_RETRIES: vars.MAX_RETRIES,
 		RETENTION_LIMIT: vars.RETENTION_LIMIT,
 		MAX_RESUME_ATTEMPTS: vars.MAX_RESUME_ATTEMPTS,
+		RESEARCH_MODEL: vars.RESEARCH_MODEL,
+		CLASSIFIER_MODEL: vars.CLASSIFIER_MODEL,
+		MAX_TOOL_ITERATIONS: vars.MAX_TOOL_ITERATIONS,
+		MAX_SEARCH_RESULTS: vars.MAX_SEARCH_RESULTS,
+		MIN_CHUNK_CHARS: vars.MIN_CHUNK_CHARS,
+		SEARCH_MATCH_THRESHOLD: vars.SEARCH_MATCH_THRESHOLD,
+		AI_SEARCH_QUERY_REWRITE: vars.AI_SEARCH_QUERY_REWRITE,
 	} as unknown as Env;
 
 	// `d1` comes back so a suite can read what the export actually wrote, which

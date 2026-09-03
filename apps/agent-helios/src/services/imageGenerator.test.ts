@@ -35,6 +35,17 @@ const CONFIG: HeliosConfig = {
 	maxRetries: 2,
 	retentionLimit: 5,
 	maxResumeAttempts: 3,
+	// The research and classify stages are nothing to do with the image call, but
+	// this is a complete `HeliosConfig` and not a partial plus a cast (AGENTS.md
+	// §5) — so they are built out properly. `researchModel` is empty, which is the
+	// "retrieval off" state, matching what `test-env.ts` gives every other suite.
+	researchModel: { model: "" },
+	classifierModel: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+	maxToolIterations: 3,
+	maxSearchResults: 5,
+	minChunkChars: 200,
+	searchMatchThreshold: 0.5,
+	queryRewrite: false,
 	source: {
 		textModel: "var",
 		visionTextModel: "var",
@@ -43,6 +54,13 @@ const CONFIG: HeliosConfig = {
 		maxRetries: "var",
 		retentionLimit: "var",
 		maxResumeAttempts: "var",
+		researchModel: "var",
+		classifierModel: "var",
+		maxToolIterations: "var",
+		maxSearchResults: "var",
+		minChunkChars: "var",
+		searchMatchThreshold: "var",
+		queryRewrite: "var",
 	},
 };
 
