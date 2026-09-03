@@ -28,6 +28,41 @@
 		"binding": "AI"
 	},
 
+	/**
+	 * This engine's own knowledge base — deliberately NOT shared, unlike the R2
+	 * bucket. Each engine gets its own AI Search instance even where some content
+	 * overlaps, so tuning Helios's grounding cannot move Iris's answers.
+	 *
+	 * The binding name is `AI_SEARCH` on every engine so research.ts reads
+	 * identically everywhere; the instances are told apart by `instance_name`.
+	 *
+	 * `instance_name` is "HelioKB", the exact string in the dashboard — NOT the
+	 * "helios-kb" phase-2-plan §5.1 assumes. Nothing validates this at build
+	 * time: `wrangler types` accepts any string and so does a typecheck, so a
+	 * wrong name here surfaces only on a real call, as an error that does not say
+	 * "you named the instance wrong".
+	 *
+	 * `remote: true` is required rather than optional. AI Search has no local
+	 * simulator, so without it `wrangler dev` has no retrieval at all. Note what
+	 * that means: local dev queries the REAL deployed instance. Queries are free
+	 * within the beta limits, but turning `ai_search_query_rewrite` on spends
+	 * Workers AI from a local run.
+	 *
+	 * Do NOT use `env.AI.autorag()` or `env.AI.aiSearch()`. Both are marked
+	 * @deprecated in the generated types: "AutoRAG has been replaced by AI Search.
+	 * Use the standalone `ai_search_namespaces` or `ai_search` Workers bindings."
+	 *
+	 * AI Search is beta-priced — free within limits, with 30 days' notice
+	 * promised before billing starts.
+	 */
+	"ai_search": [
+		{
+			"binding": "AI_SEARCH",
+			"instance_name": "HelioKB",
+			"remote": true
+		}
+	],
+
 	"r2_buckets": [
 		{
 			"binding": "PATTERNS",
