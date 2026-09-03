@@ -79,6 +79,7 @@ const VARS = {
 export function fakeEnv(
 	overrides: {
 		planner?: unknown | Error;
+		classifier?: unknown | Error;
 		image?: unknown | Error;
 		getLog?: ReturnType<typeof vi.fn>;
 		aiGatewayLogId?: string | null;
@@ -114,6 +115,17 @@ export function fakeEnv(
 		if (model === vars.PLANNER_MODEL || (vars.VISION_PLANNER_MODEL !== "" && model === vars.VISION_PLANNER_MODEL)) {
 			if (overrides.planner instanceof Error) throw overrides.planner;
 			return overrides.planner ?? { response: JSON.stringify(sampleParamsFull), usage: { neurons: 102 } };
+		}
+		// Before the image fall-through, because the fall-through is a catch-all
+		// and a catch-all is how a new model id gets an image back where the suite
+		// expected JSON. Every stage added after this one has the same problem and
+		// needs the same branch — the last `if` here answers for models nobody has
+		// taught it about.
+		if (model === vars.CLASSIFIER_MODEL) {
+			if (overrides.classifier instanceof Error) throw overrides.classifier;
+			return (
+				overrides.classifier ?? { response: JSON.stringify({ mode: "tile" }), usage: { neurons: 8 } }
+			);
 		}
 		if (overrides.image instanceof Error) throw overrides.image;
 		return overrides.image ?? { image: SAMPLE_IMAGE_BASE64 };

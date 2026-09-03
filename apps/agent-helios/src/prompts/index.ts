@@ -10,3 +10,8 @@ export {
 	type ImagePrompt,
 	type ImagePromptOptions,
 } from "./image.prompt";
+
+export {
+	HELIOS_CLASSIFIER_PROMPT_VERSION,
+	buildClassifierSystemPrompt,
+} from "./classifier.prompt";
