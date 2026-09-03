@@ -8,6 +8,13 @@
       "when": 1787841285405,
       "tag": "0000_exotic_junta",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788441200622,
+      "tag": "0001_wide_psylocke",
+      "breakpoints": true
     }
   ]
 }

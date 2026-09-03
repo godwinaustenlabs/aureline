@@ -41,8 +41,8 @@ describe("exportRuns (idempotency)", () => {
 	});
 
 	/**
-	 * D1 caps a statement at 100 bound parameters and `helios_runs` binds 12 per
-	 * row, so `exportRuns` chunks at eight. 25 rows crosses that boundary three
+	 * D1 caps a statement at 100 bound parameters and `helios_runs` binds 13 per
+	 * row, so `exportRuns` chunks at seven. 25 rows crosses that boundary three
 	 * times and ends mid-chunk, which is where an off-by-one in the slice shows up.
 	 *
 	 * Note what this does **not** prove: `node:sqlite` has no 100-parameter cap,
@@ -72,13 +72,14 @@ describe("MAX_ROWS_PER_INSERT", () => {
 	 * invariant is asserted directly, against the column count Drizzle reports
 	 * rather than a number repeated here.
 	 *
-	 * Adding a 13th column without dropping this to 7 fails this test instead of
-	 * silently ending the export of every session that has eight settled rows.
+	 * Adding a 14th column without dropping this to 6 fails this test instead of
+	 * silently ending the export of every session that has seven settled rows.
+	 * `classification` was the 13th and took the constant from 8 to 7.
 	 */
 	it("stays under D1's 100-parameter cap for the schema as it actually is", () => {
 		const columnCount = Object.keys(getTableColumns(heliosRuns)).length;
 
-		expect(columnCount).toBe(12);
+		expect(columnCount).toBe(13);
 		expect(columnCount * MAX_ROWS_PER_INSERT).toBeLessThanOrEqual(100);
 
 		// And is not needlessly small: one more row per statement would breach it.

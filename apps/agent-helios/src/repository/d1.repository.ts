@@ -4,14 +4,15 @@ import type { HeliosD1Db } from "../db/client";
 
 /**
  * D1 caps a statement at 100 bound parameters, and a multi-row insert binds
- * every column of every row. `helios_runs` has 12 columns, so eight rows is the
- * most one statement can carry: 12 x 8 = 96, and 12 x 9 = 108.
+ * every column of every row. `helios_runs` has 13 columns, so seven rows is the
+ * most one statement can carry: 13 x 7 = 91, and 13 x 8 = 104.
  * https://developers.cloudflare.com/d1/platform/limits/
  *
  * **This number is derived from the column count, so it is not a constant
  * anyone may leave alone after a schema change.** It was 9 when the table had
- * 11 columns, and `design_session_id` is what took it over: 12 x 9 = 108 would
- * have exceeded the cap on the first export carrying nine rows.
+ * 11 columns, and `design_session_id` took it to 8: 12 x 9 = 108 would have
+ * exceeded the cap on the first export carrying nine rows. `classification`
+ * (Phase 2) has now taken it to 7 for the same reason.
  *
  * Exported so `d1.repository.test.ts` can check it against the real column
  * count rather than against a number someone typed twice. `node:sqlite` has no
@@ -20,10 +21,10 @@ import type { HeliosD1Db } from "../db/client";
  *
  * That failure is invisible from the outside. `exportAndPrune` swallows what it
  * catches by design, so every run still returns `completed` while nothing
- * reaches D1 — and it only starts happening once a session has eight or more
+ * reaches D1 — and it only starts happening once a session has seven or more
  * settled rows, which is exactly when there is real history worth not losing.
  */
-export const MAX_ROWS_PER_INSERT = 8;
+export const MAX_ROWS_PER_INSERT = 7;
 
 /**
  * Copies settled rows into D1. Safe to call twice with the same rows: `id` is
