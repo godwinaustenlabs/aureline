@@ -181,10 +181,19 @@
 		// with no deploy — @cf/meta/llama-4-scout-17b-16e-instruct and
 		// @cf/zhipu/glm-5.3-flash both list vision and function calling too.
 		//
-		// Set it to "" to skip the research stage entirely. That is the off switch,
-		// and it is what a human sets until HelioKB is indexed and bound — a
-		// configured model with no AI_SEARCH binding fails the run at `research:`.
-		"RESEARCH_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
+		// **EMPTY, which means the research stage is skipped.** That is the intended
+		// default until HelioKB has documents indexed: with an empty knowledge base
+		// every run would make a billed research call, retrieve nothing, warn, and
+		// proceed — a cost with no benefit on every single request.
+		//
+		// To turn retrieval on, set the KV key `research_model` to:
+		//
+		//     @cf/meta/llama-3.2-11b-vision-instruct
+		//
+		// which is the model the planner uses. No deploy needed. The var stays
+		// empty so that a fresh deploy, or a KV namespace nobody has touched, is
+		// off rather than quietly billing three model calls per run.
+		"RESEARCH_MODEL": "",
 		// fallback default — the live value is CONFIG:classifier_model in KV.
 		// Decides tile versus motif before anything else runs. Vision-capable
 		// because a photo of a repeating scarf print versus one of an embroidered
