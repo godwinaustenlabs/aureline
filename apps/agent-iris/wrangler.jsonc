@@ -75,8 +75,10 @@
 	 * (namespace "IRIS_CONFIG") and they take effect within about a minute,
 	 * with no redeploy.
 	 *
-	 * Keys: text_model, image_model, max_retries, retention_limit,
-	 * max_resume_attempts. The matching entries in `vars` below are the
+	 * Keys: text_model, vision_planner_model, image_model, max_retries,
+	 * retention_limit, max_resume_attempts, research_model, max_tool_iterations,
+	 * max_search_results, min_chunk_chars, search_match_threshold,
+	 * ai_search_query_rewrite. The matching entries in `vars` below are the
 	 * committed fallbacks used when a key is absent or its value is invalid.
 	 *
 	 * The binding name is `CONFIG` and not `IRIS_CONFIG`, deliberately and for
@@ -150,6 +152,45 @@
 		// How many times one run may be resumed, so 3 is an original plus three
 		// retries. Every retry spends the image model.
 		"MAX_RESUME_ATTEMPTS": "3",
+		// fallback default — the live value is CONFIG:research_model in KV.
+		//
+		// EMPTY, unlike Helios, and this is the difference to notice. Helios points
+		// at a real model because HelioKB exists; there is no Iris AI Search
+		// instance yet, so a configured model here would fail every run at
+		// `research:` the moment the stage is wired. A human sets this — and the
+		// instance name in the ai_search binding — once an Iris knowledge base
+		// exists and is indexed. No deploy needed either way.
+		//
+		// Same model as the planner when it is turned on, matching Helios.
+		"RESEARCH_MODEL": "",
+		// No CLASSIFIER_MODEL here, unlike Helios. Iris never classifies —
+		// classification happens once in Helios and Iris reads the answer — so the
+		// key would be permanently dead rather than awaiting a caller.
+		//
+		// fallback default — the live value is CONFIG:max_tool_iterations in KV.
+		// Ceiling on billed model calls inside the research loop (AGENTS.md §7).
+		"MAX_TOOL_ITERATIONS": "3",
+		// fallback default — the live value is CONFIG:max_search_results in KV.
+		// Passed to AI Search as max_num_results.
+		"MAX_SEARCH_RESULTS": "5",
+		// fallback default — the live value is CONFIG:min_chunk_chars in KV.
+		// Under this many characters of retrieved text, a result is "thin": the
+		// model is told so and given a chance to rephrase.
+		"MIN_CHUNK_CHARS": "200",
+		// fallback default — the live value is CONFIG:search_match_threshold in KV.
+		//
+		// A similarity floor between 0 and 1, and a STARTING GUESS rather than a
+		// tuned value. On a new knowledge base a threshold set too high returns
+		// zero chunks on every query and looks exactly like a broken binding —
+		// check the scores in the first runs' logs before trusting this number.
+		"SEARCH_MATCH_THRESHOLD": "0.5",
+		// fallback default — the live value is CONFIG:ai_search_query_rewrite in KV.
+		//
+		// Whether AI Search rewrites the query with its own LLM before searching.
+		// Off, because the research model is already writing the query itself —
+		// that is the whole point of the agentic design — so rewriting adds a
+		// second billed model call we do not control, per search.
+		"AI_SEARCH_QUERY_REWRITE": "false",
 		// Browser origins allowed to call this worker from JavaScript.
 		// Comma separated, exact origins, no trailing slash. Anything not listed
 		// is refused at preflight.

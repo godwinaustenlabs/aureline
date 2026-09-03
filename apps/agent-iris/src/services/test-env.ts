@@ -127,6 +127,16 @@ export function fakeEnv(
 		MAX_RETRIES: "2",
 		RETENTION_LIMIT: "5",
 		MAX_RESUME_ATTEMPTS: overrides.maxResumeAttempts ?? "3",
+		// Empty by default, exactly like VISION_PLANNER_MODEL above and for the
+		// same reason: `researchModelFor` reads it as "retrieval off", so every
+		// existing suite keeps making the calls it always did. A suite that wants
+		// the research stage opts in rather than every other suite opting out.
+		RESEARCH_MODEL: "",
+		MAX_TOOL_ITERATIONS: "3",
+		MAX_SEARCH_RESULTS: "5",
+		MIN_CHUNK_CHARS: "200",
+		SEARCH_MATCH_THRESHOLD: "0.5",
+		AI_SEARCH_QUERY_REWRITE: "false",
 	} as unknown as Env;
 
 	// `d1` comes back so a suite can read what the export actually wrote, which
