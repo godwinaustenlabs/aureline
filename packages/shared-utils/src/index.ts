@@ -28,3 +28,13 @@ export type {
 } from "./getImageToImageOutput";
 
 export { readJpegDimensions } from "./imageDimensions";
+
+export { runToolLoop, SEARCH_TOOL } from "./runToolLoop";
+export type {
+  RunToolLoopConfig,
+  RunToolLoopOptions,
+  ToolLoopResult,
+  ToolLoopEnv,
+  SearchRunner,
+  RetrievedChunk,
+} from "./runToolLoop";
