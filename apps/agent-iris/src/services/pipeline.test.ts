@@ -5,6 +5,7 @@ import { runPipeline, runImageStage } from "./pipeline";
 import { getD1Db } from "../db/client";
 import { resolveConfig } from "../config";
 import { planConcept } from "./planner";
+import { runResearch } from "./research";
 import { colorizeMotif } from "./colorizer";
 import { readGatewayCost } from "./gatewayCost";
 import { startTextRun, failRunningRuns, startImageRun, getRunRows } from "../repository/do.repository";
@@ -23,6 +24,11 @@ import { fakeEnv } from "./test-env";
 vi.mock("./planner", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./planner")>();
 	return { ...actual, planConcept: vi.fn(actual.planConcept) };
+});
+
+vi.mock("./research", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./research")>();
+	return { ...actual, runResearch: vi.fn(actual.runResearch) };
 });
 
 vi.mock("./colorizer", async (importOriginal) => {
@@ -72,6 +78,7 @@ describe("runPipeline", () => {
 		// the delegate back, so a test that fails before consuming its queued
 		// value cannot leak it into the next one.
 		vi.mocked(planConcept).mockReset();
+		vi.mocked(runResearch).mockReset();
 		vi.mocked(colorizeMotif).mockReset();
 		vi.mocked(startTextRun).mockReset();
 		vi.mocked(failRunningRuns).mockReset();
@@ -124,7 +131,7 @@ describe("runPipeline", () => {
 		// iris-08: text row metadata carries model, usage, and prompt_version
 		const textMeta = textRow?.modelMetadata as Record<string, unknown>;
 		expect(textMeta).toHaveProperty("model", "@cf/openai/gpt-oss-120b");
-		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v2");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v3");
 		expect(textMeta).toHaveProperty("usage");
 		expect(textMeta).toHaveProperty("had_reference_image", false);
 	});
@@ -265,7 +272,7 @@ describe("runPipeline", () => {
 		const rows = await rowsFor(db, result.pipeline_id);
 		const textMeta = rows.find((row) => row.modality === "text")?.modelMetadata as Record<string, unknown>;
 		expect(textMeta).toHaveProperty("prompt_source", "code");
-		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v2");
+		expect(textMeta).toHaveProperty("prompt_version", "iris-planner-v3");
 		expect(textMeta).toHaveProperty("prompt_updated_at", null);
 	});
 
@@ -524,7 +531,7 @@ describe("runImageStage re-entry (iris-10's /resume)", () => {
 		// ...and so does what `startImageRun` wrote, because `completeImageRun`
 		// merges rather than replaces.
 		expect(metadata.model).toBe("@cf/black-forest-labs/flux-2-klein-9b");
-		expect(metadata.prompt_version).toBe("iris-color-v3");
+		expect(metadata.prompt_version).toBe("iris-color-v4");
 		// ...alongside the dimensions, which completeImageRun adds after the
 		// markers are already on the row.
 		expect(metadata.output_dimensions).toEqual({ width: 128, height: 128 });

@@ -70,6 +70,23 @@
 	],
 
 	/**
+	 * Iris's knowledge base. Same binding name as Helios (`AI_SEARCH`) so
+	 * `research.ts` reads identically on both engines; the instances are told
+	 * apart by `instance_name`.
+	 *
+	 * `remote: true` is required. AI Search has no local simulator, so
+	 * without it `wrangler dev` has no retrieval at all. Local dev queries
+	 * the REAL deployed instance.
+	 */
+	"ai_search": [
+		{
+			"binding": "AI_SEARCH",
+			"instance_name": "iris-kb",
+			"remote": true
+		}
+	],
+
+	/**
 	 * Runtime-tunable config. Read once per invocation by src/config.ts; the app
 	 * never writes. Edit the values by hand in the Cloudflare dashboard
 	 * (namespace "IRIS_CONFIG") and they take effect within about a minute,

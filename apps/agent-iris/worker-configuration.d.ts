@@ -6,6 +6,7 @@ interface __BaseEnv_Env {
 	PATTERNS: R2Bucket;
 	DB: D1Database;
 	AI: Ai;
+	AI_SEARCH: AiSearchInstance;
 	PLANNER_MODEL: "@cf/openai/gpt-oss-120b";
 	VISION_PLANNER_MODEL: "@cf/meta/llama-3.2-11b-vision-instruct";
 	IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b";

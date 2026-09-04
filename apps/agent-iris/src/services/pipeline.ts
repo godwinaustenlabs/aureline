@@ -1,18 +1,26 @@
 import { getD1Db, type IrisDb } from "../db/client";
 import {
 	IrisParamsSchema,
+	type Classification,
 	type IrisParams,
 	type IrisRequest,
 	type IrisResult,
 	type ReferenceImage,
 } from "@aureline/shared-types";
 import { planConcept } from "./planner";
+import { runResearch } from "./research";
 import { colorizeMotif } from "./colorizer";
 import { readGatewayCost } from "./gatewayCost";
 import { saveColoredImage } from "../repository/r2.repository";
 import { describeError } from "../utils";
 import { describeConfig, describePrompt, resolveConfig, resolvePrompt, type IrisConfig } from "../config";
-import { buildPlannerSystemPrompt, IRIS_COLOR_PROMPT_VERSION, IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
+import {
+	buildPlannerSystemPrompt,
+	IRIS_COLOR_PROMPT_VERSION,
+	IRIS_PLANNER_PROMPT_VERSION,
+	IRIS_RESEARCH_PROMPT_VERSION,
+} from "../prompts";
+import { buildResearchSystemPrompt } from "../prompts";
 import {
 	startTextRun,
 	completeTextRun,
@@ -26,7 +34,7 @@ import {
 } from "../repository/do.repository";
 import { exportRuns } from "../repository/d1.repository";
 
-type Stage = "persist" | "planner" | "validate" | "image";
+type Stage = "persist" | "research" | "planner" | "validate" | "image";
 
 /**
  * What the image stage reports back to whoever called it.
@@ -261,13 +269,17 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 	const config = await resolveConfig(env);
 	console.log(describeConfig(config));
 
-	// The live planner prompt, read once for the same reason the config is: two
-	// reads straddling an edit would produce one invocation running on half of
-	// each. Outside the try because, like `resolveConfig`, it never throws — a
-	// missing row, an unusable row and D1 being down all fall back to the
-	// committed prompt rather than failing the request.
+	// The live prompts, read once per invocation so every stage sees the same
+	// snapshot. Outside the try because, like `resolveConfig`, they never throw.
 	const plannerPrompt = await resolvePrompt(getD1Db(env.DB), "iris_planner", buildPlannerSystemPrompt());
 	console.log(describePrompt("iris_planner", plannerPrompt));
+
+	const researchPrompt = await resolvePrompt(
+		getD1Db(env.DB),
+		"iris_research",
+		buildResearchSystemPrompt(),
+	);
+	console.log(describePrompt("iris_research", researchPrompt));
 
 	// Identity of this pipeline invocation. Generated per invocation, NOT derived
 	// from the Durable Object — one DO accumulates many invocations (ADR-0005).
@@ -291,16 +303,22 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			modelMetadata: { model: config.textModel.model },
 		});
 
+		stage = "research";
+		const research = await runResearch(env, config, {
+			concept: req.concept,
+			classification: req.classification ?? ({} as Classification),
+			systemPrompt: researchPrompt.text,
+			pipeline_id: pipelineId,
+			image: req.image,
+		});
+
 		stage = "planner";
 		const planned = await planConcept(env, config, {
 			concept: req.concept,
 			systemPrompt: plannerPrompt.text,
 			pipeline_id: pipelineId,
-			// The one hop the reference image takes on Iris. It is not passed to
-			// the image stage below and is never written anywhere — after this call
-			// returns, the only trace of it is whatever the planner put in `params`
-			// and `image_prompt` (ADR-SHARED-0003).
 			image: req.image,
+			constraints: research.context ?? undefined,
 		});
 
 		// Read here, not later: `aiGatewayLogId` holds the most recent routed call
@@ -316,26 +334,11 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 		const textModelMetadata = {
 			model: planned.model,
 			usage: planned.usage,
-			// `prompt_version` identifies the *committed* prompt, so it is only the
-			// truth when the committed prompt is what ran. A stored prompt can be
-			// rewritten in the playground at any time and no id describes it, so
-			// naming one here would be the lying audit row ADR-0001 exists to
-			// prevent. `prompt_source` and `prompt_updated_at` are what stay
-			// answerable: which store the words came from, and when they last
-			// changed.
 			prompt_version: plannerPrompt.source === "code" ? IRIS_PLANNER_PROMPT_VERSION : null,
 			prompt_source: plannerPrompt.source,
 			prompt_updated_at: plannerPrompt.updatedAt,
-			/**
-			 * Whether a reference image reached the planner on this run.
-			 *
-			 * The image itself is transient and is never stored, so this flag is
-			 * the only durable trace it existed. It is what keeps "why does this
-			 * run look different from that one" answerable from the audit table
-			 * alone — including after a `/resume`, which re-runs the image stage
-			 * from these stored params and never sees an image at all.
-			 */
 			had_reference_image: req.image !== undefined,
+			retrieval: research.metadata,
 		};
 
 		// Planner succeeded — settle the text row before the image row opens.
@@ -385,7 +388,7 @@ export async function runPipeline(db: IrisDb, req: IrisRequest, env: Env, origin
 			// A failure at "persist", "planner" or "validate" never reaches
 			// `runImageStage`, so nothing has opened an image row yet — without
 			// this, the invocation would settle as a single failed text row.
-			if (stage === "persist" || stage === "planner" || stage === "validate") {
+			if (stage === "persist" || stage === "research" || stage === "planner" || stage === "validate") {
 				await insertFailedImageRun(db, {
 					pipelineId,
 					designSessionId: req.design_session_id,

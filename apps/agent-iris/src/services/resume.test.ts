@@ -204,16 +204,18 @@ describe("resumeRun refusals", () => {
 		expect(run).not.toHaveBeenCalled();
 	});
 
-	it("refuses when the stored params no longer validate, naming the field", async () => {
+	it("re-plans when the stored params are invalid, then proceeds with the image", async () => {
 		const { env, run } = fakeEnv();
 		await seedResumableRun(db, { plannerParams: { primary_color: "not-a-colour-we-know" } });
 
 		const outcome = await resumeRun(db, PARENT, env, ORIGIN);
 
-		expect(outcome.ok).toBe(false);
-		if (outcome.ok) return;
-		expect(outcome.reason).toContain("the stored params are no longer valid:");
-		expect(run).not.toHaveBeenCalled();
+		// The stored params were invalid, so the resume re-planned. The fake AI
+		// returns sampleParamsFull, which is valid, so the resume should succeed.
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.result.status).toBe("completed");
+		expect(outcome.result.params).toEqual(sampleParamsFull);
 	});
 
 	it("refuses once the cap is reached, naming the actual count and the actual limit", async () => {
@@ -287,11 +289,6 @@ describe("resumeRun refusals", () => {
 				const { env, run } = fakeEnv();
 				await seedResumableRun(db, { pipelineId: "d", imageStatus: "running" });
 				return { id: "d", env, run };
-			},
-			async () => {
-				const { env, run } = fakeEnv();
-				await seedResumableRun(db, { pipelineId: "e", plannerParams: { nope: true } });
-				return { id: "e", env, run };
 			},
 		];
 

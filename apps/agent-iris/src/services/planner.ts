@@ -1,6 +1,6 @@
 import type { IrisParams, ReferenceImage } from "@aureline/shared-types";
 import type { TextualModelOutput } from "@aureline/shared-utils";
-import { buildPlannerUserPrompt } from "../prompts";
+import { appendPlannerConstraints, buildPlannerUserPrompt } from "../prompts";
 import { callPlannerModel } from "../tools";
 import { plannerModelFor, type IrisConfig } from "../config";
 
@@ -58,9 +58,14 @@ export async function planConcept(
 		 * The image stage still receives `motif_ref` alone (ADR-SHARED-0003).
 		 */
 		image?: ReferenceImage;
+		/**
+		 * Retrieved context from the research stage, injected into the system
+		 * prompt. When absent, the planner receives no research context.
+		 */
+		constraints?: string;
 	},
 ): Promise<TextualModelOutput<IrisParams>> {
-	const { concept, systemPrompt, pipeline_id, image } = run;
+	const { concept, systemPrompt, pipeline_id, image, constraints } = run;
 	const userPrompt = buildPlannerUserPrompt(concept);
 
 	// The vision model when one is configured, `textModel` otherwise. Resolved
@@ -78,7 +83,7 @@ export async function planConcept(
 	);
 
 	const result = await callPlannerModel(
-		systemPrompt,
+		appendPlannerConstraints(systemPrompt, constraints),
 		userPrompt,
 		model.model,
 		env.AI,

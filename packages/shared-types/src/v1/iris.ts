@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ImagePromptSchema, ReferenceImageSchema } from "./common";
+import { ClassificationSchema, ImagePromptSchema, ReferenceImageSchema } from "./common";
 
 /**
  * The controlled color vocabulary (v1).
@@ -102,6 +102,12 @@ export const IrisRequestSchema = z.object({
    * params the planner chooses and through `image_prompt`. See ADR-SHARED-0003.
    */
   image: ReferenceImageSchema.optional(),
+  /**
+   * The classification Helios decided for this design, passed through from the
+   * frontend. Optional: when absent, Iris proceeds without retrieval context.
+   * When present, it informs the research stage's search queries.
+   */
+  classification: ClassificationSchema.optional(),
 });
 
 export type IrisRequest = z.infer<typeof IrisRequestSchema>;

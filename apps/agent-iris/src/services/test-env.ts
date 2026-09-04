@@ -137,6 +137,9 @@ export function fakeEnv(
 		MIN_CHUNK_CHARS: "200",
 		SEARCH_MATCH_THRESHOLD: "0.5",
 		AI_SEARCH_QUERY_REWRITE: "false",
+		AI_SEARCH: {
+			search: vi.fn().mockResolvedValue({ chunks: [], context: "" }),
+		},
 	} as unknown as Env;
 
 	// `d1` comes back so a suite can read what the export actually wrote, which

@@ -301,6 +301,33 @@ export async function getRunRows(db: HeliosDb, pipelineId: string): Promise<Heli
 }
 
 /**
+ * The classification for a design, read from the first text row matching the
+ * design session id. Returns `undefined` when no row exists — the caller
+ * decides whether that is an error or a fallback.
+ *
+ * Selects only the classification column. The rest of the row is not needed and
+ * not fetched, so a DO with many runs does not drag the full table across the
+ * wire for one JSON blob.
+ */
+export async function getClassificationByDesignSession(
+	db: HeliosDb,
+	designSessionId: string,
+): Promise<{ classification: unknown } | undefined> {
+	const [row] = await db
+		.select({ classification: heliosRuns.classification })
+		.from(heliosRuns)
+		.where(
+			and(
+				eq(heliosRuns.designSessionId, designSessionId),
+				eq(heliosRuns.modality, "text"),
+			),
+		)
+		.limit(1);
+
+	return row;
+}
+
+/**
  * Every row in this DO, newest first, for showing a session's history.
  *
  * Unlike `getSettledRows` this **includes `running` rows**, because a caller

@@ -58,7 +58,7 @@
 	"ai_search": [
 		{
 			"binding": "AI_SEARCH",
-			"instance_name": "HelioKB",
+			"instance_name": "helios-kb",
 			"remote": true
 		}
 	],

@@ -42,7 +42,7 @@ export const prompts = sqliteTable("prompts", {
    * it is what lets these rows merge into one table without collision when the
    * per-engine D1 databases are consolidated.
    */
-  slot: text("slot", { enum: ["iris_planner", "iris_color"] }).notNull().unique(),
+  slot: text("slot", { enum: ["iris_planner", "iris_color", "iris_research"] }).notNull().unique(),
 
   /** The prompt itself, sent to the model verbatim. */
   promptText: text("prompt_text").notNull(),
