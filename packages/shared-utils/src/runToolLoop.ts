@@ -202,7 +202,11 @@ export async function runToolLoop(
 	for (let attempt = 1; attempt <= config.maxToolIterations; attempt++) {
 		iterations = attempt;
 
-		const body: Record<string, unknown> = { messages, tools, max_tokens: maxOutputTokens };
+		const body: Record<string, unknown> = {
+			messages,
+			tools: tools.map((t) => ({ type: "function", function: t })),
+			max_tokens: maxOutputTokens,
+		};
 
 		// Two arguments, never three. A gateway id here would set
 		// `aiGatewayLogId` between the two gated calls either side of this stage,

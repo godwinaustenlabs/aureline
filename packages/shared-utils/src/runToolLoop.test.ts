@@ -116,7 +116,7 @@ describe("runToolLoop is ungated", () => {
 
 		const [model, body] = vi.mocked(e.AI.run).mock.calls[0];
 		expect(model).toBe("@cf/meta/llama-4-scout-17b-16e-instruct");
-		expect(body).toEqual({ messages: messages(), tools: [SEARCH_TOOL], max_tokens: 512 });
+		expect(body).toEqual({ messages: messages(), tools: [{ type: "function", function: SEARCH_TOOL }], max_tokens: 512 });
 	});
 });
 
