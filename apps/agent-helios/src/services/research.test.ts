@@ -149,7 +149,7 @@ describe("runResearch and the model call", () => {
 	it("hands the model the search tool", async () => {
 		const { run } = await research();
 
-		expect((run.mock.calls[0][1] as { tools: unknown }).tools).toEqual([SEARCH_TOOL]);
+		expect((run.mock.calls[0][1] as { tools: unknown }).tools).toEqual([{ type: "function", function: SEARCH_TOOL }]);
 	});
 
 	it("sends the resolved system prompt and the brief with its classification", async () => {
