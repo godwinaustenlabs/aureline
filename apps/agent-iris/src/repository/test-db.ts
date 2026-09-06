@@ -58,6 +58,30 @@ const IRIS_RUNS_DDL = `
 	);
 `;
 
+/**
+ * The `prompts` table, created by `createTestD1` and deliberately NOT by
+ * `createTestDb`.
+ *
+ * It lives in `db/schema.d1.ts`, which only the D1 drizzle config reads, so it
+ * exists in D1 and never in the Durable Object's own SQLite. A fake DO that
+ * created it would let a test pass against a table production does not have
+ * there.
+ *
+ * Mirrors `schema.d1.ts` by hand, and nothing enforces the match (AGENTS.md
+ * §8) — change the schema and change this in the same edit. `updated_at` keeps
+ * the `DEFAULT CURRENT_TIMESTAMP` specifically so a test can prove the default
+ * fires on INSERT and does *not* fire on UPDATE, which is why `upsertPrompt`
+ * sets the column itself.
+ */
+const PROMPTS_DDL = `
+	CREATE TABLE prompts (
+		id INTEGER PRIMARY KEY,
+		slot TEXT NOT NULL UNIQUE,
+		prompt_text TEXT NOT NULL,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+`;
+
 export function createTestDb(): IrisDb {
 	const sqlite = new DatabaseSync(":memory:");
 	sqlite.exec(IRIS_RUNS_DDL);
@@ -110,6 +134,7 @@ export function createTestDb(): IrisDb {
 export function createTestD1(): D1Database {
 	const sqlite = new DatabaseSync(":memory:");
 	sqlite.exec(IRIS_RUNS_DDL);
+	sqlite.exec(PROMPTS_DDL);
 
 	// One bound statement. `bind` returns a new one rather than mutating, which
 	// is D1's own contract and is what lets the driver hold an unbound statement

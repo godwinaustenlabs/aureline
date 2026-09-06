@@ -1,0 +1,1 @@
+ALTER TABLE `helios_runs` ADD `classification` text DEFAULT '{}' NOT NULL;

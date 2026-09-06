@@ -1,4 +1,7 @@
 import { z } from "zod";
+import type { HeliosD1Db } from "./db/client";
+import type { PromptSlot } from "./db/schema.d1";
+import { getPrompt } from "./repository/prompts.repository";
 
 /**
  * Runtime config resolved from the `CONFIG` KV namespace, with the
@@ -30,12 +33,50 @@ export interface ImageModelConfig {
 	width?: number;
 	height?: number;
 	steps?: number;
+	/**
+	 * How the model is called. Absent means `"json"` — a `getImageModelOutput`
+	 * call with a JSON body, which is what every value in KV means today.
+	 *
+	 * Optional rather than required so that every value already in KV stays
+	 * valid. Making it required would invalidate both live values at once, and
+	 * an invalid value falls back to the var (ADR-0008) — so the result would be
+	 * silent config drift rather than a loud error.
+	 *
+	 * `"multipart"` is the flux-2-klein family's only accepted shape: a JSON body
+	 * is rejected with `5006: required properties at '/' are 'multipart'`.
+	 */
+	transport?: "json" | "multipart";
 }
 
 /** Resolved runtime config for a single pipeline invocation. */
 export interface HeliosConfig {
 	textModel: TextModelConfig;
+	/**
+	 * The vision-capable planner, used for **every** request rather than only
+	 * those carrying a reference image.
+	 *
+	 * One model means one set of planner behaviour to tune and one prompt that
+	 * has to work. Switching per request would mean two of each, and a class of
+	 * bug that only appears once an image is attached — which is the hardest
+	 * kind to notice. `textModel` stays as the fallback, so reverting is a KV
+	 * edit rather than a deploy (ADR-0008, ADR-SHARED-0003).
+	 */
+	visionTextModel: TextModelConfig;
+	/** The model called when the request carries **no** reference image. */
 	imageModel: ImageModelConfig;
+	/**
+	 * The model called when the request **does** carry a reference image.
+	 *
+	 * A second key rather than a field on `imageModel`, because these are two
+	 * genuinely different calls: this one is multipart and never routes through
+	 * the gateway, `imageModel` is JSON and does. Keeping them apart is what lets
+	 * a request with no image stay byte-for-byte the call it has always been —
+	 * cost tracking included — while a request with one changes.
+	 *
+	 * Resolves to an empty model id when unset, which `imageModelFor` reads as
+	 * "not configured" and refuses on rather than silently falling back.
+	 */
+	imageToImageModel: ImageModelConfig;
 	maxRetries: number;
 	retentionLimit: number;
 	/**
@@ -44,8 +85,64 @@ export interface HeliosConfig {
 	 * is the ceiling on what a single concept can cost.
 	 */
 	maxResumeAttempts: number;
+	/**
+	 * The model that runs the agentic research stage, or an empty model id when
+	 * retrieval is switched off.
+	 *
+	 * A separate key rather than a reuse of the planner's, because the planner
+	 * resolves to `visionTextModel` and that model —
+	 * `@cf/meta/llama-3.2-11b-vision-instruct` — does **not** list function
+	 * calling. Reusing it would mean retrieval silently never fires, with no
+	 * error anywhere, on exactly the runs that carry a reference image. A
+	 * separate key makes the tool-capable model an explicit choice.
+	 *
+	 * Read through `researchModelFor`, never directly: the empty case is the off
+	 * switch and it is a decision that gets logged.
+	 */
+	researchModel: TextModelConfig;
+	/**
+	 * The model that decides tile versus motif.
+	 *
+	 * Unlike `researchModel` this has **no off switch**. A classify failure stops
+	 * the run, so an empty value here is a typo rather than an intent, and it is
+	 * validated strictly enough to fall back to the var.
+	 */
+	classifierModel: TextModelConfig;
+	/** Ceiling on billed model calls in the research loop. */
+	maxToolIterations: number;
+	/** Passed to AI Search as `max_num_results`. */
+	maxSearchResults: number;
+	/** Below this many characters of retrieved text, a result is thin. */
+	minChunkChars: number;
+	/** Passed to AI Search as `match_threshold`. */
+	searchMatchThreshold: number;
+	/**
+	 * Whether AI Search rewrites the query with its own LLM before searching.
+	 *
+	 * Off by default. The research model is already writing the query itself —
+	 * that is the entire point of the agentic design — so leaving rewrite on adds
+	 * a second billed model call we do not control, per search. The key exists so
+	 * it can be A/B'd from KV later.
+	 */
+	queryRewrite: boolean;
 	/** Per-field provenance, for the log line. */
-	source: Record<"textModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts", ConfigSource>;
+	source: Record<
+		| "textModel"
+		| "visionTextModel"
+		| "imageModel"
+		| "imageToImageModel"
+		| "maxRetries"
+		| "retentionLimit"
+		| "maxResumeAttempts"
+		| "researchModel"
+		| "classifierModel"
+		| "maxToolIterations"
+		| "maxSearchResults"
+		| "minChunkChars"
+		| "searchMatchThreshold"
+		| "queryRewrite",
+		ConfigSource
+	>;
 }
 
 /** How long the edge may serve a cached KV read, in seconds.
@@ -69,7 +166,37 @@ const ImageModelSchema = z.object({
 	width: z.number().int().min(64).max(2048).optional(),
 	height: z.number().int().min(64).max(2048).optional(),
 	steps: z.number().int().min(1).max(50).optional(),
+	transport: z.enum(["json", "multipart"]).optional(),
 });
+
+/**
+ * `TextModelSchema` without the `min(1)`, because for `research_model` an empty
+ * id is a value rather than a mistake.
+ *
+ * `research_model: ""` is the off switch and it has to work from KV with no
+ * deploy. Under `TextModelSchema` it would fail `min(1)`, warn once per
+ * invocation, and fall back to `RESEARCH_MODEL` — which is a configured model.
+ * The key meant to switch retrieval **off** would switch it **on**, and warn
+ * about it on every request while doing so. `researchModelFor` is the one place
+ * the empty id becomes a decision, and it logs it there instead.
+ */
+const OptionalTextModelSchema = z.object({
+	model: z.string().trim(),
+	temperature: z.number().min(0).max(2).optional(),
+});
+
+/**
+ * KV holds text, so a boolean arrives as a word. The accepted spellings are the
+ * ones a person actually types into a dashboard.
+ *
+ * Deliberately **not** `Boolean(raw)` or `raw !== ""`. Under either of those the
+ * string `"false"` is true, so the key set to turn a billed feature off would
+ * turn it on — and `ai_search_query_rewrite` being on means a second Workers AI
+ * call per search that nothing in this repo controls.
+ */
+const BooleanFromStringSchema = z
+	.enum(["true", "false", "1", "0", "yes", "no"])
+	.transform((value) => value === "true" || value === "1" || value === "yes");
 
 /**
  * The model keys hold a JSON object (`{ "model": ..., "temperature": ... }`),
@@ -107,6 +234,42 @@ function numberFromVar(raw: string | undefined, name: string, lastResort: number
 }
 
 /**
+ * Reads a boolean var, falling back to a last resort if it is unusable.
+ *
+ * Hands back a real boolean rather than the string wrangler stores, because the
+ * vars are not re-validated by `resolveConfig` — whatever this returns lands in
+ * the config object as-is, and `"false"` is a truthy string.
+ */
+function booleanFromVar(raw: string | undefined, name: string, lastResort: boolean): boolean {
+	const normalised = raw?.trim().toLowerCase();
+
+	if (normalised === "true" || normalised === "1" || normalised === "yes") return true;
+	if (normalised === "false" || normalised === "0" || normalised === "no") return false;
+
+	console.warn(
+		`config: fallback var ${name} is missing or not a boolean (${JSON.stringify(raw)}), using ${lastResort}. Fix wrangler.jsonc.`
+	);
+	return lastResort;
+}
+
+/**
+ * Rejects a blank KV value so it falls back instead of being coerced.
+ *
+ * `z.coerce.number()` reads `""` as `0`. Every numeric key that existed before
+ * Phase 2 has `min(1)`, so a blank value failed validation and fell back on its
+ * own. `min_chunk_chars` and `search_match_threshold` both allow `0` as a real
+ * value, so without this an accidentally-blanked dashboard field would be
+ * *accepted* — silently disabling the thin-result check, or the score floor,
+ * while `describeConfig` reported a perfectly ordinary `0`.
+ *
+ * `undefined` coerces to `NaN`, which fails, which falls back and warns. That
+ * is the wanted behaviour.
+ */
+function rejectBlank(raw: string): unknown {
+	return raw.trim() === "" ? undefined : raw;
+}
+
+/**
  * Exactly what this file reads out of `Env`, and nothing else.
  *
  * Declared structurally rather than as `Pick<Env, …>` on purpose: `wrangler
@@ -125,10 +288,29 @@ export type ConfigEnv = {
 	 * fakes one method instead of standing up a whole `KVNamespace`. */
 	CONFIG: { get(keys: string[], options?: { cacheTtl?: number }): Promise<Map<string, string | null>> };
 	PLANNER_MODEL: string;
+	/** Optional, and the option is the point: an empty or absent value is the
+	 * signal to fall back to `PLANNER_MODEL`, which is how this is turned off
+	 * without a deploy. See `plannerModelFor`. */
+	VISION_PLANNER_MODEL?: string;
 	IMAGE_MODEL: string;
+	/** Optional for the same reason as `VISION_PLANNER_MODEL`: an empty or
+	 * absent value means no image-to-image model is configured, and
+	 * `imageModelFor` refuses a request carrying a reference image rather than
+	 * quietly sending it to a model that cannot read one. */
+	IMAGE_TO_IMAGE_MODEL?: string;
 	MAX_RETRIES?: string;
 	RETENTION_LIMIT?: string;
 	MAX_RESUME_ATTEMPTS?: string;
+	/** Optional, and the option is the point: an empty or absent value switches
+	 * the whole research stage off, which is how retrieval is disabled without a
+	 * deploy. See `researchModelFor`. */
+	RESEARCH_MODEL?: string;
+	CLASSIFIER_MODEL?: string;
+	MAX_TOOL_ITERATIONS?: string;
+	MAX_SEARCH_RESULTS?: string;
+	MIN_CHUNK_CHARS?: string;
+	SEARCH_MATCH_THRESHOLD?: string;
+	AI_SEARCH_QUERY_REWRITE?: string;
 };
 
 /**
@@ -152,12 +334,42 @@ const FIELDS = [
 		describe: (value: unknown) => describeModel(value as TextModelConfig),
 	},
 	{
+		key: "vision_planner_model",
+		field: "visionTextModel",
+		var: "VISION_PLANNER_MODEL",
+		schema: TextModelSchema,
+		prepare: prepareModelValue,
+		// Deliberately allowed to resolve to an empty model id. The vars are not
+		// re-validated by `resolveConfig`, so an unset var lands here as `{ model:
+		// "" }` — which `plannerModelFor` reads as "not configured" and answers by
+		// falling back to `textModel`. That is the off switch, and it is a KV or
+		// var edit rather than a deploy.
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.VISION_PLANNER_MODEL ?? "" }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
 		key: "image_model",
 		field: "imageModel",
 		var: "IMAGE_MODEL",
 		schema: ImageModelSchema,
 		prepare: prepareModelValue,
 		fromVar: (env: ConfigEnv): unknown => ({ model: env.IMAGE_MODEL }),
+		describe: (value: unknown) => describeModel(value as ImageModelConfig),
+	},
+	{
+		key: "image_to_image_model",
+		field: "imageToImageModel",
+		var: "IMAGE_TO_IMAGE_MODEL",
+		schema: ImageModelSchema,
+		prepare: prepareModelValue,
+		// `transport` is stated rather than left to its default. This model is
+		// only ever reached through the multipart helper, so a value resolving to
+		// `"json"` here would describe a call that cannot be made — the klein
+		// family rejects a JSON body outright.
+		fromVar: (env: ConfigEnv): unknown => ({
+			model: env.IMAGE_TO_IMAGE_MODEL ?? "",
+			transport: "multipart",
+		}),
 		describe: (value: unknown) => describeModel(value as ImageModelConfig),
 	},
 	{
@@ -188,6 +400,84 @@ const FIELDS = [
 		schema: z.coerce.number().int().min(1).max(20),
 		prepare: (raw: string): unknown => raw,
 		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_RESUME_ATTEMPTS, "MAX_RESUME_ATTEMPTS", 3),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "research_model",
+		field: "researchModel",
+		var: "RESEARCH_MODEL",
+		// The one key that accepts an empty model id, because empty is its off
+		// switch rather than a bad value. See `OptionalTextModelSchema`.
+		schema: OptionalTextModelSchema,
+		prepare: prepareModelValue,
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.RESEARCH_MODEL ?? "" }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
+		key: "classifier_model",
+		field: "classifierModel",
+		var: "CLASSIFIER_MODEL",
+		// Strict, unlike `research_model` directly above. There is no off switch
+		// for the classifier — a classify failure stops the run — so an empty value
+		// here is a typo and should fall back to the var like any other bad value.
+		schema: TextModelSchema,
+		prepare: prepareModelValue,
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.CLASSIFIER_MODEL ?? "" }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
+		key: "max_tool_iterations",
+		field: "maxToolIterations",
+		var: "MAX_TOOL_ITERATIONS",
+		// Capped at 10 for the same reason `max_resume_attempts` is capped at 20:
+		// every iteration is a billed model call, so a fat-fingered dashboard edit
+		// must not be able to authorise an unbounded loop (AGENTS.md §7).
+		schema: z.coerce.number().int().min(1).max(10),
+		prepare: (raw: string): unknown => raw,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_TOOL_ITERATIONS, "MAX_TOOL_ITERATIONS", 3),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "max_search_results",
+		field: "maxSearchResults",
+		var: "MAX_SEARCH_RESULTS",
+		schema: z.coerce.number().int().min(1).max(20),
+		prepare: (raw: string): unknown => raw,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_SEARCH_RESULTS, "MAX_SEARCH_RESULTS", 5),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "min_chunk_chars",
+		field: "minChunkChars",
+		var: "MIN_CHUNK_CHARS",
+		schema: z.coerce.number().int().min(0).max(5000),
+		// `rejectBlank` rather than the identity used above, because `0` is a legal
+		// value here and `z.coerce.number()` reads `""` as `0`.
+		prepare: rejectBlank,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MIN_CHUNK_CHARS, "MIN_CHUNK_CHARS", 200),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "search_match_threshold",
+		field: "searchMatchThreshold",
+		var: "SEARCH_MATCH_THRESHOLD",
+		// Not an integer: this is a similarity score between 0 and 1.
+		schema: z.coerce.number().min(0).max(1),
+		prepare: rejectBlank,
+		fromVar: (env: ConfigEnv): unknown =>
+			numberFromVar(env.SEARCH_MATCH_THRESHOLD, "SEARCH_MATCH_THRESHOLD", 0.5),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "ai_search_query_rewrite",
+		field: "queryRewrite",
+		var: "AI_SEARCH_QUERY_REWRITE",
+		schema: BooleanFromStringSchema,
+		// Normalised here rather than inside the schema, so the schema stays a
+		// plain enum and its error message names the values a person may type.
+		prepare: (raw: string): unknown => raw.trim().toLowerCase(),
+		fromVar: (env: ConfigEnv): unknown =>
+			booleanFromVar(env.AI_SEARCH_QUERY_REWRITE, "AI_SEARCH_QUERY_REWRITE", false),
 		describe: (value: unknown) => String(value),
 	},
 ] as const;
@@ -258,6 +548,98 @@ export async function resolveConfig(env: ConfigEnv): Promise<HeliosConfig> {
 	return { ...resolved, source } as HeliosConfig;
 }
 
+/**
+ * Which planner model this invocation actually calls.
+ *
+ * The vision model when one is configured, and `textModel` when it is not. The
+ * choice does **not** depend on whether the request carries a reference image:
+ * one model per deployment means one set of behaviour to tune and one prompt
+ * that has to work, where branching on the request would mean two of each and
+ * a class of bug that appears only once someone attaches an image.
+ *
+ * The empty-model case is checked explicitly rather than with a `?.` or a `||`
+ * chain (AGENTS.md §7). "No vision model configured" is the ordinary state
+ * before one is chosen, and it has to be distinguishable from a configured one
+ * — the log line is where that distinction is answerable, so it is logged.
+ */
+export function plannerModelFor(config: HeliosConfig): TextModelConfig {
+	const vision = config.visionTextModel;
+
+	if (vision === undefined || vision.model.trim().length === 0) {
+		console.log("planner: no vision model configured, using text_model");
+		return config.textModel;
+	}
+
+	return vision;
+}
+
+/**
+ * The model that makes the research call, or `null` when retrieval is off.
+ *
+ * **Null rather than a throw.** An unconfigured knowledge base is a working
+ * state, not an outage: every engine has to keep running before the AI Search
+ * instances exist, and with `research_model` empty a run behaves exactly as it
+ * did before Phase 2. That is what makes it possible to ship this work ahead of
+ * the knowledge base content.
+ *
+ * The empty case is checked explicitly rather than with a `?.` or a `||` chain
+ * (AGENTS.md §7), and it is logged, because "retrieval was switched off" and
+ * "retrieval ran and found nothing" are two different runs that would otherwise
+ * be indistinguishable in the log.
+ */
+export function researchModelFor(config: HeliosConfig): TextModelConfig | null {
+	const research = config.researchModel;
+
+	if (research === undefined || research.model.trim().length === 0) {
+		console.log("research: no research model configured, skipping retrieval");
+		return null;
+	}
+
+	return research;
+}
+
+/**
+ * How an image model is actually called: JSON body, or multipart form.
+ *
+ * `transport` is optional in config so that existing KV values stay valid, and
+ * this is the one place that absence is turned into a decision. `"json"` is the
+ * default because it is what every value in KV means today.
+ */
+export function transportFor(model: ImageModelConfig): "json" | "multipart" {
+	return model.transport ?? "json";
+}
+
+/**
+ * Which image model this invocation actually calls.
+ *
+ * Unlike `plannerModelFor`, this **does** depend on the request. A reference
+ * image can only be sent to a model that accepts one, and that is not the same
+ * model as the text-to-image default — so this is the one branch in the engine
+ * that a user's upload is allowed to steer.
+ *
+ * **Refuses rather than falls back** when a reference image arrives and no
+ * image-to-image model is configured (AGENTS.md §7). The tempting alternative —
+ * quietly using `imageModel` — spends the image model producing a result that
+ * ignored the upload, and leaves an audit row that looks entirely normal. There
+ * is no way to tell that outcome from a working one afterwards, which is
+ * exactly why it throws before anything bills.
+ */
+export function imageModelFor(config: HeliosConfig, hasReferenceImage: boolean): ImageModelConfig {
+	if (!hasReferenceImage) {
+		return config.imageModel;
+	}
+
+	const i2i = config.imageToImageModel;
+	if (i2i === undefined || i2i.model.trim().length === 0) {
+		throw new Error(
+			"image: the request carries a reference image but no image_to_image_model is " +
+				"configured. Set the image_to_image_model KV key, or the IMAGE_TO_IMAGE_MODEL var.",
+		);
+	}
+
+	return i2i;
+}
+
 /** One-line summary of the resolved config and where each value came from. */
 export function describeConfig(config: HeliosConfig): string {
 	const parts = FIELDS.map((entry) => {
@@ -265,4 +647,88 @@ export function describeConfig(config: HeliosConfig): string {
 		return `${entry.key}=${entry.describe(value)} (${config.source[entry.field]})`;
 	});
 	return `config: ${parts.join(" ")}`;
+}
+
+/* ── Prompts ───────────────────────────────────────────────────────────
+ *
+ * The same shape as the config above, for the same reason: a live store that
+ * can be edited without a deploy, a committed fallback for when it has nothing
+ * to say, and a record of which of the two actually answered.
+ *
+ * Deliberately identical to Iris's, down to the wording, so the two engines
+ * resolve prompts by the same code read the same way.
+ */
+
+/** A prompt as this invocation will really send it, and where it came from. */
+export interface ResolvedPrompt {
+	text: string;
+	/** `db` when the stored row supplied it, `code` when the committed builder did. */
+	source: "db" | "code";
+	/** The row's `updated_at`, and null whenever `source` is `code`. */
+	updatedAt: string | null;
+}
+
+/**
+ * Shorter than this and the row is not a prompt anyone meant to save.
+ *
+ * The guard earns its place because the failure it prevents is invisible: an
+ * empty system prompt is not an error the model reports, it is a billed call
+ * that returns something unusable. `upsertPrompt` already refuses to store blank
+ * text, so this catches a row written around the repository — by hand in the
+ * dashboard, say, or by a future writer that forgets.
+ */
+const MIN_PROMPT_LENGTH = 20;
+
+/**
+ * Reads one slot's prompt, falling back to the committed builder.
+ *
+ * **Read per invocation and never cached** — a Durable Object survives across
+ * many requests, so a cached prompt would freeze and an edit in the playground
+ * would appear to do nothing. This is ADR-0008 applied to a second store: the
+ * same reason `resolveConfig` re-reads KV every time instead of memoising.
+ *
+ * **Never throws.** A missing row, an unusable row, and D1 being unavailable all
+ * fall back to `fallback`. A prompt is policy, not a dependency the pipeline
+ * cannot run without, and a database blip must not take the engine down.
+ *
+ * The three cases are handled separately on purpose (AGENTS.md §7). A missing
+ * row is the expected state before a slot has been seeded and says nothing; a
+ * row that exists but is unusable is a real problem and says so; a failed read
+ * is a different problem again. One `?.` would have made all three look like the
+ * first.
+ */
+export async function resolvePrompt(
+	d1: HeliosD1Db,
+	slot: PromptSlot,
+	fallback: string,
+): Promise<ResolvedPrompt> {
+	const fromCode: ResolvedPrompt = { text: fallback, source: "code", updatedAt: null };
+
+	let row: Awaited<ReturnType<typeof getPrompt>>;
+	try {
+		row = await getPrompt(d1, slot);
+	} catch (cause) {
+		console.warn(`prompts: reading "${slot}" failed, using the committed prompt:`, cause);
+		return fromCode;
+	}
+
+	// Silent, because it is expected: a slot that has not been seeded yet is
+	// exactly what lets this roll out one prompt at a time.
+	if (row === null) return fromCode;
+
+	const stored = row.promptText.trim();
+	if (stored.length < MIN_PROMPT_LENGTH) {
+		console.warn(
+			`prompts: stored "${slot}" is ${stored.length} characters, which is not a usable prompt — using the committed one instead.`,
+		);
+		return fromCode;
+	}
+
+	return { text: row.promptText, source: "db", updatedAt: row.updatedAt };
+}
+
+/** One-line summary of a resolved prompt, for the log beside `describeConfig`. */
+export function describePrompt(slot: PromptSlot, prompt: ResolvedPrompt): string {
+	const when = prompt.updatedAt ? `, updated ${prompt.updatedAt}` : "";
+	return `prompt: ${slot}=${prompt.text.length}chars (${prompt.source}${when})`;
 }

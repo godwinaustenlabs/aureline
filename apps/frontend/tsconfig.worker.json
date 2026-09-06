@@ -1,0 +1,35 @@
+/**
+ * The playground's server side only.
+ *
+ * Separate from `tsconfig.json` because the two halves of this app run in
+ * different runtimes. The page is typechecked against `lib: DOM`; the worker is
+ * typechecked against the Workers runtime, whose `Request`, `Response` and
+ * `fetch` are different types with the same names. One config covering both
+ * would silently resolve those names to whichever came first.
+ *
+ * `worker-configuration.d.ts` is generated — run `npm run cf-typegen` after any
+ * binding or var change in wrangler.jsonc, and commit it in the same change.
+ */
+{
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024"],
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		/* The same pair the engines use. `node` is here for `src/server/test-db.ts`,
+		   which reaches for `node:sqlite` to back the D1 fake — that helper runs
+		   under vitest in Node, never in the Workers runtime. */
+		"types": ["./worker-configuration.d.ts", "node"],
+
+		"noEmit": true,
+		"isolatedModules": true,
+		"forceConsistentCasingInFileNames": true,
+
+		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"skipLibCheck": true
+	},
+	"include": ["src/server", "worker-configuration.d.ts"]
+}

@@ -1,0 +1,11 @@
+# Vite build output, served by the assets-only Worker
+dist/
+
+# wrangler project
+.wrangler/
+.dev.vars*
+.env*
+!.env.example
+
+node_modules/
+*.tsbuildinfo

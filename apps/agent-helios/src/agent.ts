@@ -5,8 +5,9 @@ import migrations from "../drizzle/migrations";
 import { HeliosRequestSchema, HeliosResumeRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
 import { resumeRun } from "./services/resume";
-import { getRunRows, listRuns } from "./repository/do.repository";
+import { getRunRows, listRuns, getClassificationByDesignSession } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
+import { json, error, readRequestBody } from "./http";
 
 /**
  * Helios — the Pattern Engine.
@@ -39,11 +40,25 @@ export class HeliosAgent extends Agent<Env> {
 			return json({ runs: pipelineId ? await getRunRows(db, pipelineId) : await listRuns(db) });
 		}
 
+		// Dedicated classification lookup so another engine (or the frontend) can
+		// read the classifier's decision without fetching every row for a design.
+		if (request.method === "GET" && url.pathname === "/classification") {
+			const designSessionId = url.searchParams.get("design_session_id")?.trim();
+			if (!designSessionId) {
+				return error("design_session_id is required", 400);
+			}
+			const row = await getClassificationByDesignSession(db, designSessionId);
+			return json({ classification: row?.classification ?? null });
+		}
+
 		if (request.method !== "POST") {
 			return error("POST required", 405);
 		}
 
-		const body = await request.json().catch(() => undefined);
+		// JSON or multipart, flattened to one shape. `/resume` reads it too: it has
+		// no image field, but a caller posting a form to it should get the schema's
+		// own 400 rather than an unreadable-body one.
+		const body = await readRequestBody(request);
 
 		if (url.pathname === "/resume") {
 			const parsed = HeliosResumeRequestSchema.safeParse(body);
@@ -68,15 +83,4 @@ export class HeliosAgent extends Agent<Env> {
 		const result = await runPipeline(db, parsed.data, this.env, url.origin);
 		return json(result);
 	}
-}
-
-function json(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "Content-Type": "application/json" },
-	});
-}
-
-function error(message: string, status: number) {
-	return json({ error: message }, status);
 }

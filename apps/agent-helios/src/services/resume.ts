@@ -9,7 +9,7 @@ import {
 } from "../repository/do.repository";
 import { describeConfig, resolveConfig } from "../config";
 import { describeError, firstIssueMessage } from "../utils";
-import { exportAndPrune, runImageStage } from "./pipeline";
+import { exportAndPrune, runImageStage, runPipeline } from "./pipeline";
 
 /**
  * Either the route refused before doing anything, or a run happened and settled.
@@ -51,12 +51,24 @@ export async function resumeRun(
 		return { ok: false, reason: `no run ${pipeline_id} in this session` };
 	}
 
+	// The absent row is checked on its own, before any status is read (AGENTS.md
+	// §7). It used to share a refusal with "the planner failed", which collapsed
+	// two situations that now get opposite answers: one is an incomplete record
+	// and the other is a run worth retrying.
 	const textRow = rows.find((row) => row.modality === "text");
-	if (!textRow || textRow.status !== "completed") {
+	if (textRow === undefined) {
 		return {
 			ok: false,
-			reason: "the planner never succeeded for this run, so there are no params to reuse. Send a new POST /generate",
+			reason: `run ${pipeline_id} has no text row, so its record is incomplete and resuming would build on a run whose state was never written. Send a new POST /generate`,
 		};
+	}
+
+	// A run that failed before the planner settled has no params, so there is
+	// nothing for the image-only path below to reuse. Since Phase 2 that is a
+	// real and expected outcome — a classify or research failure lands here — so
+	// it re-runs the whole pipeline instead of refusing.
+	if (textRow.status !== "completed") {
+		return resumeFromTheTop(db, textRow, pipeline_id, env, origin);
 	}
 
 	const imageRow = rows.find((row) => row.modality === "image");
@@ -206,6 +218,63 @@ export async function resumeRun(
 			},
 		};
 	}
+}
+
+/**
+ * Re-runs the entire pipeline for a run that never produced params.
+ *
+ * **Not the same thing as the image-only resume below it.** That one reuses a
+ * planner result it already paid for; this one has nothing to reuse and starts
+ * again from the classifier — so it costs a full run, and it is counted against
+ * `max_resume_attempts` exactly like any other resume for that reason.
+ *
+ * The reference image is not carried over. It was transient and was never
+ * persisted (ADR-SHARED-0003), so a re-run of a request that had one is a
+ * text-only run. That is a real difference in the output and is why the refusal
+ * this replaced said "send a new POST /generate" — a caller who still has the
+ * picture should still do that.
+ *
+ * If it fails again, it fails again. No special retry and no escalation.
+ */
+async function resumeFromTheTop(
+	db: HeliosDb,
+	textRow: HeliosRun,
+	pipeline_id: string,
+	env: Env,
+	origin: string,
+): Promise<ResumeOutcome> {
+	const config = await resolveConfig(env);
+	console.log(describeConfig(config));
+
+	const parent = parentMetadata(textRow);
+	const root = parent.root ?? pipeline_id;
+
+	// The same money guard the image-only path uses, and it matters more here:
+	// this path spends a classify, a research, a planner and an image call, where
+	// that one spends an image call.
+	const alreadySpent = await countResumeAttempts(db, root);
+	if (alreadySpent >= config.maxResumeAttempts) {
+		return {
+			ok: false,
+			reason: `this brief has already been resumed ${alreadySpent} ${alreadySpent === 1 ? "time" : "times"}, the limit is ${config.maxResumeAttempts}. Send a new POST /generate if it is still worth pursuing`,
+		};
+	}
+
+	console.log(`resume: re-running the full pipeline for ${pipeline_id}, which produced no params`);
+
+	// `runPipeline` mints its own pipeline id. The design session id is copied off
+	// the row being resumed rather than minted, so the retry belongs to the design
+	// it is retrying (AGENTS.md §3).
+	return {
+		ok: true,
+		result: await runPipeline(
+			db,
+			{ concept: textRow.userPrompt, design_session_id: textRow.designSessionId },
+			env,
+			origin,
+			{ root, resumed_from: pipeline_id, attempt: parent.attempt + 1 },
+		),
+	};
 }
 
 /**

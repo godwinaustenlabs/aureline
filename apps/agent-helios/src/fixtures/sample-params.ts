@@ -23,6 +23,8 @@ export const sampleParamsFull: HeliosParams = {
 	texture_technique: "hatching",
 	contrast_level: "high",
 	style: "traditional",
+	image_prompt:
+		"Let the fan ribs radiate from a single point so each motif reads as one fan rather than a cluster.",
 };
 
 /**
@@ -41,6 +43,7 @@ export const sampleParamsAlternate: HeliosParams = {
 	texture_technique: "stippling",
 	contrast_level: "low",
 	style: "modern",
+	image_prompt: "Keep the stippling coarse enough to stay visible at a small scale.",
 };
 
 /** base64 for the bytes [72, 101, 108, 108, 111] ("Hello"). Not a real image:
