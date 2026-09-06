@@ -79,14 +79,23 @@ export function validateIrisGenerate(input: {
 	motifRef: string;
 	designSessionId: string;
 	sessionId: string;
+	classification?: { mode: 'tile' | 'motif'; garmentPart?: string | null };
 }): ValidatedIris {
-	const { concept, motifRef, designSessionId, sessionId } = input;
+	const { concept, motifRef, designSessionId, sessionId, classification } = input;
 
 	const parsed = IrisRequestSchema.safeParse({
 		concept,
 		motif_ref: motifRef,
 		design_session_id: designSessionId,
 		...(sessionId ? { session_id: sessionId } : {}),
+		...(classification
+			? {
+					classification: {
+						mode: classification.mode,
+						...(classification.garmentPart ? { garment_part: classification.garmentPart } : {}),
+					},
+				}
+			: {}),
 	});
 
 	return parsed.success ? { ok: true, request: parsed.data } : { ok: false, message: firstIssueMessage(parsed.error) };

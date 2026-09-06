@@ -15,6 +15,13 @@
       "when": 1788265470655,
       "tag": "0001_blue_polaris",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788441202904,
+      "tag": "0002_careless_northstar",
+      "breakpoints": true
     }
   ]
 }

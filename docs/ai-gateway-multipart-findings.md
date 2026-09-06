@@ -2,7 +2,8 @@
 
 **A record of what was tried, not a decision.** The decisions this fed into are
 ADR-SHARED-0001 (why the multipart path cannot reach the gateway) and
-ADR-SHARED-0002 (what Iris does about it). (An earlier header called this file "deliberately not committed";
+ADR-SHARED-0002 (a way around it that was decided and **never built** — see the
+last section). (An earlier header called this file "deliberately not committed";
 it has been in git since `0bfde36`, and several places still cite it as local. It is
 not.)
 
@@ -180,14 +181,25 @@ the 2026-08-31 session asked which model on the account can be routed at all.
 
 `@cf/runwayml/stable-diffusion-v1-5-inpainting` takes a plain JSON body, and a
 plain JSON body routes without complaint — verified end to end through the `iris`
-gateway, `aiGatewayLogId` `01M1C43NMHZKZSP1GHNHDDW9KX`. Iris now runs it by
-default, with an explicit `transport` field in config selecting which helper
-sends the request. `cost_usd` on the image row is a real number again.
+gateway, `aiGatewayLogId` `01M1C43NMHZKZSP1GHNHDDW9KX`.
 
-The cost of that is real too and is recorded in ADR-SHARED-0002: 512x512 instead
-of 1024x1024, and a visibly weaker recolour. flux-2-klein stays one KV edit away
-for work that needs the better image, at the price of the null cost this whole
-document explains.
+**That is where it stopped.** ADR-SHARED-0002 wrote the decision up — a
+`transport` field in config, a `getInpaintingOutput` helper, a white mask, PNG
+carried truthfully through R2 — and **none of it was built.** As of 2026-09-01
+Iris still calls `getImageToImageOutput` over multipart with no gateway id, and
+its image row still carries `cost_usd: null`. The probe bought the knowledge; the
+code never followed. Both this section and ADR-SHARED-0002 were written in the
+present tense, which made the gap invisible for a week — hence this correction.
+
+Had it been adopted, the cost would have been real too and is recorded in
+ADR-SHARED-0002: 512x512 instead of 1024x1024, and a visibly weaker recolour.
+flux-2-klein would have stayed one KV edit away for work that needs the better
+image, at the price of the null cost this whole document explains.
+
+The phase-1 reference-image work does not adopt it either, and for an unrelated
+reason: the user's reference image never reaches Iris's image model, so there is
+nothing on the Iris side for a second image transport to carry. Iris's image call
+stays exactly as it is.
 
 Models ruled out on the way, so nobody re-walks them: `sdxl-base` and
 `xl-lightning` carry no image tensor (`3030`); `dreamshaper-8-lcm` wants an

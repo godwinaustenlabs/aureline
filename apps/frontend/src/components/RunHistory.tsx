@@ -51,6 +51,8 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 							<thead>
 								<tr>
 									<th>pipeline_id</th>
+									<th>design</th>
+									<th>mode</th>
 									<th>when</th>
 									<th>text</th>
 									<th>image</th>
@@ -76,6 +78,34 @@ export function RunHistory({ groups, session, loading, error, selectedId, onSele
 											>
 												{shortId(group.pipelineId)}
 											</button>
+										</td>
+										{/*
+										 * The design id, shortened the same way the pipeline id above is.
+										 * Not a button: it selects nothing. It is here to be *compared* —
+										 * the same value in the Helios table and the Iris table is what
+										 * says one engine coloured the other's pattern.
+										 */}
+										<td>
+											<code title={group.designSessionId || 'not recorded on this row'}>
+												{group.designSessionId ? shortId(group.designSessionId) : '—'}
+											</code>
+										</td>
+										{/*
+										 * What the classifier decided. A dash rather than a default:
+										 * an Iris run has no classification, a Helios run from before
+										 * Phase 2 has none, and one that failed before classifying has
+										 * none. Rendering "tile" for any of those would put a decision
+										 * on screen that nothing made.
+										 */}
+										<td>
+											{group.classification === null ? (
+												'—'
+											) : (
+												<span title={group.classification.garmentPart ?? 'no garment part'}>
+													{group.classification.mode}
+													{group.classification.garmentPart && ` · ${group.classification.garmentPart}`}
+												</span>
+											)}
 										</td>
 										<td>{localTime(group.createdAt)}</td>
 										<td>

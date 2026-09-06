@@ -26,7 +26,7 @@ export type EngineName = "iris" | "helios";
  */
 export const ENGINE_SLOTS = {
 	iris: ["iris_planner", "iris_color"],
-	helios: ["helios_planner", "helios_image"],
+	helios: ["helios_planner", "helios_classifier", "helios_research"],
 } as const satisfies Record<EngineName, readonly string[]>;
 
 /** Matches `MIN_PROMPT_LENGTH` in each engine's `config.ts`. A shorter row is

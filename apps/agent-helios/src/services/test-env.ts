@@ -11,14 +11,37 @@ import { createFailingD1, createTestD1 } from "../repository/test-db";
  */
 export const GATEWAY_COST_USD = 0.0019008;
 
+/** A research turn with no tool calls, which is what ends the loop. */
+const RESEARCH_DONE = { response: "Nothing worth looking up." };
+
 /** The runtime config vars `resolveConfig` falls back to when KV is empty. */
 const VARS = {
 	PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
+	// Empty by default, so `plannerModelFor` falls back to PLANNER_MODEL and every
+	// existing suite keeps calling the model it always did. A test that wants the
+	// multimodal path opts in with the `visionPlannerModel` override.
+	VISION_PLANNER_MODEL: "",
 	IMAGE_MODEL: "@cf/black-forest-labs/flux-1-schnell",
+	// Set, matching wrangler.jsonc, so a suite that attaches a reference image
+	// exercises the multipart path rather than `imageModelFor`'s refusal. The
+	// refusal has its own test in `config.test.ts`, where it is the subject
+	// rather than an accident of the fake.
+	IMAGE_TO_IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 	AI_GATEWAY_ID: "helios",
 	MAX_RETRIES: "2",
 	RETENTION_LIMIT: "5",
 	MAX_RESUME_ATTEMPTS: "3",
+	// Empty by default, exactly like VISION_PLANNER_MODEL above and for the same
+	// reason: `researchModelFor` reads it as "retrieval off", so every existing
+	// suite keeps making the calls it always did. A suite that wants the research
+	// stage opts in rather than every other suite opting out.
+	RESEARCH_MODEL: "",
+	CLASSIFIER_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
+	MAX_TOOL_ITERATIONS: "3",
+	MAX_SEARCH_RESULTS: "5",
+	MIN_CHUNK_CHARS: "200",
+	SEARCH_MATCH_THRESHOLD: "0.5",
+	AI_SEARCH_QUERY_REWRITE: "false",
 };
 
 /**
@@ -59,11 +82,44 @@ const VARS = {
 export function fakeEnv(
 	overrides: {
 		planner?: unknown | Error;
+		classifier?: unknown | Error;
+		/**
+		 * The research model's replies. Only reached when `researchModel` is set.
+		 *
+		 * An **array** is a conversation, consumed one reply per turn, and once it
+		 * runs out every further turn answers with no tool calls — which is what
+		 * ends the loop. That is the shape a real research turn has: ask, then
+		 * answer. A single value is returned on every turn instead, which means the
+		 * model asks to search forever and the loop only stops at
+		 * `max_tool_iterations` — occasionally what a test wants, and never what it
+		 * wants by accident.
+		 *
+		 * Safe to overload on `Array.isArray` because no Workers AI reply is a bare
+		 * array.
+		 */
+		research?: unknown | Error | unknown[];
 		image?: unknown | Error;
+		/** What `env.AI_SEARCH.search` answers. Defaults to an empty result, which
+		 *  is what an unindexed instance returns. */
+		search?: unknown | Error;
 		getLog?: ReturnType<typeof vi.fn>;
 		aiGatewayLogId?: string | null;
 		maxRetries?: number;
 		maxResumeAttempts?: number;
+		/** Turns the vision planner on for this env. Empty (the default) leaves it
+		 *  off and `plannerModelFor` falls back to `PLANNER_MODEL`. */
+		visionPlannerModel?: string;
+		/**
+		 * Turns retrieval on for this env. Empty (the default) leaves it off and
+		 * `researchModelFor` returns null, so every suite that predates the
+		 * research stage keeps making exactly the calls it always did.
+		 *
+		 * Deliberately a different model id from `VISION_PLANNER_MODEL`, even
+		 * though `wrangler.jsonc` points both at the same model in production. The
+		 * `run` fake below dispatches on model id, and it cannot answer a planner
+		 * call and a research call differently if they share one.
+		 */
+		researchModel?: string;
 		patternsPut?: "ok" | "fail";
 		throwingD1?: boolean;
 	} = {},
@@ -74,7 +130,15 @@ export function fakeEnv(
 		...(overrides.maxResumeAttempts !== undefined
 			? { MAX_RESUME_ATTEMPTS: String(overrides.maxResumeAttempts) }
 			: {}),
+		...(overrides.visionPlannerModel !== undefined
+			? { VISION_PLANNER_MODEL: overrides.visionPlannerModel }
+			: {}),
+		...(overrides.researchModel !== undefined ? { RESEARCH_MODEL: overrides.researchModel } : {}),
 	};
+
+	// Which turn of the research conversation the next call answers. Only read
+	// when `research` is an array.
+	let researchTurn = 0;
 
 	// All three parameters are declared, and the return is `unknown`, because
 	// that is `Ai.run`'s real shape. Letting the signature be inferred from the
@@ -82,12 +146,53 @@ export function fakeEnv(
 	// test that reads `run.mock.calls[0][2]` or queues a different reply then
 	// fails to compile against a fake that is merely under-described.
 	const run = vi.fn(async (model: string, _input?: unknown, _options?: unknown): Promise<unknown> => {
-		if (model === vars.PLANNER_MODEL) {
+		// Either planner id answers with a planner reply. Matching only
+		// `PLANNER_MODEL` would send a vision-model call down the image branch and
+		// return an image where the suite expected params.
+		if (model === vars.PLANNER_MODEL || (vars.VISION_PLANNER_MODEL !== "" && model === vars.VISION_PLANNER_MODEL)) {
 			if (overrides.planner instanceof Error) throw overrides.planner;
 			return overrides.planner ?? { response: JSON.stringify(sampleParamsFull), usage: { neurons: 102 } };
 		}
+		// Before the image fall-through, because the fall-through is a catch-all
+		// and a catch-all is how a new model id gets an image back where the suite
+		// expected JSON. Every stage added after this one has the same problem and
+		// needs the same branch — the last `if` here answers for models nobody has
+		// taught it about.
+		if (model === vars.CLASSIFIER_MODEL) {
+			if (overrides.classifier instanceof Error) throw overrides.classifier;
+			return (
+				overrides.classifier ?? { response: JSON.stringify({ mode: "tile" }), usage: { neurons: 8 } }
+			);
+		}
+		// The branch the comment above predicted. Guarded on a non-empty id because
+		// RESEARCH_MODEL is "" by default, and `model === ""` is never true anyway —
+		// but leaving the guard off would make this branch look reachable when
+		// retrieval is off, which it is not.
+		if (vars.RESEARCH_MODEL !== "" && model === vars.RESEARCH_MODEL) {
+			if (overrides.research instanceof Error) throw overrides.research;
+
+			if (Array.isArray(overrides.research)) {
+				const reply = overrides.research[researchTurn++];
+				if (reply instanceof Error) throw reply;
+				// Past the end of the conversation: no tool calls, so the loop stops.
+				return reply ?? RESEARCH_DONE;
+			}
+
+			// No tool_calls by default: the model decided it had enough. The quietest
+			// possible research turn, so a suite that only wants the stage to exist
+			// gets one model call and no searches.
+			return overrides.research ?? RESEARCH_DONE;
+		}
 		if (overrides.image instanceof Error) throw overrides.image;
 		return overrides.image ?? { image: SAMPLE_IMAGE_BASE64 };
+	});
+
+	// An empty result by default, which is what an instance with no content
+	// indexed actually returns — the state every run is in until a human uploads
+	// the knowledge base. A suite wanting chunks passes `search`.
+	const search = vi.fn(async (params: { query: string }): Promise<unknown> => {
+		if (overrides.search instanceof Error) throw overrides.search;
+		return overrides.search ?? { search_query: params.query, chunks: [] };
 	});
 
 	const getLog = overrides.getLog ?? vi.fn().mockResolvedValue({ cost: GATEWAY_COST_USD });
@@ -103,19 +208,29 @@ export function fakeEnv(
 		// call that never routed through the gateway leaves behind, and `??` would
 		// quietly turn that case back into a live log id.
 		AI: { run, gateway, aiGatewayLogId: overrides.aiGatewayLogId !== undefined ? overrides.aiGatewayLogId : "log-1" },
+		AI_SEARCH: { search },
 		AI_GATEWAY_ID: vars.AI_GATEWAY_ID,
 		// Empty KV → every value resolves from the vars below.
 		CONFIG: { get: vi.fn().mockResolvedValue(new Map<string, string | null>()) },
 		PATTERNS: { put: patternsPut, get: vi.fn() },
 		DB: d1,
 		PLANNER_MODEL: vars.PLANNER_MODEL,
+		VISION_PLANNER_MODEL: vars.VISION_PLANNER_MODEL,
 		IMAGE_MODEL: vars.IMAGE_MODEL,
+		IMAGE_TO_IMAGE_MODEL: vars.IMAGE_TO_IMAGE_MODEL,
 		MAX_RETRIES: vars.MAX_RETRIES,
 		RETENTION_LIMIT: vars.RETENTION_LIMIT,
 		MAX_RESUME_ATTEMPTS: vars.MAX_RESUME_ATTEMPTS,
+		RESEARCH_MODEL: vars.RESEARCH_MODEL,
+		CLASSIFIER_MODEL: vars.CLASSIFIER_MODEL,
+		MAX_TOOL_ITERATIONS: vars.MAX_TOOL_ITERATIONS,
+		MAX_SEARCH_RESULTS: vars.MAX_SEARCH_RESULTS,
+		MIN_CHUNK_CHARS: vars.MIN_CHUNK_CHARS,
+		SEARCH_MATCH_THRESHOLD: vars.SEARCH_MATCH_THRESHOLD,
+		AI_SEARCH_QUERY_REWRITE: vars.AI_SEARCH_QUERY_REWRITE,
 	} as unknown as Env;
 
 	// `d1` comes back so a suite can read what the export actually wrote, which
 	// is the only way an assertion can tell an export from a swallowed failure.
-	return { env, run, gateway, getLog, patternsPut, d1, vars };
+	return { env, run, search, gateway, getLog, patternsPut, d1, vars };
 }

@@ -13,10 +13,21 @@
  * Worker and adding one is an account-level change a human makes. When that
  * binding lands, this file is the thing to delete.
  *
- * Scope is deliberately one format. Every image in this pipeline is a JPEG:
- * Helios writes `.jpg`, `saveColoredImage` writes `.jpg`, and the model returns
- * JPEG. A PNG branch here would be untested code guarding a case that cannot
- * occur, so a non-JPEG throws instead.
+ * Scope is deliberately one format. Every image the *pipeline* produces is a
+ * JPEG: Helios writes `.jpg`, `saveColoredImage` writes `.jpg`, and the model
+ * returns JPEG. A PNG branch here would be untested code guarding a case that
+ * could not occur, so a non-JPEG throws instead.
+ *
+ * **A user-uploaded reference image is the one input that breaks that
+ * assumption** — a browser file picker will happily hand over a PNG, and this
+ * throws on one. That is why every caller measuring an *uploaded* image wraps
+ * this in a degrade-to-null-and-warn helper rather than calling it bare. Its
+ * dimensions only answer a debugging question, so failing a run over an
+ * unreadable header would be the wrong trade; the size the *model returned* is
+ * a different matter and is still allowed to throw.
+ *
+ * Lives in `shared-utils` because both engines measure images now. It moved
+ * here from `agent-iris/src/services/` unchanged.
  */
 
 /** SOI, the two bytes every JPEG starts with. */

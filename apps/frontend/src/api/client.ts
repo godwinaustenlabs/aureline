@@ -30,9 +30,16 @@ export function normaliseBaseUrl(baseUrl: string): string {
 	return baseUrl.trim().replace(/\/+$/, '');
 }
 
-/** `POST /generate`. Billed. */
-export async function generate(baseUrl: string, request: HeliosRequest): Promise<CallOutcome> {
-	return post(`${normaliseBaseUrl(baseUrl)}/generate`, request);
+/**
+ * `POST /generate`. Billed.
+ *
+ * Sends JSON when there is no reference image and `multipart/form-data` when
+ * there is. The JSON path is unchanged, which is what keeps a run without an
+ * image behaving exactly as it always has.
+ */
+export async function generate(baseUrl: string, request: HeliosRequest, image?: File | null): Promise<CallOutcome> {
+	const url = `${normaliseBaseUrl(baseUrl)}/generate`;
+	return image ? postForm(url, request, image) : post(url, request);
 }
 
 /** `POST /resume`. Billed, and refuses with a 409 more often than it runs. */
@@ -93,6 +100,42 @@ async function post(url: string, body: unknown): Promise<CallOutcome> {
 	});
 
 	return classify(status, raw);
+}
+
+/** The same call with a file attached. Exported for `api/iris.ts`, which posts
+ *  to a different worker but builds the identical body. */
+export async function postForm(url: string, body: unknown, image: File): Promise<CallOutcome> {
+	const { status, raw } = await send(url, { method: 'POST', body: toFormData(body, image) });
+	return classify(status, raw);
+}
+
+/**
+ * The request's text fields plus the file, as one multipart body.
+ *
+ * **No `Content-Type` header is set, here or by any caller, and that is
+ * load-bearing.** The browser writes it itself, including the `boundary=`
+ * parameter that tells the server where each part begins. Setting it by hand
+ * omits the boundary, and the worker then receives a body it cannot parse at
+ * all — with an error that points at the schema rather than at the header. It
+ * is also still within `ALLOWED_HEADERS`, so nothing changes at preflight.
+ *
+ * Every value is stringified because a form carries text and files, nothing
+ * else. `undefined` fields are dropped rather than sent as the string
+ * "undefined", which the schema would read as a real value.
+ */
+export function toFormData(body: unknown, image: File): FormData {
+	const form = new FormData();
+
+	for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+		if (value !== undefined && value !== null) form.set(key, String(value));
+	}
+
+	// The field name the engines read (`readRequestBody`), and the same name the
+	// JSON-bodied image call downstream uses. Renaming it here silently produces
+	// a request with no image and no error.
+	form.set('image', image);
+
+	return form;
 }
 
 /**

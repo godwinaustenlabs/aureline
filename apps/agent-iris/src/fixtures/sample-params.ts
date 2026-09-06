@@ -18,13 +18,22 @@ export const sampleParamsFull: IrisParams = {
 	saturation: "balanced",
 	background_treatment: "solid",
 	mood: "regal and refined, evoking antique brocade",
+	image_prompt:
+		"Let the gold sit only in the finest details so the navy stays dominant across the ground.",
 };
 
-/** Exercises the minimum valid shape: only `primary_color` is required. */
+/**
+ * Exercises the minimum valid shape: only the three colour fields are optional.
+ *
+ * `image_prompt` is present here despite the name, because it is required on
+ * every engine from the start — a "minimal" params object without one is not a
+ * valid params object.
+ */
 export const sampleParamsMinimal: IrisParams = {
 	primary_color: "black",
 	harmony: "monochrome",
 	saturation: "muted",
 	background_treatment: "transparent",
 	mood: "minimal and graphic",
+	image_prompt: "Keep the black flat and even, with no gradient in the ground.",
 };

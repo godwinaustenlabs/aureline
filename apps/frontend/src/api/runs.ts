@@ -28,14 +28,45 @@ import type { HeliosStatus } from '@aureline/shared-types';
 export interface RunRow {
 	id: string;
 	pipelineId: string;
+	/**
+	 * The design this run belongs to, carried unchanged through every engine.
+	 *
+	 * The one field that ties a Helios pattern to the Iris run that coloured it.
+	 * Both engines store it on every row and both `/runs` routes return it — it
+	 * was arriving in the JSON and being dropped here, which meant the chain
+	 * between the two engines existed in the databases and nowhere on screen.
+	 */
+	designSessionId: string;
 	modality: 'text' | 'image';
 	status: HeliosStatus;
 	userPrompt: string;
+	/**
+	 * The R2 key of the motif an Iris run coloured. **Iris only** — `iris_runs`
+	 * is `helios_runs` plus this one column, which is also why the two engines
+	 * chunk their D1 inserts at 7 rows and 8.
+	 *
+	 * Optional rather than nullable, because a Helios row does not have the field
+	 * at all — `undefined` says "this engine has no such column" where `null`
+	 * would say "it has one and it is empty".
+	 */
+	motifRef?: string;
 	/** A JSON column. Typed `unknown` because it reads back untrusted — a row
 	 *  written under an older schema must fail loudly rather than render as
 	 *  nonsense. Validate with `HeliosParamsSchema` before treating it as params,
 	 *  exactly as `services/resume.ts` does. */
 	plannerParams: unknown;
+	/**
+	 * The classifier's answer — `{ mode }` and, on a motif, `{ garment_part }`.
+	 *
+	 * **Helios only, and its own column rather than a field inside
+	 * `plannerParams`.** That separation is what lets the playground group a
+	 * design's runs by garment part without parsing a planner output.
+	 *
+	 * Optional and `unknown` for the same two reasons the fields around it are:
+	 * Iris has no such column, and a Helios row written before Phase 2 carries
+	 * `{}`. Read it with `readClassification`, never by indexing.
+	 */
+	classification?: unknown;
 	imageR2Key: string | null;
 	/** Real dollars, or null when the AI Gateway log was missing. Null is not
 	 *  zero: a failed call that never reached the model was never charged. */

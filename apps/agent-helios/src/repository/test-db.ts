@@ -30,7 +30,11 @@ const HELIOS_RUNS_DDL = `
 		cost_usd REAL,
 		model_metadata TEXT NOT NULL,
 		created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-		completed_at INTEGER
+		completed_at INTEGER,
+		-- Last, because ALTER TABLE ADD COLUMN appends, and that is where every
+		-- migrated database has it. Backticks are deliberately absent: this DDL is
+		-- a template literal and one would end the string. See db/schema.ts.
+		classification TEXT NOT NULL DEFAULT '{}'
 	);
 `;
 

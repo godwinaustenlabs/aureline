@@ -2,6 +2,9 @@ import { usd } from '../domain/format';
 import type { IrisCallOutcome } from '../domain/irisOutcome';
 import { IRIS_GENERATE_COST_USD } from '../api/iris';
 import { Waiting } from './Waiting';
+import { RunHistory } from './RunHistory';
+import type { RunGroup, RunClassification } from '../domain/runView';
+import { ReferenceImageField } from './ReferenceImageField';
 
 /**
  * The Iris screen: colour an existing black-and-white motif.
@@ -33,13 +36,37 @@ interface Props {
 	onGenerate: () => void;
 	onPing: () => void;
 	connection: { ok: boolean; message: string } | null;
+	referenceImage: File | null;
+	onReferenceImage: (file: File | null) => void;
 	outcome: IrisCallOutcome | null;
 	/** Where the motif and design id came from, when they were carried across. */
 	handoffNote: string | null;
+	/** The classifier's decision from the Helios run, when carried across. */
+	classification: RunClassification | null;
+
+	/**
+	 * Iris's own run history, from Iris's own `GET /runs`.
+	 *
+	 * Iris serves the identical route and envelope Helios does, so `RunHistory`
+	 * is reused unchanged rather than rebuilt — `iris_runs` is `helios_runs` plus
+	 * `motif_ref`, and both engines write the same `root` / `resumed_from` /
+	 * `attempt` markers that `runView` reads to work out lineage.
+	 */
+	groups: RunGroup[];
+	session: string;
+	rowsLoading: boolean;
+	rowsError: string | null;
+	selectedId: string | null;
+	onSelect: (pipelineId: string) => void;
+	onResume: (pipelineId: string) => void;
+	onRefreshRuns: () => void;
+	/** The stored image of a run picked out of the history, rebuilt from its R2
+	 *  key — a row records the key and never the URL. */
+	historyImage: { url: string; pipelineId: string } | null;
 }
 
 export function IrisPanel(props: Props) {
-	const { concept, motifRef, designSessionId, sessionField, baseUrl, inFlight, outcome, handoffNote } = props;
+	const { concept, motifRef, designSessionId, sessionField, baseUrl, inFlight, outcome, handoffNote, classification } = props;
 
 	return (
 		<>
@@ -50,6 +77,13 @@ export function IrisPanel(props: Props) {
 					</header>
 					<div className="panel-body">
 						{handoffNote && <p className="hint">{handoffNote}</p>}
+
+						{classification && (
+							<p className="hint">
+								Classification from Helios: <strong>{classification.mode}</strong>
+								{classification.garmentPart && ` · ${classification.garmentPart}`}
+							</p>
+						)}
 
 						<div className="field">
 							<label htmlFor="iris-motif">Motif ref</label>
@@ -112,6 +146,12 @@ export function IrisPanel(props: Props) {
 							</span>
 						</div>
 
+						<ReferenceImageField
+							id="iris-reference"
+							file={props.referenceImage}
+							onFile={props.onReferenceImage}
+						/>
+
 						<div className="field">
 							<label htmlFor="iris-base">Iris base URL</label>
 							<div className="row">
@@ -149,15 +189,43 @@ export function IrisPanel(props: Props) {
 					<div className="panel-body">
 						{inFlight && <Waiting elapsedMs={props.elapsedMs} what="Waiting on Iris" />}
 
-						{!outcome && !inFlight && (
+						{!outcome && !inFlight && !props.historyImage && (
 							<p className="empty" style={{ padding: 0 }}>
-								Nothing yet. Run Helios first, and the motif ref and design id land here automatically.
+								Nothing yet. Run Helios first, and the motif ref and design id land here automatically — or
+								pick an earlier run from the history below.
 							</p>
 						)}
 
-						{outcome && <IrisResultView outcome={outcome} />}
+						{props.historyImage ? (
+							<figure style={{ margin: 0 }}>
+								<figcaption className="hint" style={{ marginBottom: 6 }}>
+									From the run history — <code>{props.historyImage.pipelineId}</code>. Rebuilt from the
+									stored R2 key, because a row records the key and never the URL.
+								</figcaption>
+								<div className="pattern">
+									<img src={props.historyImage.url} alt="The colouring this run produced" />
+								</div>
+								<figcaption className="hint" style={{ marginTop: 6, wordBreak: 'break-all' }}>
+									{props.historyImage.url}
+								</figcaption>
+							</figure>
+						) : (
+							outcome && <IrisResultView outcome={outcome} />
+						)}
 					</div>
 				</section>
+
+				<RunHistory
+					groups={props.groups}
+					session={props.session}
+					loading={props.rowsLoading}
+					error={props.rowsError}
+					selectedId={props.selectedId}
+					onSelect={props.onSelect}
+					onResume={props.onResume}
+					onRefresh={props.onRefreshRuns}
+					busy={inFlight}
+				/>
 			</div>
 		</>
 	);

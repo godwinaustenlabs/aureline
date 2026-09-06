@@ -11,6 +11,7 @@ const COMPLETED = JSON.stringify({
 		saturation: 'balanced',
 		background_treatment: 'solid',
 		mood: 'opulent traditional',
+		image_prompt: 'Confine the gold to the finest details.',
 	},
 	image_url: 'https://agent-iris.aureline.workers.dev/images/iris/run-1.jpg',
 	width: 512,

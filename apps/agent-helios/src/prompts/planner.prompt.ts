@@ -1,4 +1,4 @@
-import type { HeliosParams } from "@aureline/shared-types";
+import type { Classification, HeliosParams } from "@aureline/shared-types";
 
 /**
  * Textual planner system prompt (v1).
@@ -12,7 +12,7 @@ import type { HeliosParams } from "@aureline/shared-types";
  */
 
 /** Versioned identity of this prompt. Never edit a prompt in place — bump the ID. */
-export const PLANNER_PROMPT_ID = "helios-planner-v1";
+export const PLANNER_PROMPT_ID = "helios-planner-v3";
 
 /**
  * Per-value glosses, keyed by the schema's own union types.
@@ -101,6 +101,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "high",
 			style: "art deco",
+			image_prompt:
+				"Let the fan ribs radiate from a single point at the base of each motif so it reads as one fan rather than a cluster of arcs.",
 		},
 	},
 	{
@@ -114,6 +116,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "hatching",
 			contrast_level: "medium",
 			style: "vintage botanical illustration",
+			image_prompt:
+				"Draw each sprig with a visible stem and two or three leaves, in the manner of a specimen plate rather than a decorative flourish.",
 		},
 	},
 	{
@@ -128,6 +132,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "low",
 			style: "minimal",
+			image_prompt:
+				"Keep each leaf a single unbroken outline with no internal veining, so the sparseness reads as intentional.",
 		},
 	},
 	{
@@ -142,6 +148,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "cross-hatching",
 			contrast_level: "high",
 			style: "opulent traditional",
+			image_prompt:
+				"Fill the body of each paisley with dense internal ornament so the weight of the brief lands as detail rather than as scale.",
 		},
 	},
 	{
@@ -156,6 +164,8 @@ const EXAMPLES: ReadonlyArray<{ concept: string; params: HeliosParams }> = [
 			texture_technique: "flat",
 			contrast_level: "high",
 			style: "folk",
+			image_prompt:
+				"Give every daisy the same number of petals and the same simple round centre, so the density reads as a repeat rather than as noise.",
 		},
 	},
 ];
@@ -175,13 +185,38 @@ function allowed(record: Record<string, string>): string {
 }
 
 /**
+ * How to read what now arrives in the constraints slot.
+ *
+ * **More context in front of a model is worth nothing if the model has not been
+ * told what to do with it.** A planner handed `<source>` blocks and no
+ * instruction treats them as more brief — it starts designing the documents
+ * rather than designing from them.
+ *
+ * Lives inside the constraints branch, so a run with no retrieved context never
+ * sees instructions about material it was not given.
+ */
+const CONSTRAINT_GUIDANCE = `How to read what follows:
+
+- \`<source name="...">\` blocks are reference documents retrieved for this brief. Treat them as guidance on how a correct design of this kind looks, not as part of the brief. The name is the document they came from. They may be irrelevant or thin; where they say nothing useful, fall back on the general guidance above rather than forcing them in.
+- \`Design mode: tile\` means one seamless repeating unit whose edges meet without a seam. Choose \`repeat_type\`, \`scale\` and \`density\` for something that will be laid edge to edge and viewed as cloth.
+- \`Design mode: motif\` means a single element placed once, not a repeat. Choose for one worked element read on its own — silhouette and internal detail matter more than tiling behaviour.
+- \`Garment part: ...\` names where a motif sits. Scale and proportion it for that part.`;
+
+/**
  * Builds the planner system prompt.
  *
  * `constraints` is the brand / design-guideline injection slot. It sits after the
  * field grounding and before the examples on purpose: injected constraints must
  * override the general guidance, while the examples still get the last word on
- * output shape. Unused in Sprint 1 — the slot exists so adding the RAG layer
- * later does not reshuffle the whole prompt.
+ * output shape. The slot was left empty in Sprint 1 so adding the RAG layer later
+ * would not reshuffle the whole prompt; Phase 2 fills it, and the prompt did not
+ * have to move.
+ *
+ * **Everything v3 adds lives inside the `constraints` branch**, so a call with no
+ * argument returns byte-for-byte what v2 returned. That is not tidiness: the
+ * guidance explains how to read `<source>` blocks and what a design mode is, and
+ * a run with neither would be reading instructions about material it was never
+ * given.
  */
 export function buildPlannerSystemPrompt(constraints?: string): string {
 	return `You are a textile pattern designer. You read a written design brief and turn it into a precise specification that another system renders as a black-and-white pattern.
@@ -191,7 +226,8 @@ The brief is a brief, not a keyword list — interpreting it is your job. Make t
 # Hard constraints
 
 - The output is black ink on a white ground. Never choose or mention colour.
-- All eight fields must be present. No nulls, no "n/a", no extra fields.
+- When a reference image is supplied, study it and let it inform your choices. Describe what you take from it in \`image_prompt\`. Read structure from it — motif, repeat, scale, density, linework — and never colour, which is not yours to decide.
+- All nine fields must be present. No nulls, no "n/a", no extra fields.
 - Every enumerated field takes exactly one of its listed values, spelled exactly as listed.
 
 # Output format
@@ -206,6 +242,7 @@ Return a JSON object with exactly these fields:
 - \`texture_technique\`: ${allowed(TEXTURE_TECHNIQUE)}
 - \`contrast_level\`: ${allowed(CONTRAST_LEVEL)}
 - \`style\`: free text — the visual idiom or period, as a lowercase noun phrase of one to three words
+- \`image_prompt\`: free text, one or two sentences, at most 500 characters — an instruction written **for the image model**, not for the user. Add only what the other fields cannot already express. Never contradict them, and never ask for anything to be left out.
 
 Return only the JSON object. No prose, no markdown fence, no explanation.
 
@@ -237,6 +274,8 @@ ${glossary(CONTRAST_LEVEL)}
 
 **style** — the visual idiom or period the pattern belongs to (art deco, folk, botanical illustration, brutalist, and so on). This is where the brief's cultural register lands.
 
+**image_prompt** — your own note to the image model, in your own words. The eight fields above it are turned into a fixed sentence by our code; this is appended after it, and it is the only place you can say something that sentence cannot hold. Use it for what you noticed in this particular brief or reference image — how a motif should be drawn, how the elements should sit against each other. Write it as an instruction to a renderer. Do not restate the fields above, do not address the user, do not mention colour, and do not ask for anything to be excluded — the exclusions are added by our code and are not yours to change.
+
 # Choosing values
 
 1. Decide the repeat first, then let scale and density follow from it. The repeat structure is the backbone of the composition — designers settle it before drawing a motif.
@@ -249,7 +288,7 @@ ${glossary(CONTRAST_LEVEL)}
 Briefs use studio language, not these field names. Map it:
 
 ${SYNONYMS.map(([term, target]) => `- ${term} → \`${target}\``).join("\n")}
-${constraints ? `\n# Brand and design constraints\n\nThese override the general guidance above.\n\n${constraints}\n` : ""}
+${constraints ? constraintsBlock(constraints) : ""}
 # Examples
 
 ${EXAMPLES.map(
@@ -270,4 +309,83 @@ There is no valid response that is not the JSON object.`;
 /** Wraps a user concept as the planner's user message. */
 export function buildPlannerUserPrompt(concept: string): string {
 	return `Brief: ${concept}`;
+}
+
+/**
+ * Composes what the planner is told, from the classifier's answer and whatever
+ * the research stage retrieved.
+ *
+ * One string rather than two parameters, because `buildPlannerSystemPrompt` has
+ * one injection slot and the ordering inside it is the contract: the mode is
+ * stated first so the `<source>` blocks are read in light of it, not the other
+ * way round.
+ *
+ * Returns `undefined` when there is nothing to say. That only happens if there
+ * is no classification, which the pipeline should not allow — but `undefined`
+ * here means the prompt falls back to the v2 string rather than growing an empty
+ * "Brand and design constraints" heading with nothing under it.
+ */
+export function buildPlannerConstraints(
+	classification: Classification | undefined,
+	context: string | null,
+): string | undefined {
+	const parts: string[] = [];
+
+	if (classification !== undefined) {
+		parts.push(`Design mode: ${classification.mode}`);
+		if (classification.garment_part !== undefined) {
+			parts.push(`Garment part: ${classification.garment_part}`);
+		}
+	}
+
+	// Null is "retrieval was off, or found nothing" — both ordinary. The mode
+	// still goes to the planner; only the sources are missing.
+	if (context !== null && context.trim() !== "") parts.push(context);
+
+	return parts.length === 0 ? undefined : parts.join("\n\n");
+}
+
+/**
+ * The constraints section, formatted once.
+ *
+ * Both callers go through this: `buildPlannerSystemPrompt` for the code
+ * fallback, and `appendPlannerConstraints` for a prompt that came out of the
+ * database. Two copies of this string would drift, and the drift would be
+ * invisible — a run using the stored prompt would get subtly different framing
+ * from one using the fallback, with nothing to say why.
+ */
+function constraintsBlock(constraints: string): string {
+	return `
+# Brand and design constraints
+
+These override the general guidance above.
+
+${CONSTRAINT_GUIDANCE}
+
+${constraints}
+`;
+}
+
+/**
+ * Appends the constraints section to an already-resolved system prompt.
+ *
+ * `planConcept` receives its system prompt already resolved — from the `prompts`
+ * table when a row exists, from `buildPlannerSystemPrompt()` otherwise — so it
+ * cannot call the builder again without throwing away a playground edit on every
+ * run that has retrieval. This puts the same block onto whichever text won.
+ *
+ * **One real difference from the code fallback**, stated rather than hidden: in
+ * the fallback the block lands *before* the examples, so the examples keep the
+ * last word on output shape. Appended to a stored prompt it lands at the very
+ * end, after whatever that prompt's own closing instruction is. The alternative
+ * is parsing a user-edited prompt for a heading to splice into, which breaks the
+ * first time somebody rewrites it.
+ *
+ * Returns the prompt untouched when there is nothing to add, so a run without
+ * constraints sends byte-for-byte what it sent before.
+ */
+export function appendPlannerConstraints(systemPrompt: string, constraints: string | undefined): string {
+	if (constraints === undefined || constraints.trim() === "") return systemPrompt;
+
+	return `${systemPrompt}${constraintsBlock(constraints)}`;
 }

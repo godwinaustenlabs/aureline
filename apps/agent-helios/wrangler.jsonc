@@ -28,6 +28,41 @@
 		"binding": "AI"
 	},
 
+	/**
+	 * This engine's own knowledge base — deliberately NOT shared, unlike the R2
+	 * bucket. Each engine gets its own AI Search instance even where some content
+	 * overlaps, so tuning Helios's grounding cannot move Iris's answers.
+	 *
+	 * The binding name is `AI_SEARCH` on every engine so research.ts reads
+	 * identically everywhere; the instances are told apart by `instance_name`.
+	 *
+	 * `instance_name` is "HelioKB", the exact string in the dashboard — NOT the
+	 * "helios-kb" phase-2-plan §5.1 assumes. Nothing validates this at build
+	 * time: `wrangler types` accepts any string and so does a typecheck, so a
+	 * wrong name here surfaces only on a real call, as an error that does not say
+	 * "you named the instance wrong".
+	 *
+	 * `remote: true` is required rather than optional. AI Search has no local
+	 * simulator, so without it `wrangler dev` has no retrieval at all. Note what
+	 * that means: local dev queries the REAL deployed instance. Queries are free
+	 * within the beta limits, but turning `ai_search_query_rewrite` on spends
+	 * Workers AI from a local run.
+	 *
+	 * Do NOT use `env.AI.autorag()` or `env.AI.aiSearch()`. Both are marked
+	 * @deprecated in the generated types: "AutoRAG has been replaced by AI Search.
+	 * Use the standalone `ai_search_namespaces` or `ai_search` Workers bindings."
+	 *
+	 * AI Search is beta-priced — free within limits, with 30 days' notice
+	 * promised before billing starts.
+	 */
+	"ai_search": [
+		{
+			"binding": "AI_SEARCH",
+			"instance_name": "helios-kb",
+			"remote": true
+		}
+	],
+
 	"r2_buckets": [
 		{
 			"binding": "PATTERNS",
@@ -51,7 +86,10 @@
 	 * (namespace "HELIOS_CONFIG") and they take effect within about a minute,
 	 * with no redeploy.
 	 *
-	 * Keys: text_model, image_model, max_retries, retention_limit.
+	 * Keys: text_model, vision_planner_model, image_model, image_to_image_model,
+	 * max_retries, retention_limit, max_resume_attempts, research_model,
+	 * classifier_model, max_tool_iterations, max_search_results, min_chunk_chars,
+	 * search_match_threshold, ai_search_query_rewrite.
 	 * The matching entries in `vars` below are the committed fallbacks used when
 	 * a key is absent or its value is invalid.
 	 *
@@ -80,8 +118,34 @@
 	"vars": {
 		// fallback default — the live value is CONFIG:text_model in KV
 		"PLANNER_MODEL": "@cf/openai/gpt-oss-120b",
-		// fallback default — the live value is CONFIG:image_model in KV
+		// fallback default — the live value is CONFIG:vision_planner_model in KV.
+		//
+		// **PROVISIONAL, and not yet verified end to end.** Subhan owns the final
+		// model choice (phase-1-plan §5); this is a placeholder so the multimodal
+		// path is exercisable before that lands. The specific thing to verify on
+		// the first billed run is that it honours `response_format: json_schema`
+		// — the planner's entire contract depends on structured output, and a
+		// vision model that ignores it fails EVERY request, not only the ones
+		// carrying an image, because this model is used for all of them.
+		//
+		// Set it to "" to fall straight back to PLANNER_MODEL. That is the off
+		// switch, and it works from KV with no deploy.
+		"VISION_PLANNER_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
+		// fallback default — the live value is CONFIG:image_model in KV.
+		// Text-to-image, JSON body, routed through the gateway so its cost is
+		// recorded. Used for every request that carries NO reference image.
 		"IMAGE_MODEL": "@cf/black-forest-labs/flux-1-schnell",
+		// fallback default — the live value is CONFIG:image_to_image_model in KV.
+		// Used only when the request carries a reference image, because
+		// flux-1-schnell above is text-to-image and has no image input at all.
+		//
+		// This one is multipart, which cannot route through the AI Gateway (see
+		// docs/ai-gateway-multipart-findings.md), so runs that attach an image
+		// record a null cost. That is the trade, and it is recorded on the row.
+		//
+		// Set it to "" and a request carrying an image is REFUSED before billing
+		// rather than quietly falling back to a model that cannot read it.
+		"IMAGE_TO_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-9b",
 		// AI Gateway name, created in the dashboard under AI > AI Gateway.
 		// Empty string means direct Workers AI with no logging or caching.
 		// Deliberately NOT in KV: an empty or misspelled id makes the call fall
@@ -97,6 +161,72 @@
 		// How many times one brief may be resumed, so 3 is an original plus three
 		// retries. Every retry spends the image model.
 		"MAX_RESUME_ATTEMPTS": "3",
+		// fallback default — the live value is CONFIG:research_model in KV.
+		//
+		// The model that runs the agentic research loop. Deliberately the same
+		// model the planner uses, so one model's behaviour has to be understood and
+		// tuned rather than two.
+		//
+		// phase-2-plan §5.2 argues against this, on the grounds that
+		// llama-3.2-11b-vision-instruct "does not list function calling" and that
+		// retrieval would therefore silently never fire on runs carrying an image.
+		// That premise is wrong: its generated types accept `tools` and declare
+		// `tool_calls` on the output (worker-configuration.d.ts:6391-6408). It
+		// returns the flat, id-less tool-call shape, which runToolLoop reads.
+		//
+		// **Still unverified on a real call.** Vision-plus-tools in one request is
+		// the one combination nobody in this repo has actually sent (§18), and
+		// ADR-0007's notes record gpt-oss-120b answering `function_call: null`
+		// every time. If this model disappoints, the fix is this value, from KV,
+		// with no deploy — @cf/meta/llama-4-scout-17b-16e-instruct and
+		// @cf/zhipu/glm-5.3-flash both list vision and function calling too.
+		//
+		// **EMPTY, which means the research stage is skipped.** That is the intended
+		// default until HelioKB has documents indexed: with an empty knowledge base
+		// every run would make a billed research call, retrieve nothing, warn, and
+		// proceed — a cost with no benefit on every single request.
+		//
+		// To turn retrieval on, set the KV key `research_model` to:
+		//
+		//     @cf/meta/llama-3.2-11b-vision-instruct
+		//
+		// which is the model the planner uses. No deploy needed. The var stays
+		// empty so that a fresh deploy, or a KV namespace nobody has touched, is
+		// off rather than quietly billing three model calls per run.
+		"RESEARCH_MODEL": "",
+		// fallback default — the live value is CONFIG:classifier_model in KV.
+		// Decides tile versus motif before anything else runs. Vision-capable
+		// because a photo of a repeating scarf print versus one of an embroidered
+		// neckline is precisely the signal that separates the two.
+		//
+		// Unlike RESEARCH_MODEL there is no off switch: a classify failure stops
+		// the run, so "" here is a typo rather than an intent.
+		"CLASSIFIER_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+		// fallback default — the live value is CONFIG:max_tool_iterations in KV.
+		// Ceiling on billed model calls inside the research loop (AGENTS.md §7).
+		"MAX_TOOL_ITERATIONS": "3",
+		// fallback default — the live value is CONFIG:max_search_results in KV.
+		// Passed to AI Search as max_num_results.
+		"MAX_SEARCH_RESULTS": "5",
+		// fallback default — the live value is CONFIG:min_chunk_chars in KV.
+		// Under this many characters of retrieved text, a result is "thin": the
+		// model is told so and given a chance to rephrase.
+		"MIN_CHUNK_CHARS": "200",
+		// fallback default — the live value is CONFIG:search_match_threshold in KV.
+		//
+		// A similarity floor between 0 and 1, and a STARTING GUESS rather than a
+		// tuned value. On a new knowledge base a threshold set too high returns
+		// zero chunks on every query and looks exactly like a broken binding —
+		// check the scores in the first runs' logs before trusting this number.
+		"SEARCH_MATCH_THRESHOLD": "0.5",
+		// fallback default — the live value is CONFIG:ai_search_query_rewrite in KV.
+		//
+		// Whether AI Search rewrites the query with its own LLM before searching.
+		// Off, because the research model is already writing the query itself —
+		// that is the whole point of the agentic design — so rewriting adds a
+		// second billed model call we do not control, per search. The key exists
+		// so it can be A/B'd from KV later.
+		"AI_SEARCH_QUERY_REWRITE": "false",
 		// Browser origins allowed to call this worker from JavaScript (ticket 09).
 		// Comma separated, exact origins, no trailing slash. Anything not listed
 		// is refused at preflight.

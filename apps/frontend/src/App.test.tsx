@@ -28,8 +28,14 @@ describe('App', () => {
 		expect(markup).toContain('An empty id is not');
 	});
 
-	it('labels the reference image as discarded before anyone uploads one', () => {
-		expect(markup).toContain('Not sent. Discarded in the browser.');
+	it('offers a reference image field and says what attaching one does', () => {
+		// This used to assert the opposite — a "Not sent. Discarded in the browser."
+		// banner, back when the field was a placeholder the pipeline could not read.
+		// It is now really sent, and the copy has to say so: a stale "not sent"
+		// label on a field that is sent is worse than no label at all.
+		expect(markup).toContain('Reference image');
+		expect(markup).toContain('multipart/form-data');
+		expect(markup).not.toContain('Not sent. Discarded in the browser.');
 	});
 
 	it('names the cost on the generate button, since every press is real money', () => {

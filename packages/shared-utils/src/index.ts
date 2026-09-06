@@ -1,3 +1,5 @@
+export { bytesToBase64, toDataUrl } from "./base64";
+
 export { buildAiRunOptions, DEFAULT_IMAGE_CACHE_TTL } from "./aiGateway";
 export type { GatewayConfig, AiRunOptions } from "./aiGateway";
 
@@ -24,3 +26,15 @@ export type {
   ImageToImageOutput,
   GetImageToImageOutputOptions,
 } from "./getImageToImageOutput";
+
+export { readJpegDimensions } from "./imageDimensions";
+
+export { runToolLoop, SEARCH_TOOL } from "./runToolLoop";
+export type {
+  RunToolLoopConfig,
+  RunToolLoopOptions,
+  ToolLoopResult,
+  ToolLoopEnv,
+  SearchRunner,
+  RetrievedChunk,
+} from "./runToolLoop";

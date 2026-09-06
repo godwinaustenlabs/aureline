@@ -72,6 +72,9 @@ export function fakeEnv(
 		getLog?: ReturnType<typeof vi.fn>;
 		maxResumeAttempts?: string;
 		throwingD1?: boolean;
+		/** Turns the vision planner on for this env. Empty (the default) leaves it
+		 *  off and `plannerModelFor` falls back to `PLANNER_MODEL`. */
+		visionPlannerModel?: string;
 	} = {},
 ) {
 	// All three parameters are declared, and the return is `unknown`, because
@@ -117,10 +120,26 @@ export function fakeEnv(
 		PATTERNS: { put: patternsPut, get: patternsGet },
 		DB: d1,
 		PLANNER_MODEL: "@cf/openai/gpt-oss-120b",
+		// Empty by default, so `plannerModelFor` falls back to PLANNER_MODEL and
+		// every existing suite keeps calling the model it always did.
+		VISION_PLANNER_MODEL: overrides.visionPlannerModel ?? "",
 		IMAGE_MODEL: "@cf/black-forest-labs/flux-2-klein-9b",
 		MAX_RETRIES: "2",
 		RETENTION_LIMIT: "5",
 		MAX_RESUME_ATTEMPTS: overrides.maxResumeAttempts ?? "3",
+		// Empty by default, exactly like VISION_PLANNER_MODEL above and for the
+		// same reason: `researchModelFor` reads it as "retrieval off", so every
+		// existing suite keeps making the calls it always did. A suite that wants
+		// the research stage opts in rather than every other suite opting out.
+		RESEARCH_MODEL: "",
+		MAX_TOOL_ITERATIONS: "3",
+		MAX_SEARCH_RESULTS: "5",
+		MIN_CHUNK_CHARS: "200",
+		SEARCH_MATCH_THRESHOLD: "0.5",
+		AI_SEARCH_QUERY_REWRITE: "false",
+		AI_SEARCH: {
+			search: vi.fn().mockResolvedValue({ chunks: [], context: "" }),
+		},
 	} as unknown as Env;
 
 	// `d1` comes back so a suite can read what the export actually wrote, which

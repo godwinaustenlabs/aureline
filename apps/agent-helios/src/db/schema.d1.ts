@@ -48,7 +48,9 @@ export const prompts = sqliteTable("prompts", {
    * and it is what lets these rows merge into one table without collision when
    * the per-engine D1 databases are consolidated.
    */
-  slot: text("slot", { enum: ["helios_planner", "helios_image"] }).notNull().unique(),
+  slot: text("slot", { enum: ["helios_planner", "helios_classifier", "helios_research"] })
+    .notNull()
+    .unique(),
 
   /** The prompt itself, sent to the model verbatim. */
   promptText: text("prompt_text").notNull(),
