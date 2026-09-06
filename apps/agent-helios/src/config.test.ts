@@ -4,6 +4,7 @@ import {
 	describeConfig,
 	imageModelFor,
 	plannerModelFor,
+	researchModelFor,
 	resolveConfig,
 	transportFor,
 	type ConfigEnv,
@@ -18,6 +19,17 @@ const VARS = {
 	RETENTION_LIMIT: "5",
 	MAX_RETRIES: "2",
 	MAX_RESUME_ATTEMPTS: "3",
+	// Set here, unlike `test-env.ts` where it is deliberately empty: this file's
+	// subject is config resolution itself, so the interesting case is a research
+	// model that resolves to something. `researchModelFor`'s off switch has its
+	// own tests below, where emptiness is the subject rather than the backdrop.
+	RESEARCH_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
+	CLASSIFIER_MODEL: "@cf/meta/llama-4-scout-17b-16e-instruct",
+	MAX_TOOL_ITERATIONS: "3",
+	MAX_SEARCH_RESULTS: "5",
+	MIN_CHUNK_CHARS: "200",
+	SEARCH_MATCH_THRESHOLD: "0.5",
+	AI_SEARCH_QUERY_REWRITE: "false",
 };
 
 const ALL_KEYS = [
@@ -28,6 +40,13 @@ const ALL_KEYS = [
 	"max_retries",
 	"retention_limit",
 	"max_resume_attempts",
+	"research_model",
+	"classifier_model",
+	"max_tool_iterations",
+	"max_search_results",
+	"min_chunk_chars",
+	"search_match_threshold",
+	"ai_search_query_rewrite",
 ];
 
 /**
@@ -61,6 +80,13 @@ const FULL_KV = {
 	max_retries: "3",
 	retention_limit: "10",
 	max_resume_attempts: "4",
+	research_model: '{ "model": "@cf/meta/llama-4-scout-17b-16e-instruct" }',
+	classifier_model: '{ "model": "@cf/meta/llama-4-scout-17b-16e-instruct" }',
+	max_tool_iterations: "2",
+	max_search_results: "8",
+	min_chunk_chars: "150",
+	search_match_threshold: "0.6",
+	ai_search_query_rewrite: "true",
 };
 
 let warn: ReturnType<typeof vi.spyOn>;
@@ -95,6 +121,13 @@ describe("resolveConfig", () => {
 			maxRetries: 3,
 			retentionLimit: 10,
 			maxResumeAttempts: 4,
+			researchModel: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+			classifierModel: { model: "@cf/meta/llama-4-scout-17b-16e-instruct" },
+			maxToolIterations: 2,
+			maxSearchResults: 8,
+			minChunkChars: 150,
+			searchMatchThreshold: 0.6,
+			queryRewrite: true,
 			source: {
 				textModel: "kv",
 				visionTextModel: "kv",
@@ -103,6 +136,13 @@ describe("resolveConfig", () => {
 				maxRetries: "kv",
 				retentionLimit: "kv",
 				maxResumeAttempts: "kv",
+				researchModel: "kv",
+				classifierModel: "kv",
+				maxToolIterations: "kv",
+				maxSearchResults: "kv",
+				minChunkChars: "kv",
+				searchMatchThreshold: "kv",
+				queryRewrite: "kv",
 			},
 		});
 		expect(warn).not.toHaveBeenCalled();
@@ -228,6 +268,13 @@ describe("resolveConfig", () => {
 			maxRetries: 2,
 			retentionLimit: 5,
 			maxResumeAttempts: 3,
+			researchModel: { model: VARS.RESEARCH_MODEL },
+			classifierModel: { model: VARS.CLASSIFIER_MODEL },
+			maxToolIterations: 3,
+			maxSearchResults: 5,
+			minChunkChars: 200,
+			searchMatchThreshold: 0.5,
+			queryRewrite: false,
 			source: {
 				textModel: "var",
 				visionTextModel: "var",
@@ -236,8 +283,17 @@ describe("resolveConfig", () => {
 				maxRetries: "var",
 				retentionLimit: "var",
 				maxResumeAttempts: "var",
+				researchModel: "var",
+				classifierModel: "var",
+				maxToolIterations: "var",
+				maxSearchResults: "var",
+				minChunkChars: "var",
+				searchMatchThreshold: "var",
+				queryRewrite: "var",
 			},
 		});
+		// Still exactly one: the KV outage warns once for the whole config, and
+		// none of the seven new vars is unusable enough to add a second.
 		expect(warn).toHaveBeenCalledOnce();
 	});
 
@@ -265,7 +321,11 @@ describe("describeConfig", () => {
 				"vision_planner_model=@cf/meta/llama-3.2-11b-vision-instruct (kv) " +
 				"image_model=@cf/black-forest-labs/flux-1-schnell(width=1024,height=1024,steps=4) (kv) " +
 				"image_to_image_model=@cf/black-forest-labs/flux-2-klein-9b(transport=multipart) (kv) " +
-				"max_retries=3 (kv) retention_limit=5 (var) max_resume_attempts=4 (kv)"
+				"max_retries=3 (kv) retention_limit=5 (var) max_resume_attempts=4 (kv) " +
+				"research_model=@cf/meta/llama-4-scout-17b-16e-instruct (kv) " +
+				"classifier_model=@cf/meta/llama-4-scout-17b-16e-instruct (kv) " +
+				"max_tool_iterations=2 (kv) max_search_results=8 (kv) min_chunk_chars=150 (kv) " +
+				"search_match_threshold=0.6 (kv) ai_search_query_rewrite=true (kv)"
 		);
 	});
 
@@ -450,5 +510,169 @@ describe("imageModelFor", () => {
 		expect(() => imageModelFor(config, true)).toThrow(/no image_to_image_model is configured/);
 		// And the no-reference path is unaffected by the same missing config.
 		expect(imageModelFor(config, false).model).toBe("@cf/black-forest-labs/flux-1-schnell");
+	});
+});
+
+describe("researchModelFor", () => {
+	it("returns the configured research model", async () => {
+		const { env } = fakeEnv(FULL_KV);
+
+		expect(researchModelFor(await resolveConfig(env))).toEqual({
+			model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+		});
+	});
+
+	it("returns null when the KV value is empty, without warning", async () => {
+		// `research_model: ""` is the off switch and it has to work from KV with no
+		// deploy. Under the strict `TextModelSchema` it would fail `min(1)`, warn on
+		// every invocation, and fall back to RESEARCH_MODEL — so the key meant to
+		// turn retrieval OFF would turn it ON. This is that regression.
+		const { env } = fakeEnv({ ...FULL_KV, research_model: "" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.researchModel).toEqual({ model: "" });
+		expect(config.source.researchModel).toBe("kv");
+		expect(researchModelFor(config)).toBeNull();
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it("returns null when the var is empty and KV has no opinion", async () => {
+		const { env } = fakeEnv({}, { RESEARCH_MODEL: "" });
+
+		expect(researchModelFor(await resolveConfig(env))).toBeNull();
+	});
+
+	it("returns null when the var is absent entirely", async () => {
+		const { env } = fakeEnv({}, { RESEARCH_MODEL: undefined });
+
+		expect(researchModelFor(await resolveConfig(env))).toBeNull();
+	});
+
+	it("treats a whitespace-only model id as off", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, research_model: "   " });
+
+		expect(researchModelFor(await resolveConfig(env))).toBeNull();
+	});
+});
+
+describe("classifier_model", () => {
+	it("falls back to the var when the KV value is empty, unlike research_model", async () => {
+		// The asymmetry is deliberate: a classify failure stops the run, so there is
+		// no off switch here and an empty value is a typo.
+		const { env } = fakeEnv({ ...FULL_KV, classifier_model: "" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.classifierModel).toEqual({ model: VARS.CLASSIFIER_MODEL });
+		expect(config.source.classifierModel).toBe("var");
+		expect(warn).toHaveBeenCalled();
+	});
+});
+
+describe("ai_search_query_rewrite", () => {
+	it.each([
+		["true", true],
+		["1", true],
+		["yes", true],
+		["false", false],
+		["0", false],
+		["no", false],
+		["TRUE", true],
+		["  False  ", false],
+	])("reads %j as %j", async (raw, expected) => {
+		const { env } = fakeEnv({ ...FULL_KV, ai_search_query_rewrite: raw });
+
+		expect((await resolveConfig(env)).queryRewrite).toBe(expected);
+	});
+
+	it("falls back to false on a value that is not a boolean", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, ai_search_query_rewrite: "maybe" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.queryRewrite).toBe(false);
+		expect(config.source.queryRewrite).toBe("var");
+		expect(warn).toHaveBeenCalled();
+	});
+
+	it("does not read the string \"false\" as true", async () => {
+		// `Boolean(raw)` and `raw !== ""` both would, which is why neither is used:
+		// the key set to turn a billed feature off would turn it on.
+		const { env } = fakeEnv({ ...FULL_KV, ai_search_query_rewrite: "false" });
+
+		expect((await resolveConfig(env)).queryRewrite).toBe(false);
+	});
+
+	it("falls back to the var when the var itself is not a boolean", async () => {
+		const { env } = fakeEnv({}, { AI_SEARCH_QUERY_REWRITE: "on" });
+
+		expect((await resolveConfig(env)).queryRewrite).toBe(false);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("AI_SEARCH_QUERY_REWRITE"));
+	});
+});
+
+describe("the numeric research keys", () => {
+	it("accepts zero for min_chunk_chars, because zero is a real setting", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, min_chunk_chars: "0" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.minChunkChars).toBe(0);
+		expect(config.source.minChunkChars).toBe("kv");
+	});
+
+	it("falls back rather than reading a blanked min_chunk_chars as zero", async () => {
+		// `z.coerce.number()` turns "" into 0, and 0 is legal here — so without the
+		// blank guard an accidentally-cleared dashboard field would be ACCEPTED,
+		// silently disabling the thin-result check while the log line showed a
+		// perfectly ordinary 0.
+		const { env } = fakeEnv({ ...FULL_KV, min_chunk_chars: "" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.minChunkChars).toBe(200);
+		expect(config.source.minChunkChars).toBe("var");
+		expect(warn).toHaveBeenCalled();
+	});
+
+	it("falls back rather than reading a blanked search_match_threshold as zero", async () => {
+		// Same trap, worse consequence: a 0 floor accepts every chunk AI Search
+		// can find, which looks like retrieval working unusually well.
+		const { env } = fakeEnv({ ...FULL_KV, search_match_threshold: "" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.searchMatchThreshold).toBe(0.5);
+		expect(config.source.searchMatchThreshold).toBe("var");
+	});
+
+	it("accepts a fractional search_match_threshold and rejects one out of range", async () => {
+		expect((await resolveConfig(fakeEnv({ ...FULL_KV, search_match_threshold: "0" }).env)).searchMatchThreshold).toBe(0);
+		expect((await resolveConfig(fakeEnv({ ...FULL_KV, search_match_threshold: "1" }).env)).searchMatchThreshold).toBe(1);
+		expect((await resolveConfig(fakeEnv({ ...FULL_KV, search_match_threshold: "1.5" }).env)).searchMatchThreshold).toBe(0.5);
+		expect((await resolveConfig(fakeEnv({ ...FULL_KV, search_match_threshold: "-0.1" }).env)).searchMatchThreshold).toBe(0.5);
+	});
+
+	it("caps max_tool_iterations, so a dashboard edit cannot authorise an unbounded loop", async () => {
+		// Every iteration is a billed model call (AGENTS.md §7).
+		const { env } = fakeEnv({ ...FULL_KV, max_tool_iterations: "50" });
+
+		const config = await resolveConfig(env);
+
+		expect(config.maxToolIterations).toBe(3);
+		expect(config.source.maxToolIterations).toBe("var");
+	});
+
+	it("rejects a zero max_tool_iterations, which would make the stage a no-op", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, max_tool_iterations: "0" });
+
+		expect((await resolveConfig(env)).maxToolIterations).toBe(3);
+	});
+
+	it("caps max_search_results", async () => {
+		const { env } = fakeEnv({ ...FULL_KV, max_search_results: "100" });
+
+		expect((await resolveConfig(env)).maxSearchResults).toBe(5);
 	});
 });

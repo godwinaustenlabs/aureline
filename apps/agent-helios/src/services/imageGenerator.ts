@@ -1,4 +1,4 @@
-import type { HeliosParams, ReferenceImage } from "@aureline/shared-types";
+import type { Classification, HeliosParams, ReferenceImage } from "@aureline/shared-types";
 import {
 	getImageModelOutput,
 	getImageToImageOutput,
@@ -90,9 +90,17 @@ export async function generateImage(
 	 * promise, and it is why this is an optional trailing parameter rather than
 	 * the function being restructured around it.
 	 */
-	referenceImage?: ReferenceImage
+	referenceImage?: ReferenceImage,
+	/**
+	 * What the classifier decided this design is.
+	 *
+	 * Optional and trailing for the same reason `referenceImage` is: absent means
+	 * tile, which is what every run before Phase 2 was, so a call without it
+	 * builds byte-for-byte the prompt it always built. `/resume` omits it.
+	 */
+	classification?: Classification,
 ): Promise<GeneratedImage> {
-	const prompt = buildFluxPrompt(params, referenceImage !== undefined);
+	const prompt = buildFluxPrompt(params, referenceImage !== undefined, classification);
 	// Throws when a reference arrived and no image-to-image model is configured,
 	// before anything bills.
 	const model = imageModelFor(config, referenceImage !== undefined);
@@ -307,8 +315,16 @@ function measureReference(
  * Fails fast if the result overruns the model's hard 2048-character cap — before
  * any billed call, so we never pay for a prompt the model will reject anyway.
  */
-function buildFluxPrompt(params: HeliosParams, hasReferenceImage: boolean): string {
-	const { prompt } = buildImagePrompt(params, { supportsNegativePrompt: false, hasReferenceImage });
+function buildFluxPrompt(
+	params: HeliosParams,
+	hasReferenceImage: boolean,
+	classification: Classification | undefined,
+): string {
+	const { prompt } = buildImagePrompt(params, {
+		supportsNegativePrompt: false,
+		hasReferenceImage,
+		...(classification !== undefined && { classification }),
+	});
 	if (prompt.length > MAX_PROMPT_LENGTH) {
 		throw new Error(
 			`image prompt is ${prompt.length} characters, exceeding Flux Schnell's ${MAX_PROMPT_LENGTH} cap`

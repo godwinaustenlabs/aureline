@@ -6,7 +6,7 @@ import {
 } from "./color.glossary";
 
 /** Versioned identity. Never edit a prompt in place — bump the ID. */
-export const IRIS_PLANNER_PROMPT_VERSION = "iris-planner-v2";
+export const IRIS_PLANNER_PROMPT_VERSION = "iris-planner-v3";
 
 function glossary(
   record: Record<string, string | { hex: string; gloss: string }>,
@@ -137,4 +137,26 @@ There is no valid response that is not the JSON object.`;
 /** Wraps a user concept as the planner's user message. */
 export function buildPlannerUserPrompt(concept: string): string {
   return `Brief: ${concept}`;
+}
+
+/**
+ * Appends retrieved context from the research stage to a planner system prompt.
+ *
+ * Works on **any** prompt string, not just the code fallback: the pipeline
+ * resolves the system prompt from the database once per invocation, and this
+ * function appends the constraints block to whatever came back. That means a
+ * stored prompt that has been edited in the playground still receives the
+ * research context — the classification and retrieved text arrive through the
+ * user turn and this append, not baked into the stored words.
+ *
+ * Returns the prompt untouched when there is nothing to add, so a run without
+ * constraints sends byte-for-byte what it sent before.
+ */
+export function appendPlannerConstraints(
+  systemPrompt: string,
+  constraints: string | undefined,
+): string {
+  if (constraints === undefined || constraints.trim() === "") return systemPrompt;
+
+  return `${systemPrompt}\n\n# Retrieved context\n\n${constraints.trim()}`;
 }

@@ -1,4 +1,4 @@
-import type { IrisParams } from "@aureline/shared-types";
+import type { Classification, IrisParams } from "@aureline/shared-types";
 import { COLOR_GLOSSARY } from "./color.glossary";
 
 /* Versioned identity. Never edit a prompt in place, bump the ID.
@@ -8,8 +8,11 @@ import { COLOR_GLOSSARY } from "./color.glossary";
  * now produces.
  *
  * v3 leads with a clause naming which of the two input images is which, on the
- * runs that carry a reference image. */
-export const IRIS_COLOR_PROMPT_VERSION = "iris-color-v3";
+ * runs that carry a reference image.
+ *
+ * v4 adds mode-selected clauses: tile gets seamless-repeat language, motif gets
+ * garment-part language. */
+export const IRIS_COLOR_PROMPT_VERSION = "iris-color-v4";
 
 /**
  * Deterministic translator from IrisParams -> one English sentence for the image model.
@@ -17,7 +20,10 @@ export const IRIS_COLOR_PROMPT_VERSION = "iris-color-v3";
  *
  * Clause order matters: palette leads, mood trails.
  */
-export function buildColorPrompt(params: IrisParams): string {
+export function buildColorPrompt(
+  params: IrisParams,
+  options: { classification?: Classification } = {},
+): string {
   const primary = COLOR_GLOSSARY[params.primary_color];
   const secondary = params.secondary_color
     ? COLOR_GLOSSARY[params.secondary_color]
@@ -44,8 +50,13 @@ export function buildColorPrompt(params: IrisParams): string {
   const backgroundClause = `background ${params.background_treatment}`;
   const moodClause = `mood: ${params.mood.trim().toLowerCase()}`;
 
-  // Palette first, mood last — models weight early clauses more heavily.
+  // Mode clause first, then palette, mood last — models weight early clauses
+  // more heavily. Mode is the highest-level instruction and must not be diluted
+  // by the palette details that follow.
+  const modeClause = modeClauseFor(options.classification);
+
   const clauses = [
+    ...(modeClause !== null ? [modeClause] : []),
     paletteClause,
     harmonyClause,
     saturationClause,
@@ -80,11 +91,11 @@ export function buildColorPrompt(params: IrisParams): string {
  */
 export function buildImageModelPrompt(
   params: IrisParams,
-  options: { hasReferenceImage?: boolean } = {},
+  options: { hasReferenceImage?: boolean; classification?: Classification } = {},
 ): string {
   const lead = options.hasReferenceImage ? `${REFERENCE_IMAGE_CLAUSE} ` : "";
 
-  return `${lead}${buildColorPrompt(params)} ${params.image_prompt.trim()}`;
+  return `${lead}${buildColorPrompt(params, { classification: options.classification })} ${params.image_prompt.trim()}`;
 }
 
 /**
@@ -107,6 +118,26 @@ export function buildImageModelPrompt(
  * reference that alters the drawing has broken the engine boundary, not just
  * this run.
  */
+/**
+ * Mode-selected clause: tile gets seamless-repeat language, motif gets
+ * garment-part language. When no classification is present, returns null — the
+ * clause is omitted entirely rather than guessing.
+ *
+ * Tile and motif are mutually exclusive by definition (the classifier decides
+ * one or the other), so this is a simple if/else, not a switch.
+ */
+function modeClauseFor(classification: Classification | undefined): string | null {
+  if (classification === undefined) return null;
+
+  if (classification.mode === "tile") {
+    return "Colour palette for a seamless repeating tile pattern";
+  }
+
+  const part =
+    classification.garment_part !== undefined ? ` on a ${classification.garment_part}` : "";
+  return `Colour palette for a single motif${part}`;
+}
+
 const REFERENCE_IMAGE_CLAUSE =
   "You are given two images. The first is the pattern to colour; reproduce its " +
   "shapes and linework exactly. The second is a colour reference: take its palette " +

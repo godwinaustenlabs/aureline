@@ -1,16 +1,20 @@
-import { IrisParamsSchema, type IrisResult } from "@aureline/shared-types";
+import { IrisParamsSchema, type IrisParams, type IrisResult } from "@aureline/shared-types";
 import type { IrisDb } from "../db/client";
 import type { IrisRun } from "../db/schema";
 import {
+	completeTextRun,
 	countResumeAttempts,
 	failRunningRuns,
 	getRunRows,
 	insertResumedTextRun,
 } from "../repository/do.repository";
 import { readMotif } from "../repository/r2.repository";
-import { describeConfig, resolveConfig } from "../config";
+import { describeConfig, resolveConfig, resolvePrompt } from "../config";
 import { describeError, firstIssueMessage } from "../utils";
 import { exportAndPrune, runImageStage } from "./pipeline";
+import { planConcept } from "./planner";
+import { buildPlannerSystemPrompt, IRIS_PLANNER_PROMPT_VERSION } from "../prompts";
+import { getD1Db } from "../db/client";
 
 /**
  * What a resume attempt reports back.
@@ -100,10 +104,6 @@ export async function resumeRun(
 	// changed since, and sending something malformed to a billed call is worse
 	// than refusing.
 	const parsed = IrisParamsSchema.safeParse(textRow.plannerParams);
-	if (!parsed.success) {
-		return { ok: false, reason: `the stored params are no longer valid: ${firstIssueMessage(parsed.error)}` };
-	}
-	const params = parsed.data;
 
 	const config = await resolveConfig(env);
 	console.log(describeConfig(config));
@@ -140,8 +140,6 @@ export async function resumeRun(
 	} catch (cause) {
 		return {
 			ok: false,
-			// `describeError` already ends its own sentences, so the message runs
-			// straight on rather than adding a second full stop.
 			reason: `the motif for this run can no longer be read, so resuming would fail at the same point after opening two rows: ${describeError(cause)}`,
 		};
 	}
@@ -150,6 +148,50 @@ export async function resumeRun(
 	// own two rows and its own cost, which is how "which attempt is the latest"
 	// stays answerable (AGENTS.md §3).
 	const newPipelineId = crypto.randomUUID();
+
+	let params: IrisParams;
+
+	if (parsed.success) {
+		params = parsed.data;
+	} else {
+		// No-params branch: the stored params are missing or invalid, so re-run
+		// the planner. The concept and system prompt are needed but were not
+		// stored — they come from the parent's user_prompt and the resolved prompt.
+		const plannerPrompt = await resolvePrompt(
+			getD1Db(env.DB),
+			"iris_planner",
+			buildPlannerSystemPrompt(),
+		);
+
+		const planned = await planConcept(env, config, {
+			concept: textRow.userPrompt,
+			systemPrompt: plannerPrompt.text,
+			pipeline_id: newPipelineId,
+		});
+
+		const reParsed = IrisParamsSchema.safeParse(planned.data);
+		if (!reParsed.success) {
+			return {
+				ok: false,
+				reason: `re-planning failed: ${firstIssueMessage(reParsed.error)}`,
+			};
+		}
+		params = reParsed.data;
+
+		// Update the text row with the new params so the image stage has them.
+		// cost_usd is null here: research is ungated and the planner is the
+		// only billed call, but this is a re-plan not a fresh pipeline run.
+		await completeTextRun(db, newPipelineId, params, {
+			model: planned.model,
+			usage: planned.usage,
+			prompt_version:
+				plannerPrompt.source === "code" ? IRIS_PLANNER_PROMPT_VERSION : null,
+			prompt_source: plannerPrompt.source,
+			prompt_updated_at: plannerPrompt.updatedAt,
+			had_reference_image: false,
+			planner_skipped: false,
+		}, null);
+	}
 
 	// `resumed_from` points at the immediate parent, not the root, so a resume
 	// of a resume reads back as one more step rather than a fork. `root` is what

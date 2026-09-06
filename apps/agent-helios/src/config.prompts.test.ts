@@ -51,7 +51,7 @@ describe("resolvePrompt", () => {
 	});
 
 	it("reads only its own slot", async () => {
-		await upsertPrompt(d1, { slot: "helios_image", promptText: STORED });
+		await upsertPrompt(d1, { slot: "helios_classifier", promptText: STORED });
 
 		expect((await resolvePrompt(d1, "helios_planner", FALLBACK)).source).toBe("code");
 	});

@@ -1,4 +1,4 @@
-import type { HeliosParams } from "@aureline/shared-types";
+import type { Classification, HeliosParams } from "@aureline/shared-types";
 
 /**
  * Image generator prompt translator (v1).
@@ -25,8 +25,14 @@ import type { HeliosParams } from "@aureline/shared-types";
  *
  * v2 appends the planner's `image_prompt` as a final positive clause.
  * v3 adds a clause naming the user's reference image as a style input, on the
- * runs that carry one. */
-export const IMAGE_PROMPT_ID = "helios-image-v3";
+ * runs that carry one.
+ * v4 branches on the design mode. Until now every clause assumed a tile, in
+ * three places at once — the lead declaration said "seamless repeating allover
+ * repeat", the motif clause was glued to a repeat phrase, and the exclusions
+ * forbade "a single centred illustration", which is precisely what a motif is.
+ * Adding a "draw a single motif" sentence on top of those would have been a
+ * contradiction the model resolves however it likes. */
+export const IMAGE_PROMPT_ID = "helios-image-v4";
 
 /**
  * Phrase tables, keyed by the schema's own union types so that adding a value to
@@ -102,6 +108,36 @@ const FORMAT_DECLARATION =
 	"A flat seamless repeating textile pattern swatch, scanned square-on as an allover repeat";
 
 /**
+ * The tile mode's edge promise, stated as its own clause.
+ *
+ * `FORMAT_DECLARATION` already says "seamless", which is a claim about the
+ * result; this says what has to be true of the drawing for that claim to hold.
+ * A model told only "seamless" produces something that looks like a repeat and
+ * shows a seam at the join, which is invisible in a single swatch and obvious
+ * the moment it is tiled.
+ */
+const TILE_EDGE_CLAUSE =
+	"the unit tiling seamlessly, its edges continuous so no seam shows where copies meet";
+
+/**
+ * The motif mode's lead declaration, replacing `FORMAT_DECLARATION`.
+ *
+ * A replacement rather than an addition, because the two are contradictory:
+ * "an allover repeat" and "one self-contained element" cannot both describe the
+ * same image, and Flux weights early clauses most heavily — so leaving the tile
+ * declaration in place and appending a motif instruction would leave the wrong
+ * one leading.
+ *
+ * The garment part is named when there is one, because the same motif is drawn
+ * differently for a cuff than for a back panel.
+ */
+function motifDeclaration(garmentPart: string | undefined): string {
+	const placement = garmentPart === undefined ? "" : ` for the ${clean(garmentPart)} of a garment`;
+
+	return `A single flat textile motif${placement}, drawn square-on as one self-contained element, not a repeating pattern`;
+}
+
+/**
  * Stated positively, not just as an exclusion. "Black and white" alone lets sepia,
  * cream and off-white tints back in; this is the phrasing that actually holds, and
  * monochrome-only is the ADR-0002 promise the whole engine rests on.
@@ -127,13 +163,24 @@ const REFERENCE_IMAGE_CLAUSE =
 	"drawing on the supplied reference image for motif character and linework only, " +
 	"not copying its colours, framing, fabric drape or composition";
 
+/**
+ * `"a single centred illustration"` is **tile-only**, and is the one exclusion
+ * that changes with the mode.
+ *
+ * On a tile it stops Flux producing one framed drawing instead of an allover
+ * repeat, which is its most common failure. On a motif it forbids the output.
+ * Every other entry, `"colour"` above all, applies to both — that one is the
+ * ADR-0002 promise and is never mode-dependent.
+ */
+const TILE_ONLY_EXCLUSION = "a single centred illustration";
+
 const EXCLUSIONS = [
 	"colour",
 	"text, letters, numbers, signature or watermark",
 	"border or frame",
 	"photograph, fabric drape, folds or product mockup",
 	"3D rendering or perspective",
-	"a single centred illustration",
+	TILE_ONLY_EXCLUSION,
 	"background scene",
 	"paper texture or drop shadow",
 ];
@@ -170,6 +217,15 @@ export interface ImagePromptOptions {
 	 * is allowed to weaken.
 	 */
 	hasReferenceImage?: boolean;
+	/**
+	 * What the classifier decided this design is.
+	 *
+	 * Optional, and absent means tile — the regression promise, not a guess:
+	 * every run before Phase 2 was a tile, so a call without one produces exactly
+	 * what v3 produced. `/resume` omits it for the same reason it omits the
+	 * reference image.
+	 */
+	classification?: Classification;
 }
 
 /**
@@ -191,14 +247,28 @@ export function buildImagePrompt(
 	params: HeliosParams,
 	options: ImagePromptOptions = {},
 ): ImagePrompt {
-	const { supportsNegativePrompt = true, hasReferenceImage = false } = options;
+	const { supportsNegativePrompt = true, hasReferenceImage = false, classification } = options;
 	const isSilhouette = params.texture_technique === "solid-fill";
 
 	const style = clean(params.style);
 
+	// Absent means tile, and that is grounded rather than guessed: every run
+	// before Phase 2 was a tile, and `/resume` passes no classification at all.
+	//
+	// Note what this does NOT promise. v4 is not byte-identical to v3 for an
+	// unclassified run — `TILE_EDGE_CLAUSE` is new and every tile now gets it,
+	// which is the reason for the bump. The guarantee is that an unclassified run
+	// renders a valid tile, not that it renders the same string as before.
+	const isMotif = classification?.mode === "motif";
+
 	const clauses = [
-		FORMAT_DECLARATION,
-		`${clean(params.motif_type)} motifs ${REPEAT_PHRASE[params.repeat_type]}`,
+		isMotif ? motifDeclaration(classification?.garment_part) : FORMAT_DECLARATION,
+		isMotif
+			? `${clean(params.motif_type)} motif`
+			: `${clean(params.motif_type)} motifs ${REPEAT_PHRASE[params.repeat_type]}`,
+		// Only a tile has edges that have to meet. Emitting this for a motif would
+		// ask for a repeat the declaration above has just ruled out.
+		...(isMotif ? [] : [TILE_EDGE_CLAUSE]),
 		SCALE_PHRASE[params.scale],
 		DENSITY_PHRASE[params.density],
 		isSilhouette
@@ -233,7 +303,9 @@ export function buildImagePrompt(
 	// One flowing descriptive sentence — Flux responds to natural language, not
 	// comma-separated tag soup. The commas separate clauses, not keywords.
 	const prompt = `${clauses.join(", ")}.`;
-	const negative = EXCLUSIONS.join(", ");
+	// A motif IS a single centred illustration, so forbidding one would forbid
+	// the output. Every other exclusion stands, `"colour"` most of all.
+	const negative = (isMotif ? EXCLUSIONS.filter((item) => item !== TILE_ONLY_EXCLUSION) : EXCLUSIONS).join(", ");
 
 	return supportsNegativePrompt
 		? { prompt, negative_prompt: negative }

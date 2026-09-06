@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { HeliosParams } from "@aureline/shared-types";
 import { heliosRuns } from "../db/schema";
-import { completeImageRun, completeTextRun, getRunRows, getSettledRows, listRuns, pruneCompletedRuns } from "./do.repository";
+import { completeImageRun, completeTextRun, getRunRows, getSettledRows, getClassificationByDesignSession, listRuns, pruneCompletedRuns } from "./do.repository";
 import type { HeliosDb } from "../db/client";
 import { createTestDb, insertRow } from "./test-db";
 import { sampleParamsFull } from "../fixtures/sample-params";
@@ -125,6 +125,54 @@ describe("getRunRows", () => {
 
 		expect(rows).toHaveLength(2);
 		expect(rows.every((row) => row.pipelineId === "run-a")).toBe(true);
+	});
+});
+
+describe("getClassificationByDesignSession", () => {
+	it("returns the classification for a known design session", async () => {
+		const db = createTestDb();
+		await insertRow(db, {
+			pipelineId: "run-a",
+			modality: "text",
+			designSessionId: "design-1",
+			classification: { mode: "motif", garment_part: "neckline" },
+		});
+
+		const result = await getClassificationByDesignSession(db, "design-1");
+
+		expect(result).toBeDefined();
+		expect(result!.classification).toEqual({ mode: "motif", garment_part: "neckline" });
+	});
+
+	it("returns undefined for an unknown design session", async () => {
+		const db = createTestDb();
+		await insertRow(db, { pipelineId: "run-a", modality: "text", designSessionId: "design-1" });
+
+		const result = await getClassificationByDesignSession(db, "design-unknown");
+
+		expect(result).toBeUndefined();
+	});
+
+	it("returns the first text row when multiple exist for the same design session", async () => {
+		const db = createTestDb();
+		await insertRow(db, {
+			pipelineId: "run-a",
+			modality: "text",
+			designSessionId: "design-1",
+			classification: { mode: "tile" },
+		});
+		await insertRow(db, {
+			pipelineId: "run-b",
+			modality: "text",
+			designSessionId: "design-1",
+			classification: { mode: "motif", garment_part: "back" },
+		});
+
+		const result = await getClassificationByDesignSession(db, "design-1");
+
+		expect(result).toBeDefined();
+		// First row by insertion order (no ORDER BY — uses whichever SQLite returns first)
+		expect(result!.classification).toEqual({ mode: "tile" });
 	});
 });
 

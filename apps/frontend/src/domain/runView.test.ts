@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { briefHistory, describeBriefHistory, durationMs, groupRows, isResumable, readLineage } from './runView';
+import {
+	briefHistory,
+	describeBriefHistory,
+	durationMs,
+	groupByDesign,
+	groupRows,
+	isResumable,
+	readClassification,
+	readLineage,
+} from './runView';
 import { imageRow, textRow } from './rows.fixture';
 
 /**
@@ -212,5 +221,138 @@ describe('design session id', () => {
 		const groups = groupRows([imageRow({ pipelineId: 'run-1', designSessionId: 'design-b' })]);
 
 		expect(groups[0]?.designSessionId).toBe('design-b');
+	});
+});
+
+describe('readClassification', () => {
+	it('reads a tile', () => {
+		expect(readClassification({ mode: 'tile' })).toEqual({ mode: 'tile', garmentPart: null });
+	});
+
+	it('reads a motif and its garment part, converting the snake_case key', () => {
+		// The worker writes `garment_part` as a literal JSON key.
+		expect(readClassification({ mode: 'motif', garment_part: 'neckline' })).toEqual({
+			mode: 'motif',
+			garmentPart: 'neckline',
+		});
+	});
+
+	it('returns null for a row that was never classified', () => {
+		// `{}` is what the column holds before the classifier runs, and on every
+		// row written before the column existed. Defaulting to "tile" here would
+		// put a decision on screen that nothing made.
+		expect(readClassification({})).toBeNull();
+		expect(readClassification(undefined)).toBeNull();
+		expect(readClassification(null)).toBeNull();
+	});
+
+	it('returns null for a mode it does not recognise', () => {
+		// A value written under some later schema. Untrusted input from a JSON
+		// column, so an unknown mode is "no classification", not a crash.
+		expect(readClassification({ mode: 'sticker' })).toBeNull();
+		expect(readClassification({ mode: 42 })).toBeNull();
+		expect(readClassification('tile')).toBeNull();
+	});
+
+	it('drops a non-string garment part rather than rendering it', () => {
+		expect(readClassification({ mode: 'motif', garment_part: 7 })).toEqual({
+			mode: 'motif',
+			garmentPart: null,
+		});
+	});
+});
+
+describe('groupRows and the classification', () => {
+	it('reads it off the text row, which is where the classifier writes it', () => {
+		const [group] = groupRows([
+			textRow({ classification: { mode: 'motif', garment_part: 'cuff' } }),
+			imageRow({ classification: { mode: 'motif', garment_part: 'cuff' } }),
+		]);
+
+		expect(group.classification).toEqual({ mode: 'motif', garmentPart: 'cuff' });
+	});
+
+	it('falls back to the image row when there is no text row', () => {
+		const [group] = groupRows([imageRow({ classification: { mode: 'tile' } })]);
+
+		expect(group.classification).toEqual({ mode: 'tile', garmentPart: null });
+	});
+
+	it('is null for a run with no classification at all', () => {
+		const [group] = groupRows([textRow(), imageRow()]);
+
+		expect(group.classification).toBeNull();
+	});
+});
+
+describe('groupByDesign', () => {
+	it('collects every run of one design into a single group', () => {
+		// What design_session_id is for: "show me everything that went into this
+		// design" (AGENTS.md §3). Until now the screen only showed the id to be
+		// compared by eye between two tables.
+		const runs = groupRows([
+			textRow({ pipelineId: 'run-a', designSessionId: 'design-1' }),
+			imageRow({ pipelineId: 'run-a', designSessionId: 'design-1' }),
+			textRow({ pipelineId: 'run-b', designSessionId: 'design-1' }),
+			imageRow({ pipelineId: 'run-b', designSessionId: 'design-1' }),
+		]);
+
+		const designs = groupByDesign(runs);
+
+		expect(designs).toHaveLength(1);
+		expect(designs[0].designSessionId).toBe('design-1');
+		expect(designs[0].runs.map((run) => run.pipelineId)).toEqual(['run-a', 'run-b']);
+	});
+
+	it('keeps separate designs apart', () => {
+		const runs = groupRows([
+			textRow({ pipelineId: 'run-a', designSessionId: 'design-1' }),
+			textRow({ pipelineId: 'run-b', designSessionId: 'design-2' }),
+		]);
+
+		expect(groupByDesign(runs).map((design) => design.designSessionId)).toEqual(['design-1', 'design-2']);
+	});
+
+	it('lists the garment parts a design has runs for, in first-seen order', () => {
+		// The reason the grouping is worth having: a motif design is built one part
+		// at a time, one run each.
+		const runs = groupRows([
+			textRow({ pipelineId: 'run-a', classification: { mode: 'motif', garment_part: 'neckline' } }),
+			textRow({ pipelineId: 'run-b', classification: { mode: 'motif', garment_part: 'cuff' } }),
+			textRow({ pipelineId: 'run-c', classification: { mode: 'motif', garment_part: 'neckline' } }),
+		]);
+
+		expect(groupByDesign(runs)[0].garmentParts).toEqual(['neckline', 'cuff']);
+	});
+
+	it('lists no parts for a design of tiles', () => {
+		const runs = groupRows([textRow({ classification: { mode: 'tile' } })]);
+
+		expect(groupByDesign(runs)[0].garmentParts).toEqual([]);
+	});
+
+	it('does not collapse rows with no design id into one design', () => {
+		// Rows written before the column existed. Bucketing them under "" would
+		// present unrelated old runs as a single design, which is a claim rather
+		// than an absence of one.
+		const runs = groupRows([
+			textRow({ pipelineId: 'old-a', designSessionId: '' }),
+			textRow({ pipelineId: 'old-b', designSessionId: '' }),
+		]);
+
+		expect(groupByDesign(runs)).toHaveLength(2);
+	});
+
+	it('totals the cost across every run of the design, and stays null when nothing was charged', () => {
+		const charged = groupRows([
+			textRow({ pipelineId: 'run-a', costUsd: 0.002 }),
+			textRow({ pipelineId: 'run-b', costUsd: 0.003 }),
+		]);
+		const uncharged = groupRows([textRow({ costUsd: null }), imageRow({ costUsd: null })]);
+
+		expect(groupByDesign(charged)[0].totalCostUsd).toBeCloseTo(0.005);
+		// Never 0: a null cost means the gateway log was missing or the call was
+		// never charged, and $0.00 states a fact we do not have.
+		expect(groupByDesign(uncharged)[0].totalCostUsd).toBeNull();
 	});
 });

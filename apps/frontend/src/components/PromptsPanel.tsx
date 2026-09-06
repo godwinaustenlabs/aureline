@@ -25,11 +25,25 @@ const SLOT_LABELS: Record<string, string> = {
 	iris_planner: 'Planner system prompt — turns a brief into colour parameters',
 	iris_color: 'Colour prompt — turns those parameters into a sentence for the image model',
 	helios_planner: 'Planner system prompt — turns a brief into pattern parameters',
-	helios_image: 'Image prompt — turns those parameters into a sentence for Flux',
+	helios_classifier: 'Classifier prompt — decides whether a brief is a repeating tile or a single motif',
+	helios_research: 'Research prompt — tells the model when to search the knowledge base, and when not to',
 };
 
-/** The slots the engine reads today. The rest are stored but not yet wired up. */
-const LIVE_SLOTS = new Set(['iris_planner', 'helios_planner']);
+/**
+ * The slots the engine reads today. The rest are stored but not yet wired up.
+ *
+ * `helios_classifier` and `helios_research` joined once the pipeline actually
+ * resolved them. Note what `helios_research` being live does NOT mean: the
+ * research stage is skipped entirely while `research_model` is empty, which is
+ * its committed default. The prompt is read on every run either way, so the
+ * chip would be lying if it stayed.
+ */
+const LIVE_SLOTS = new Set([
+	'iris_planner',
+	'helios_planner',
+	'helios_classifier',
+	'helios_research',
+]);
 
 export function PromptsPanel() {
 	const [engine, setEngine] = useState<EngineName>('iris');

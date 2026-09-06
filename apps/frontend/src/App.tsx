@@ -3,7 +3,7 @@ import { GENERATE_COST_USD, RESUME_COST_USD, generate, listRuns, ping, resume } 
 import type { RunRow } from './api/runs';
 import type { CallOutcome } from './domain/outcome';
 import { usd } from './domain/format';
-import { briefHistory, describeBriefHistory, groupRows } from './domain/runView';
+import { briefHistory, describeBriefHistory, groupRows, type RunClassification } from './domain/runView';
 import { buildScratchpad } from './domain/scratchpad';
 import { validateGenerate } from './domain/validate';
 import { newDesignSessionId } from './domain/designSession';
@@ -72,6 +72,7 @@ export function App() {
 	const [irisMotifRef, setIrisMotifRef] = useState('');
 	const [irisSessionField, setIrisSessionField] = useState('');
 	const [irisDesignSessionId, setIrisDesignSessionId] = useState('');
+	const [irisClassification, setIrisClassification] = useState<RunClassification | null>(null);
 	const [irisOutcome, setIrisOutcome] = useState<IrisCallOutcome | null>(null);
 	/**
 	 * Iris's own run history, from Iris's own `GET /runs`.
@@ -304,6 +305,7 @@ export function App() {
 				if (key) {
 					setIrisMotifRef(key);
 					setIrisDesignSessionId(result.result.design_session_id);
+					setIrisClassification(group?.classification ?? null);
 					setIrisOutcome(null);
 					setIrisError(null);
 					setHandoffNote(
@@ -364,6 +366,7 @@ export function App() {
 			motifRef: irisMotifRef.trim(),
 			designSessionId: irisDesignSessionId.trim(),
 			sessionId: normaliseSessionId(irisSessionField),
+			...(irisClassification ? { classification: irisClassification } : {}),
 		});
 		if (!validated.ok) {
 			setIrisError(validated.message);
@@ -530,9 +533,9 @@ export function App() {
 					concept={irisConcept}
 					onConcept={setIrisConcept}
 					motifRef={irisMotifRef}
-					onMotifRef={setIrisMotifRef}
+					onMotifRef={(v) => { setIrisMotifRef(v); setIrisClassification(null); }}
 					designSessionId={irisDesignSessionId}
-					onDesignSessionId={setIrisDesignSessionId}
+					onDesignSessionId={(v) => { setIrisDesignSessionId(v); setIrisClassification(null); }}
 					sessionField={irisSessionField}
 					onSessionField={setIrisSessionField}
 					baseUrl={irisBaseUrl}
@@ -556,6 +559,7 @@ export function App() {
 					onResume={requestIrisResume}
 					onRefreshRuns={() => void refreshIrisRuns(irisTarget, irisBaseUrl)}
 					handoffNote={handoffNote}
+					classification={irisClassification}
 				/>
 			) : (
 			<>

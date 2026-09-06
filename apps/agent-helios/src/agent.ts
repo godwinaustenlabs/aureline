@@ -5,7 +5,7 @@ import migrations from "../drizzle/migrations";
 import { HeliosRequestSchema, HeliosResumeRequestSchema } from "@aureline/shared-types";
 import { runPipeline } from "./services/pipeline";
 import { resumeRun } from "./services/resume";
-import { getRunRows, listRuns } from "./repository/do.repository";
+import { getRunRows, listRuns, getClassificationByDesignSession } from "./repository/do.repository";
 import { firstIssueMessage } from "./utils";
 import { json, error, readRequestBody } from "./http";
 
@@ -38,6 +38,17 @@ export class HeliosAgent extends Agent<Env> {
 			// Rows exactly as stored, not reshaped. Whatever reads this is
 			// debugging, and the stored shape is the thing worth seeing.
 			return json({ runs: pipelineId ? await getRunRows(db, pipelineId) : await listRuns(db) });
+		}
+
+		// Dedicated classification lookup so another engine (or the frontend) can
+		// read the classifier's decision without fetching every row for a design.
+		if (request.method === "GET" && url.pathname === "/classification") {
+			const designSessionId = url.searchParams.get("design_session_id")?.trim();
+			if (!designSessionId) {
+				return error("design_session_id is required", 400);
+			}
+			const row = await getClassificationByDesignSession(db, designSessionId);
+			return json({ classification: row?.classification ?? null });
 		}
 
 		if (request.method !== "POST") {

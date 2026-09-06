@@ -3,7 +3,7 @@ import type { IrisCallOutcome } from '../domain/irisOutcome';
 import { IRIS_GENERATE_COST_USD } from '../api/iris';
 import { Waiting } from './Waiting';
 import { RunHistory } from './RunHistory';
-import type { RunGroup } from '../domain/runView';
+import type { RunGroup, RunClassification } from '../domain/runView';
 import { ReferenceImageField } from './ReferenceImageField';
 
 /**
@@ -41,6 +41,8 @@ interface Props {
 	outcome: IrisCallOutcome | null;
 	/** Where the motif and design id came from, when they were carried across. */
 	handoffNote: string | null;
+	/** The classifier's decision from the Helios run, when carried across. */
+	classification: RunClassification | null;
 
 	/**
 	 * Iris's own run history, from Iris's own `GET /runs`.
@@ -64,7 +66,7 @@ interface Props {
 }
 
 export function IrisPanel(props: Props) {
-	const { concept, motifRef, designSessionId, sessionField, baseUrl, inFlight, outcome, handoffNote } = props;
+	const { concept, motifRef, designSessionId, sessionField, baseUrl, inFlight, outcome, handoffNote, classification } = props;
 
 	return (
 		<>
@@ -75,6 +77,13 @@ export function IrisPanel(props: Props) {
 					</header>
 					<div className="panel-body">
 						{handoffNote && <p className="hint">{handoffNote}</p>}
+
+						{classification && (
+							<p className="hint">
+								Classification from Helios: <strong>{classification.mode}</strong>
+								{classification.garmentPart && ` · ${classification.garmentPart}`}
+							</p>
+						)}
 
 						<div className="field">
 							<label htmlFor="iris-motif">Motif ref</label>

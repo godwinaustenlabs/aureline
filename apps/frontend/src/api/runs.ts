@@ -55,6 +55,18 @@ export interface RunRow {
 	 *  nonsense. Validate with `HeliosParamsSchema` before treating it as params,
 	 *  exactly as `services/resume.ts` does. */
 	plannerParams: unknown;
+	/**
+	 * The classifier's answer — `{ mode }` and, on a motif, `{ garment_part }`.
+	 *
+	 * **Helios only, and its own column rather than a field inside
+	 * `plannerParams`.** That separation is what lets the playground group a
+	 * design's runs by garment part without parsing a planner output.
+	 *
+	 * Optional and `unknown` for the same two reasons the fields around it are:
+	 * Iris has no such column, and a Helios row written before Phase 2 carries
+	 * `{}`. Read it with `readClassification`, never by indexing.
+	 */
+	classification?: unknown;
 	imageR2Key: string | null;
 	/** Real dollars, or null when the AI Gateway log was missing. Null is not
 	 *  zero: a failed call that never reached the model was never charged. */

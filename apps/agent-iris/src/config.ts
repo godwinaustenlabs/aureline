@@ -58,9 +58,55 @@ export interface IrisConfig {
 	 * is the ceiling on what a single concept can cost.
 	 */
 	maxResumeAttempts: number;
+	/**
+	 * The model that runs the agentic research stage, or an empty model id when
+	 * retrieval is switched off.
+	 *
+	 * Read through `researchModelFor`, never directly: the empty case is the off
+	 * switch and it is a decision that gets logged.
+	 */
+	researchModel: TextModelConfig;
+	/**
+	 * No `classifierModel` here, unlike Helios.
+	 *
+	 * `phase-2-plan.md` §5.2 asks for the same seven keys on both engines, and
+	 * that is one key too many. Iris never classifies — §3 settles that
+	 * classification happens once in Helios and every other engine reads the
+	 * answer — so a `classifier_model` here would be permanently dead, not
+	 * awaiting a caller. §9.1 of the same plan deletes the `iris_color` prompt
+	 * slot for exactly that, so adding a dead config key in the same phase would
+	 * contradict it. Six keys on Iris, seven on Helios.
+	 */
+	/** Ceiling on billed model calls in the research loop. */
+	maxToolIterations: number;
+	/** Passed to AI Search as `max_num_results`. */
+	maxSearchResults: number;
+	/** Below this many characters of retrieved text, a result is thin. */
+	minChunkChars: number;
+	/** Passed to AI Search as `match_threshold`. */
+	searchMatchThreshold: number;
+	/**
+	 * Whether AI Search rewrites the query with its own LLM before searching.
+	 *
+	 * Off by default. The research model is already writing the query itself, so
+	 * leaving rewrite on adds a second billed model call we do not control, per
+	 * search. The key exists so it can be A/B'd from KV later.
+	 */
+	queryRewrite: boolean;
 	/** Per-field provenance, for the log line. */
 	source: Record<
-		"textModel" | "visionTextModel" | "imageModel" | "maxRetries" | "retentionLimit" | "maxResumeAttempts",
+		| "textModel"
+		| "visionTextModel"
+		| "imageModel"
+		| "maxRetries"
+		| "retentionLimit"
+		| "maxResumeAttempts"
+		| "researchModel"
+		| "maxToolIterations"
+		| "maxSearchResults"
+		| "minChunkChars"
+		| "searchMatchThreshold"
+		| "queryRewrite",
 		ConfigSource
 	>;
 }
@@ -87,6 +133,35 @@ const ImageModelSchema = z.object({
 	height: z.number().int().min(64).max(2048).optional(),
 	steps: z.number().int().min(1).max(50).optional(),
 });
+
+/**
+ * `TextModelSchema` without the `min(1)`, because for `research_model` an empty
+ * id is a value rather than a mistake.
+ *
+ * `research_model: ""` is the off switch and it has to work from KV with no
+ * deploy. Under `TextModelSchema` it would fail `min(1)`, warn once per
+ * invocation, and fall back to `RESEARCH_MODEL` — which is a configured model.
+ * The key meant to switch retrieval **off** would switch it **on**, and warn
+ * about it on every request while doing so. `researchModelFor` is the one place
+ * the empty id becomes a decision, and it logs it there instead.
+ */
+const OptionalTextModelSchema = z.object({
+	model: z.string().trim(),
+	temperature: z.number().min(0).max(2).optional(),
+});
+
+/**
+ * KV holds text, so a boolean arrives as a word. The accepted spellings are the
+ * ones a person actually types into a dashboard.
+ *
+ * Deliberately **not** `Boolean(raw)` or `raw !== ""`. Under either of those the
+ * string `"false"` is true, so the key set to turn a billed feature off would
+ * turn it on — and `ai_search_query_rewrite` being on means a second Workers AI
+ * call per search that nothing in this repo controls.
+ */
+const BooleanFromStringSchema = z
+	.enum(["true", "false", "1", "0", "yes", "no"])
+	.transform((value) => value === "true" || value === "1" || value === "yes");
 
 /**
  * The model keys hold a JSON object (`{ "model": ..., "temperature": ... }`),
@@ -124,6 +199,42 @@ function numberFromVar(raw: string | undefined, name: string, lastResort: number
 }
 
 /**
+ * Reads a boolean var, falling back to a last resort if it is unusable.
+ *
+ * Hands back a real boolean rather than the string wrangler stores, because the
+ * vars are not re-validated by `resolveConfig` — whatever this returns lands in
+ * the config object as-is, and `"false"` is a truthy string.
+ */
+function booleanFromVar(raw: string | undefined, name: string, lastResort: boolean): boolean {
+	const normalised = raw?.trim().toLowerCase();
+
+	if (normalised === "true" || normalised === "1" || normalised === "yes") return true;
+	if (normalised === "false" || normalised === "0" || normalised === "no") return false;
+
+	console.warn(
+		`config: fallback var ${name} is missing or not a boolean (${JSON.stringify(raw)}), using ${lastResort}. Fix wrangler.jsonc.`
+	);
+	return lastResort;
+}
+
+/**
+ * Rejects a blank KV value so it falls back instead of being coerced.
+ *
+ * `z.coerce.number()` reads `""` as `0`. Every numeric key that existed before
+ * Phase 2 has `min(1)`, so a blank value failed validation and fell back on its
+ * own. `min_chunk_chars` and `search_match_threshold` both allow `0` as a real
+ * value, so without this an accidentally-blanked dashboard field would be
+ * *accepted* — silently disabling the thin-result check, or the score floor,
+ * while `describeConfig` reported a perfectly ordinary `0`.
+ *
+ * `undefined` coerces to `NaN`, which fails, which falls back and warns. That
+ * is the wanted behaviour.
+ */
+function rejectBlank(raw: string): unknown {
+	return raw.trim() === "" ? undefined : raw;
+}
+
+/**
  * Exactly what this file reads out of `Env`, and nothing else.
  *
  * Declared structurally rather than as `Pick<Env, …>` on purpose: `wrangler
@@ -150,6 +261,15 @@ export type ConfigEnv = {
 	MAX_RETRIES?: string;
 	RETENTION_LIMIT?: string;
 	MAX_RESUME_ATTEMPTS?: string;
+	/** Optional, and the option is the point: an empty or absent value switches
+	 * the whole research stage off, which is how retrieval is disabled without a
+	 * deploy. See `researchModelFor`. */
+	RESEARCH_MODEL?: string;
+	MAX_TOOL_ITERATIONS?: string;
+	MAX_SEARCH_RESULTS?: string;
+	MIN_CHUNK_CHARS?: string;
+	SEARCH_MATCH_THRESHOLD?: string;
+	AI_SEARCH_QUERY_REWRITE?: string;
 };
 
 /**
@@ -223,6 +343,72 @@ const FIELDS = [
 		schema: z.coerce.number().int().min(1).max(20),
 		prepare: (raw: string): unknown => raw,
 		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_RESUME_ATTEMPTS, "MAX_RESUME_ATTEMPTS", 3),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "research_model",
+		field: "researchModel",
+		var: "RESEARCH_MODEL",
+		// The one key that accepts an empty model id, because empty is its off
+		// switch rather than a bad value. See `OptionalTextModelSchema`.
+		schema: OptionalTextModelSchema,
+		prepare: prepareModelValue,
+		fromVar: (env: ConfigEnv): unknown => ({ model: env.RESEARCH_MODEL ?? "" }),
+		describe: (value: unknown) => describeModel(value as TextModelConfig),
+	},
+	{
+		key: "max_tool_iterations",
+		field: "maxToolIterations",
+		var: "MAX_TOOL_ITERATIONS",
+		// Capped at 10 for the same reason `max_resume_attempts` is capped at 20:
+		// every iteration is a billed model call, so a fat-fingered dashboard edit
+		// must not be able to authorise an unbounded loop (AGENTS.md §7).
+		schema: z.coerce.number().int().min(1).max(10),
+		prepare: (raw: string): unknown => raw,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_TOOL_ITERATIONS, "MAX_TOOL_ITERATIONS", 3),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "max_search_results",
+		field: "maxSearchResults",
+		var: "MAX_SEARCH_RESULTS",
+		schema: z.coerce.number().int().min(1).max(20),
+		prepare: (raw: string): unknown => raw,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MAX_SEARCH_RESULTS, "MAX_SEARCH_RESULTS", 5),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "min_chunk_chars",
+		field: "minChunkChars",
+		var: "MIN_CHUNK_CHARS",
+		schema: z.coerce.number().int().min(0).max(5000),
+		// `rejectBlank` rather than the identity used above, because `0` is a legal
+		// value here and `z.coerce.number()` reads `""` as `0`.
+		prepare: rejectBlank,
+		fromVar: (env: ConfigEnv): unknown => numberFromVar(env.MIN_CHUNK_CHARS, "MIN_CHUNK_CHARS", 200),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "search_match_threshold",
+		field: "searchMatchThreshold",
+		var: "SEARCH_MATCH_THRESHOLD",
+		// Not an integer: this is a similarity score between 0 and 1.
+		schema: z.coerce.number().min(0).max(1),
+		prepare: rejectBlank,
+		fromVar: (env: ConfigEnv): unknown =>
+			numberFromVar(env.SEARCH_MATCH_THRESHOLD, "SEARCH_MATCH_THRESHOLD", 0.5),
+		describe: (value: unknown) => String(value),
+	},
+	{
+		key: "ai_search_query_rewrite",
+		field: "queryRewrite",
+		var: "AI_SEARCH_QUERY_REWRITE",
+		schema: BooleanFromStringSchema,
+		// Normalised here rather than inside the schema, so the schema stays a
+		// plain enum and its error message names the values a person may type.
+		prepare: (raw: string): unknown => raw.trim().toLowerCase(),
+		fromVar: (env: ConfigEnv): unknown =>
+			booleanFromVar(env.AI_SEARCH_QUERY_REWRITE, "AI_SEARCH_QUERY_REWRITE", false),
 		describe: (value: unknown) => String(value),
 	},
 ] as const;
@@ -316,6 +502,32 @@ export function plannerModelFor(config: IrisConfig): TextModelConfig {
 	}
 
 	return vision;
+}
+
+/**
+ * The model that makes the research call, or `null` when retrieval is off.
+ *
+ * **Null rather than a throw.** An unconfigured knowledge base is a working
+ * state, not an outage: every engine has to keep running before the AI Search
+ * instances exist, and with `research_model` empty a run behaves exactly as it
+ * did before Phase 2. That is what makes it possible to ship this work ahead of
+ * the knowledge base content — which matters more on Iris than on Helios, since
+ * no Iris instance exists yet at all.
+ *
+ * The empty case is checked explicitly rather than with a `?.` or a `||` chain
+ * (AGENTS.md §7), and it is logged, because "retrieval was switched off" and
+ * "retrieval ran and found nothing" are two different runs that would otherwise
+ * be indistinguishable in the log.
+ */
+export function researchModelFor(config: IrisConfig): TextModelConfig | null {
+	const research = config.researchModel;
+
+	if (research === undefined || research.model.trim().length === 0) {
+		console.log("research: no research model configured, skipping retrieval");
+		return null;
+	}
+
+	return research;
 }
 
 /** One-line summary of the resolved config and where each value came from. */

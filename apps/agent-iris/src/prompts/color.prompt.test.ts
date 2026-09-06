@@ -117,7 +117,7 @@ describe("buildColorPrompt", () => {
   it("exports a version id", () => {
     // Prompts are never edited in place; the id is how a stored run says which
     // wording produced it.
-    expect(IRIS_COLOR_PROMPT_VERSION).toBe("iris-color-v3");
+    expect(IRIS_COLOR_PROMPT_VERSION).toBe("iris-color-v4");
   });
 });
 
@@ -202,5 +202,48 @@ describe("buildImageModelPrompt and the reference image clause", () => {
     const withReference = buildImageModelPrompt(params, { hasReferenceImage: true });
 
     expect(withReference.endsWith(buildImageModelPrompt(params))).toBe(true);
+  });
+});
+
+describe("mode clauses", () => {
+  const { params } = CASES[0];
+
+  it("omits mode clause when no classification is provided", () => {
+    const prompt = buildColorPrompt(params);
+    expect(prompt).not.toContain("seamless repeating tile pattern");
+    expect(prompt).not.toContain("single motif");
+  });
+
+  it("prepends tile clause when classification.mode is tile", () => {
+    const classification = { mode: "tile" as const, confidence: 0.95, signals: ["geometric"] };
+    const prompt = buildColorPrompt(params, { classification });
+    expect(prompt.startsWith("Colour palette for a seamless repeating tile pattern")).toBe(true);
+  });
+
+  it("prepends motif clause when classification.mode is motif", () => {
+    const classification = { mode: "motif" as const, confidence: 0.88, garment_part: "scarf" };
+    const prompt = buildColorPrompt(params, { classification });
+    expect(prompt).toContain("Colour palette for a single motif on a scarf");
+  });
+
+  it("prepends motif clause without garment_part when not specified", () => {
+    const classification = { mode: "motif" as const, confidence: 0.7, garment_part: undefined };
+    const prompt = buildColorPrompt(params, { classification });
+    expect(prompt).toContain("Colour palette for a single motif");
+    expect(prompt).not.toContain("on a");
+  });
+
+  it("mode clause comes before palette clause", () => {
+    const classification = { mode: "tile" as const, confidence: 0.9, signals: [] };
+    const prompt = buildColorPrompt(params, { classification });
+    const modeIdx = prompt.indexOf("seamless repeating tile pattern");
+    const paletteIdx = prompt.indexOf("Colour palette:");
+    expect(modeIdx).toBeLessThan(paletteIdx);
+  });
+
+  it("buildImageModelPrompt also includes mode clause when classification is provided", () => {
+    const classification = { mode: "motif" as const, confidence: 0.85, garment_part: "dress" };
+    const prompt = buildImageModelPrompt(params, { classification });
+    expect(prompt).toContain("single motif on a dress");
   });
 });
